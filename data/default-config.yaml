@@ -1,0 +1,102 @@
+# GST Default Configuration
+# ~/.config/gst/config.yaml
+
+terminal:
+  shell: /bin/bash
+  term: st-256color
+  tabspaces: 8
+
+window:
+  title: gst
+  geometry: 80x24
+  border: 2
+
+font:
+  primary: "Liberation Mono:pixelsize=14"
+  fallback:
+    - "Noto Color Emoji:pixelsize=14"
+    - "Symbols Nerd Font:pixelsize=14"
+
+colors:
+  foreground: 7
+  background: 0
+  cursor_fg: 0
+  cursor_bg: 7
+  # 16-color palette (indices 0-15)
+  palette:
+    - "#000000"  # black
+    - "#cc0000"  # red
+    - "#4e9a06"  # green
+    - "#c4a000"  # yellow
+    - "#3465a4"  # blue
+    - "#75507b"  # magenta
+    - "#06989a"  # cyan
+    - "#d3d7cf"  # white
+    - "#555753"  # bright black
+    - "#ef2929"  # bright red
+    - "#8ae234"  # bright green
+    - "#fce94f"  # bright yellow
+    - "#729fcf"  # bright blue
+    - "#ad7fa8"  # bright magenta
+    - "#34e2e2"  # bright cyan
+    - "#eeeeec"  # bright white
+
+cursor:
+  shape: block       # block, underline, bar
+  blink: false
+  blink_rate: 500    # milliseconds
+
+selection:
+  word_delimiters: " `'\"()[]{}|"
+
+keybinds:
+  "Ctrl+Shift+c": clipboard_copy
+  "Ctrl+Shift+v": clipboard_paste
+  "Shift+Page_Up": scroll_up
+  "Shift+Page_Down": scroll_down
+  "Ctrl+Shift+Page_Up": scroll_top
+  "Ctrl+Shift+Page_Down": scroll_bottom
+  "Ctrl+Shift+Home": scroll_top
+  "Ctrl+Shift+End": scroll_bottom
+  "Ctrl+Shift+plus": zoom_in
+  "Ctrl+Shift+minus": zoom_out
+  "Ctrl+Shift+0": zoom_reset
+
+mousebinds:
+  "Button4": scroll_up
+  "Button5": scroll_down
+  "Shift+Button4": scroll_up_fast
+  "Shift+Button5": scroll_down_fast
+
+modules:
+  scrollback:
+    enabled: true
+    lines: 10000
+    mouse_scroll_lines: 3
+
+  transparency:
+    enabled: false
+    opacity: 0.95
+    focus_opacity: 1.0
+    unfocus_opacity: 0.85
+
+  url_click:
+    enabled: true
+    opener: xdg-open
+    regex: "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
+    modifiers: Ctrl
+
+  boxdraw:
+    enabled: true
+    bold_offset: 1
+
+  visualbell:
+    enabled: false
+    duration: 100
+
+  undercurl:
+    enabled: true
+
+  keyboard_select:
+    enabled: false
+    key: Ctrl+Shift+Escape

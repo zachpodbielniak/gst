@@ -11,8 +11,6 @@
 #define GST_GLYPH_TRANSFORMER_H
 
 #include <glib-object.h>
-#include <pango/pango.h>
-#include <cairo.h>
 
 G_BEGIN_DECLS
 
@@ -34,7 +32,7 @@ struct _GstGlyphTransformerInterface
 	/* Virtual methods */
 	gboolean (*transform_glyph) (GstGlyphTransformer *self,
 	                             gunichar             codepoint,
-	                             cairo_t             *cr,
+	                             gpointer             render_context,
 	                             gint                 x,
 	                             gint                 y,
 	                             gint                 width,
@@ -45,20 +43,21 @@ struct _GstGlyphTransformerInterface
  * gst_glyph_transformer_transform_glyph:
  * @self: A #GstGlyphTransformer instance.
  * @codepoint: The Unicode codepoint of the glyph.
- * @cr: The Cairo context to render to.
+ * @render_context: (type gpointer): An opaque render context (renderer-specific).
  * @x: The x position for rendering.
  * @y: The y position for rendering.
  * @width: The cell width.
  * @height: The cell height.
  *
  * Transforms and renders a glyph at the specified position.
+ * The render_context is renderer-specific (e.g., an XDraw context for X11).
  *
  * Returns: %TRUE if the glyph was handled, %FALSE to use default rendering.
  */
 gboolean
 gst_glyph_transformer_transform_glyph(GstGlyphTransformer *self,
                                       gunichar             codepoint,
-                                      cairo_t             *cr,
+                                      gpointer             render_context,
                                       gint                 x,
                                       gint                 y,
                                       gint                 width,

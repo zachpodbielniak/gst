@@ -13,6 +13,7 @@
 #   make DEBUG=1   - Build with debug symbols
 #   make ASAN=1    - Build with AddressSanitizer
 
+.DEFAULT_GOAL := all
 .PHONY: all lib gst gir modules test deps check-deps
 
 # Include configuration
@@ -92,7 +93,16 @@ LIB_HDRS := \
 
 # yaml-glib sources (built-in dependency)
 YAMLGLIB_SRCS := \
-	deps/yaml-glib/yaml-glib.c
+	deps/yaml-glib/src/yaml-builder.c \
+	deps/yaml-glib/src/yaml-document.c \
+	deps/yaml-glib/src/yaml-generator.c \
+	deps/yaml-glib/src/yaml-gobject.c \
+	deps/yaml-glib/src/yaml-mapping.c \
+	deps/yaml-glib/src/yaml-node.c \
+	deps/yaml-glib/src/yaml-parser.c \
+	deps/yaml-glib/src/yaml-schema.c \
+	deps/yaml-glib/src/yaml-sequence.c \
+	deps/yaml-glib/src/yaml-serializable.c
 
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)

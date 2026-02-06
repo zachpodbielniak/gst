@@ -1,0 +1,31 @@
+# Catppuccin Mocha Color Scheme
+# https://github.com/catppuccin/catppuccin
+
+name: Catppuccin Mocha
+author: Catppuccin Team
+
+colors:
+  foreground: "#cdd6f4"  # text
+  background: "#1e1e2e"  # base
+  cursor_fg: "#1e1e2e"   # base
+  cursor_bg: "#f5e0dc"   # rosewater
+
+  palette:
+    # Normal colors
+    - "#45475a"  # surface1 (black)
+    - "#f38ba8"  # red
+    - "#a6e3a1"  # green
+    - "#f9e2af"  # yellow
+    - "#89b4fa"  # blue
+    - "#f5c2e7"  # pink (magenta)
+    - "#94e2d5"  # teal (cyan)
+    - "#bac2de"  # subtext1 (white)
+    # Bright colors
+    - "#585b70"  # surface2 (bright black)
+    - "#f38ba8"  # red
+    - "#a6e3a1"  # green
+    - "#f9e2af"  # yellow
+    - "#89b4fa"  # blue
+    - "#f5c2e7"  # pink
+    - "#94e2d5"  # teal
+    - "#a6adc8"  # subtext0 (bright white)

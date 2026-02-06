@@ -22,7 +22,7 @@ gst_color_provider_default_init(GstColorProviderInterface *iface)
  * gst_color_provider_get_color:
  * @self: A #GstColorProvider instance.
  * @index: The color index (0-255 for standard terminal colors).
- * @color: (out): Location to store the color.
+ * @color: (out): Location to store the color as a #GstColor (RGBA guint32).
  *
  * Retrieves the color at the specified index.
  *
@@ -31,7 +31,7 @@ gst_color_provider_default_init(GstColorProviderInterface *iface)
 gboolean
 gst_color_provider_get_color(GstColorProvider *self,
                              guint             index,
-                             GdkRGBA          *color)
+                             GstColor          *color)
 {
 	GstColorProviderInterface *iface;
 

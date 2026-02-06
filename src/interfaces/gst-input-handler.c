@@ -33,7 +33,7 @@ gboolean
 gst_input_handler_handle_key_event(GstInputHandler *self,
                                    guint            keyval,
                                    guint            keycode,
-                                   GdkModifierType  state)
+                                   guint            state)
 {
 	GstInputHandlerInterface *iface;
 

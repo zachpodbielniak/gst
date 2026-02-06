@@ -21,7 +21,7 @@ gst_render_overlay_default_init(GstRenderOverlayInterface *iface)
 /**
  * gst_render_overlay_render:
  * @self: A #GstRenderOverlay instance.
- * @cr: The Cairo context to render to.
+ * @render_context: Opaque rendering context.
  * @width: The width of the render area.
  * @height: The height of the render area.
  *
@@ -29,17 +29,17 @@ gst_render_overlay_default_init(GstRenderOverlayInterface *iface)
  */
 void
 gst_render_overlay_render(GstRenderOverlay *self,
-                          cairo_t          *cr,
+                          gpointer          render_context,
                           gint              width,
                           gint              height)
 {
 	GstRenderOverlayInterface *iface;
 
 	g_return_if_fail(GST_IS_RENDER_OVERLAY(self));
-	g_return_if_fail(cr != NULL);
+	g_return_if_fail(render_context != NULL);
 
 	iface = GST_RENDER_OVERLAY_GET_IFACE(self);
 	g_return_if_fail(iface->render != NULL);
 
-	iface->render(self, cr, width, height);
+	iface->render(self, render_context, width, height);
 }

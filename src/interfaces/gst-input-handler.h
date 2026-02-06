@@ -11,7 +11,6 @@
 #define GST_INPUT_HANDLER_H
 
 #include <glib-object.h>
-#include <gdk/gdk.h>
 
 G_BEGIN_DECLS
 
@@ -34,7 +33,7 @@ struct _GstInputHandlerInterface
 	gboolean (*handle_key_event) (GstInputHandler *self,
 	                              guint            keyval,
 	                              guint            keycode,
-	                              GdkModifierType  state);
+	                              guint            state);
 };
 
 /**
@@ -52,7 +51,7 @@ gboolean
 gst_input_handler_handle_key_event(GstInputHandler *self,
                                    guint            keyval,
                                    guint            keycode,
-                                   GdkModifierType  state);
+                                   guint            state);
 
 G_END_DECLS
 

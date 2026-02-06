@@ -24,9 +24,9 @@ gst_font_provider_default_init(GstFontProviderInterface *iface)
  *
  * Gets the font description to use for terminal rendering.
  *
- * Returns: (transfer full): A newly allocated #PangoFontDescription, or %NULL.
+ * Returns: (transfer full): A newly allocated font description string, or %NULL.
  */
-PangoFontDescription *
+gchar *
 gst_font_provider_get_font_description(GstFontProvider *self)
 {
 	GstFontProviderInterface *iface;

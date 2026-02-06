@@ -22,7 +22,7 @@ gst_glyph_transformer_default_init(GstGlyphTransformerInterface *iface)
  * gst_glyph_transformer_transform_glyph:
  * @self: A #GstGlyphTransformer instance.
  * @codepoint: The Unicode codepoint of the glyph.
- * @cr: The Cairo context to render to.
+ * @render_context: (type gpointer): An opaque render context (renderer-specific).
  * @x: The x position for rendering.
  * @y: The y position for rendering.
  * @width: The cell width.
@@ -35,7 +35,7 @@ gst_glyph_transformer_default_init(GstGlyphTransformerInterface *iface)
 gboolean
 gst_glyph_transformer_transform_glyph(GstGlyphTransformer *self,
                                       gunichar             codepoint,
-                                      cairo_t             *cr,
+                                      gpointer             render_context,
                                       gint                 x,
                                       gint                 y,
                                       gint                 width,
@@ -44,10 +44,10 @@ gst_glyph_transformer_transform_glyph(GstGlyphTransformer *self,
 	GstGlyphTransformerInterface *iface;
 
 	g_return_val_if_fail(GST_IS_GLYPH_TRANSFORMER(self), FALSE);
-	g_return_val_if_fail(cr != NULL, FALSE);
+	g_return_val_if_fail(render_context != NULL, FALSE);
 
 	iface = GST_GLYPH_TRANSFORMER_GET_IFACE(self);
 	g_return_val_if_fail(iface->transform_glyph != NULL, FALSE);
 
-	return iface->transform_glyph(self, codepoint, cr, x, y, width, height);
+	return iface->transform_glyph(self, codepoint, render_context, x, y, width, height);
 }

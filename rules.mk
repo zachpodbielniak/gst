@@ -1,6 +1,9 @@
 # rules.mk - GST Build Rules
 # Pattern rules and common build recipes
 
+# All source objects depend on the generated version header
+$(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h
+
 # Object file compilation
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -53,7 +56,7 @@ $(OUTDIR)/modules/%.so: modules/%/*.c | $(OUTDIR)/modules
 	$(CC) $(MODULE_CFLAGS) $(MODULE_LDFLAGS) -o $@ $^ $(LDFLAGS) -L$(OUTDIR) -lgst
 
 # yaml-glib dependency compilation
-$(OBJDIR)/deps/yaml-glib/%.o: deps/yaml-glib/%.c | $(OBJDIR)
+$(OBJDIR)/deps/yaml-glib/src/%.o: deps/yaml-glib/src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -108,7 +111,7 @@ $(OBJDIR):
 	@$(MKDIR_P) $(OBJDIR)/interfaces
 	@$(MKDIR_P) $(OBJDIR)/util
 	@$(MKDIR_P) $(OBJDIR)/tests
-	@$(MKDIR_P) $(OBJDIR)/deps/yaml-glib
+	@$(MKDIR_P) $(OBJDIR)/deps/yaml-glib/src
 
 $(OUTDIR):
 	@$(MKDIR_P) $(OUTDIR)

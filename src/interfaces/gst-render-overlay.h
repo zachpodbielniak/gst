@@ -11,7 +11,6 @@
 #define GST_RENDER_OVERLAY_H
 
 #include <glib-object.h>
-#include <cairo.h>
 
 G_BEGIN_DECLS
 
@@ -32,7 +31,7 @@ struct _GstRenderOverlayInterface
 
 	/* Virtual methods */
 	void (*render) (GstRenderOverlay *self,
-	                cairo_t          *cr,
+	                gpointer          render_context,
 	                gint              width,
 	                gint              height);
 };
@@ -40,7 +39,7 @@ struct _GstRenderOverlayInterface
 /**
  * gst_render_overlay_render:
  * @self: A #GstRenderOverlay instance.
- * @cr: The Cairo context to render to.
+ * @render_context: Opaque rendering context.
  * @width: The width of the render area.
  * @height: The height of the render area.
  *
@@ -48,7 +47,7 @@ struct _GstRenderOverlayInterface
  */
 void
 gst_render_overlay_render(GstRenderOverlay *self,
-                          cairo_t          *cr,
+                          gpointer          render_context,
                           gint              width,
                           gint              height);
 

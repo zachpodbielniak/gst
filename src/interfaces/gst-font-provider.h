@@ -11,7 +11,6 @@
 #define GST_FONT_PROVIDER_H
 
 #include <glib-object.h>
-#include <pango/pango.h>
 
 G_BEGIN_DECLS
 
@@ -22,7 +21,7 @@ G_DECLARE_INTERFACE(GstFontProvider, gst_font_provider, GST, FONT_PROVIDER, GObj
 /**
  * GstFontProviderInterface:
  * @parent_iface: The parent interface.
- * @get_font_description: Virtual method to get a font description.
+ * @get_font_description: Virtual method to get a font description string.
  *
  * Interface for providing terminal fonts.
  */
@@ -31,18 +30,20 @@ struct _GstFontProviderInterface
 	GTypeInterface parent_iface;
 
 	/* Virtual methods */
-	PangoFontDescription * (*get_font_description) (GstFontProvider *self);
+	gchar * (*get_font_description) (GstFontProvider *self);
 };
 
 /**
  * gst_font_provider_get_font_description:
  * @self: A #GstFontProvider instance.
  *
- * Gets the font description to use for terminal rendering.
+ * Gets the font description string to use for terminal rendering.
+ * The string should be in a format suitable for Xft/fontconfig (e.g.,
+ * "monospace:size=12").
  *
- * Returns: (transfer full): A newly allocated #PangoFontDescription, or %NULL.
+ * Returns: (transfer full): A newly allocated font description string, or %NULL.
  */
-PangoFontDescription *
+gchar *
 gst_font_provider_get_font_description(GstFontProvider *self);
 
 G_END_DECLS

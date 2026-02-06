@@ -88,7 +88,7 @@ endif
 # Required dependencies
 DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
 DEPS_REQUIRED += x11 xft fontconfig
-DEPS_REQUIRED += libyaml
+DEPS_REQUIRED += yaml-0.1 json-glib-1.0
 
 # Check for required dependencies
 define check_dep
@@ -100,7 +100,7 @@ CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(DEPS_REQUIRED) 2>/dev/null)
 LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(DEPS_REQUIRED) 2>/dev/null)
 
 # Include paths
-CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib
+CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src
 
 # Combine all CFLAGS
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS)
@@ -117,7 +117,7 @@ LIB_SHARED_FULL := lib$(LIB_NAME).so.$(VERSION)
 LIB_SHARED_MAJOR := lib$(LIB_NAME).so.$(VERSION_MAJOR)
 
 # GIR settings
-GIR_NAMESPACE := Gst
+GIR_NAMESPACE := GstTerm
 GIR_VERSION := $(VERSION_MAJOR).$(VERSION_MINOR)
 GIR_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).gir
 TYPELIB_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).typelib
