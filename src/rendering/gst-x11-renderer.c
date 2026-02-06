@@ -13,11 +13,13 @@
  */
 
 #include "gst-x11-renderer.h"
+#include "gst-render-context.h"
 #include "../core/gst-terminal.h"
 #include "../core/gst-line.h"
 #include "../boxed/gst-glyph.h"
 #include "../boxed/gst-cursor.h"
 #include "../selection/gst-selection.h"
+#include "../module/gst-module-manager.h"
 #include <string.h>
 #include <math.h>
 
@@ -202,6 +204,40 @@ x11_clear_rect(
 ){
 	XftDrawRect(self->draw, &self->colors[self->default_bg],
 		x1, y1, (guint)(x2 - x1), (guint)(y2 - y1));
+}
+
+/*
+ * x11_fill_render_context:
+ * @self: the renderer
+ * @ctx: (out): render context to populate
+ *
+ * Populates a GstX11RenderContext with current renderer state.
+ * Modules use this struct to access X11 drawing resources.
+ */
+static void
+x11_fill_render_context(
+	GstX11Renderer       *self,
+	GstX11RenderContext   *ctx
+){
+	ctx->display    = self->display;
+	ctx->window     = self->xwindow;
+	ctx->drawable   = self->buf;
+	ctx->gc         = self->gc;
+	ctx->xft_draw   = self->draw;
+	ctx->visual     = self->vis;
+	ctx->colormap   = self->cmap;
+	ctx->colors     = self->colors;
+	ctx->num_colors = self->num_colors;
+	ctx->font_cache = self->font_cache;
+	ctx->cw         = self->cw;
+	ctx->ch         = self->ch;
+	ctx->borderpx   = self->borderpx;
+	ctx->win_w      = self->win_w;
+	ctx->win_h      = self->win_h;
+	ctx->win_mode   = self->win_mode;
+	ctx->fg         = NULL;
+	ctx->bg         = NULL;
+	ctx->glyph_attr = 0;
 }
 
 /*
@@ -463,6 +499,20 @@ x11_draw_glyph_specs(
 			(guint)width, 1);
 	}
 
+	/* Undercurl decoration (sine wave below baseline) */
+	if (mode & GST_GLYPH_ATTR_UNDERCURL) {
+		gint uc_x;
+
+		fv = gst_font_cache_get_font(self->font_cache, GST_FONT_STYLE_NORMAL);
+		for (uc_x = 0; uc_x < width; uc_x++) {
+			gint dy;
+
+			dy = (gint)(sin((double)uc_x * M_PI / ((double)self->cw * 0.5)) * 1.5);
+			XftDrawRect(self->draw, fg,
+				winx + uc_x, winy + fv->ascent + 1 + dy, 1, 1);
+		}
+	}
+
 	/* Reset clipping */
 	XftDrawSetClip(self->draw, 0);
 
@@ -506,6 +556,9 @@ x11_renderer_draw_line_impl(
 	GstGlyph base;
 	GstGlyph cur;
 	guint16 new_mode;
+	GstModuleManager *mgr;
+	gboolean has_glyph_transformers;
+	GstX11RenderContext gt_ctx;
 
 	self = GST_X11_RENDERER(renderer);
 	term = gst_renderer_get_terminal(renderer);
@@ -516,6 +569,13 @@ x11_renderer_draw_line_impl(
 	line = gst_terminal_get_line(term, row);
 	if (line == NULL) {
 		return;
+	}
+
+	/* Check if any glyph transformers are registered (fast path) */
+	mgr = gst_module_manager_get_default();
+	has_glyph_transformers = (mgr != NULL);
+	if (has_glyph_transformers) {
+		x11_fill_render_context(self, &gt_ctx);
 	}
 
 	/* Generate all glyph specs for this line segment */
@@ -546,6 +606,29 @@ x11_renderer_draw_line_impl(
 		/* Toggle reverse if cell is selected */
 		if (self->selection != NULL && gst_selection_selected(self->selection, x, row)) {
 			cur.attr ^= GST_GLYPH_ATTR_REVERSE;
+		}
+
+		/* Let glyph transformers handle non-ASCII codepoints */
+		if (has_glyph_transformers && cur.rune > 0x7F) {
+			gint pixel_x;
+			gint pixel_y;
+
+			pixel_x = self->borderpx + x * self->cw;
+			pixel_y = self->borderpx + row * self->ch;
+
+			if (gst_module_manager_dispatch_glyph_transform(
+				mgr, cur.rune, &gt_ctx,
+				pixel_x, pixel_y, self->cw, self->ch))
+			{
+				/* Flush accumulated run before skipping */
+				if (i > 0) {
+					x11_draw_glyph_specs(self, specs, &base, i, ox, row);
+					specs += i;
+					numspecs -= i;
+					i = 0;
+				}
+				continue;
+			}
 		}
 
 		/* If attributes changed, flush the accumulated run */
@@ -726,6 +809,17 @@ x11_renderer_render_impl(GstRenderer *renderer)
 	x11_renderer_draw_cursor_impl(renderer, cx, cy, self->ocx, self->ocy);
 	self->ocx = cx;
 	self->ocy = cy;
+
+	/* Dispatch render overlays to modules */
+	{
+		GstModuleManager *mgr;
+		GstX11RenderContext ctx;
+
+		mgr = gst_module_manager_get_default();
+		x11_fill_render_context(self, &ctx);
+		gst_module_manager_dispatch_render_overlay(
+			mgr, &ctx, self->win_w, self->win_h);
+	}
 
 	/* Copy pixmap to window (double-buffer flip) */
 	XCopyArea(self->display, self->buf, self->xwindow, self->gc,

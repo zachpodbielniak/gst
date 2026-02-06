@@ -243,6 +243,86 @@ gst_module_manager_load_from_directory(
 	const gchar      *dir_path
 );
 
+/* ===== Object Accessors ===== */
+
+/**
+ * gst_module_manager_set_terminal:
+ * @self: A #GstModuleManager
+ * @terminal: (type gpointer): The terminal instance (weak ref)
+ *
+ * Stores a weak reference to the terminal so modules can
+ * access it via gst_module_manager_get_terminal().
+ */
+void
+gst_module_manager_set_terminal(
+	GstModuleManager *self,
+	gpointer          terminal
+);
+
+/**
+ * gst_module_manager_get_terminal:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored terminal reference.
+ *
+ * Returns: (transfer none) (nullable): The terminal, or %NULL
+ */
+gpointer
+gst_module_manager_get_terminal(GstModuleManager *self);
+
+/**
+ * gst_module_manager_set_window:
+ * @self: A #GstModuleManager
+ * @window: (type gpointer): The window instance (weak ref)
+ *
+ * Stores a weak reference to the window so modules can
+ * access it via gst_module_manager_get_window().
+ */
+void
+gst_module_manager_set_window(
+	GstModuleManager *self,
+	gpointer          window
+);
+
+/**
+ * gst_module_manager_get_window:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored window reference.
+ *
+ * Returns: (transfer none) (nullable): The window, or %NULL
+ */
+gpointer
+gst_module_manager_get_window(GstModuleManager *self);
+
+/* ===== Glyph Transform Dispatch ===== */
+
+/**
+ * gst_module_manager_dispatch_glyph_transform:
+ * @self: A #GstModuleManager
+ * @codepoint: Unicode codepoint of the glyph
+ * @render_context: (type gpointer): Opaque rendering context
+ * @x: X pixel position
+ * @y: Y pixel position
+ * @width: Cell width in pixels
+ * @height: Cell height in pixels
+ *
+ * Dispatches a glyph transform to all #GstGlyphTransformer modules.
+ * Stops at the first handler that returns %TRUE (consumed the glyph).
+ *
+ * Returns: %TRUE if a module consumed (rendered) the glyph
+ */
+gboolean
+gst_module_manager_dispatch_glyph_transform(
+	GstModuleManager *self,
+	gunichar          codepoint,
+	gpointer          render_context,
+	gint              x,
+	gint              y,
+	gint              width,
+	gint              height
+);
+
 /* ===== Config Integration ===== */
 
 /**

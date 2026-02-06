@@ -86,6 +86,11 @@ modules:
     regex: "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
     modifiers: Ctrl
 
+  externalpipe:
+    enabled: false
+    command: ""
+    key: "Ctrl+Shift+e"
+
   boxdraw:
     enabled: true
     bold_offset: 1

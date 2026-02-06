@@ -848,8 +848,8 @@ main(
 		/* System module directory */
 		gst_module_manager_load_from_directory(mod_mgr, GST_MODULEDIR);
 
-		/* Activate all loaded modules */
-		gst_module_manager_activate_all(mod_mgr);
+		/* NOTE: activate_all is deferred to after terminal/window creation
+		 * so modules have access to core objects during activation. */
 	}
 
 	/* Step 1: Create terminal */
@@ -1035,6 +1035,16 @@ main(
 
 	/* Step 12: Start X11 event watch */
 	gst_x11_window_start_event_watch(window);
+
+	/* Step 12.5: Provide core objects to module manager and activate */
+	{
+		GstModuleManager *mod_mgr;
+
+		mod_mgr = gst_module_manager_get_default();
+		gst_module_manager_set_terminal(mod_mgr, terminal);
+		gst_module_manager_set_window(mod_mgr, window);
+		gst_module_manager_activate_all(mod_mgr);
+	}
 
 	/* Set up SIGTERM/SIGINT for clean shutdown */
 	g_unix_signal_add(SIGTERM, on_sigterm, NULL);

@@ -61,6 +61,8 @@ struct _GstModuleManager
 	GList       *hooks[GST_HOOK_LAST]; /* priority-sorted GstHookEntry lists */
 	GPtrArray   *loaded_gmodules;  /* GModule* handles for dlclose on dispose */
 	gpointer     config;           /* weak ref to GstConfig */
+	gpointer     terminal;         /* weak ref to GstTerminal */
+	gpointer     window;           /* weak ref to GstWindow */
 };
 
 G_DEFINE_TYPE(GstModuleManager, gst_module_manager, G_TYPE_OBJECT)
@@ -223,6 +225,8 @@ gst_module_manager_dispose(GObject *object)
 
 	g_clear_pointer(&self->modules, g_hash_table_unref);
 	self->config = NULL;
+	self->terminal = NULL;
+	self->window = NULL;
 
 	G_OBJECT_CLASS(gst_module_manager_parent_class)->dispose(object);
 }
@@ -263,6 +267,8 @@ gst_module_manager_init(GstModuleManager *self)
 
 	self->loaded_gmodules = g_ptr_array_new();
 	self->config = NULL;
+	self->terminal = NULL;
+	self->window = NULL;
 }
 
 /* ===== Public API: construction ===== */
@@ -859,6 +865,132 @@ gst_module_manager_load_from_directory(
 	g_dir_close(dir);
 
 	return count;
+}
+
+/* ===== Public API: object accessors ===== */
+
+/**
+ * gst_module_manager_set_terminal:
+ * @self: A #GstModuleManager
+ * @terminal: (type gpointer): The terminal instance (weak ref)
+ *
+ * Stores a weak reference to the terminal for module access.
+ */
+void
+gst_module_manager_set_terminal(
+	GstModuleManager *self,
+	gpointer          terminal
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->terminal = terminal;
+}
+
+/**
+ * gst_module_manager_get_terminal:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored terminal reference.
+ *
+ * Returns: (transfer none) (nullable): The terminal, or %NULL
+ */
+gpointer
+gst_module_manager_get_terminal(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
+
+	return self->terminal;
+}
+
+/**
+ * gst_module_manager_set_window:
+ * @self: A #GstModuleManager
+ * @window: (type gpointer): The window instance (weak ref)
+ *
+ * Stores a weak reference to the window for module access.
+ */
+void
+gst_module_manager_set_window(
+	GstModuleManager *self,
+	gpointer          window
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->window = window;
+}
+
+/**
+ * gst_module_manager_get_window:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored window reference.
+ *
+ * Returns: (transfer none) (nullable): The window, or %NULL
+ */
+gpointer
+gst_module_manager_get_window(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
+
+	return self->window;
+}
+
+/* ===== Public API: glyph transform dispatch ===== */
+
+/**
+ * gst_module_manager_dispatch_glyph_transform:
+ * @self: A #GstModuleManager
+ * @codepoint: Unicode codepoint of the glyph
+ * @render_context: (type gpointer): Opaque rendering context
+ * @x: X pixel position
+ * @y: Y pixel position
+ * @width: Cell width in pixels
+ * @height: Cell height in pixels
+ *
+ * Dispatches a glyph transform to all #GstGlyphTransformer modules
+ * registered at %GST_HOOK_GLYPH_TRANSFORM. Walks in priority order
+ * and stops at the first handler that returns %TRUE (consumed).
+ *
+ * Returns: %TRUE if a module consumed (rendered) the glyph
+ */
+gboolean
+gst_module_manager_dispatch_glyph_transform(
+	GstModuleManager *self,
+	gunichar          codepoint,
+	gpointer          render_context,
+	gint              x,
+	gint              y,
+	gint              width,
+	gint              height
+){
+	GList *l;
+
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
+
+	for (l = self->hooks[GST_HOOK_GLYPH_TRANSFORM]; l != NULL; l = l->next)
+	{
+		GstHookEntry *entry;
+
+		entry = (GstHookEntry *)l->data;
+
+		if (!gst_module_is_active(entry->module))
+		{
+			continue;
+		}
+
+		if (GST_IS_GLYPH_TRANSFORMER(entry->module))
+		{
+			if (gst_glyph_transformer_transform_glyph(
+				GST_GLYPH_TRANSFORMER(entry->module),
+				codepoint, render_context,
+				x, y, width, height))
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
 }
 
 /* ===== Public API: config integration ===== */
