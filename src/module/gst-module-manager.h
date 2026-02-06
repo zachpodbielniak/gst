@@ -1,5 +1,5 @@
 /*
- * gst-module-manager.h - Module lifecycle management
+ * gst-module-manager.h - Module lifecycle management and hook dispatch
  *
  * Copyright (C) 2024 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
@@ -9,8 +9,10 @@
 #define GST_MODULE_MANAGER_H
 
 #include <glib-object.h>
+#include <gmodule.h>
 #include "gst-module.h"
 #include "gst-module-info.h"
+#include "../gst-enums.h"
 
 G_BEGIN_DECLS
 
@@ -46,7 +48,9 @@ gst_module_manager_get_default(void);
  * @self: A #GstModuleManager
  * @module: The module to register
  *
- * Registers a module with the manager.
+ * Registers a module with the manager. Automatically detects
+ * which interfaces the module implements and registers hooks
+ * for each detected interface at the module's current priority.
  *
  * Returns: %TRUE if registration succeeded
  */
@@ -61,7 +65,8 @@ gst_module_manager_register(
  * @self: A #GstModuleManager
  * @name: The module name to unregister
  *
- * Unregisters a module by name.
+ * Unregisters a module by name. Deactivates the module and
+ * removes all of its hook registrations.
  *
  * Returns: %TRUE if the module was found and unregistered
  */
@@ -96,6 +101,182 @@ gst_module_manager_get_module(
  */
 GList *
 gst_module_manager_list_modules(GstModuleManager *self);
+
+/* ===== Hook Registration ===== */
+
+/**
+ * gst_module_manager_register_hook:
+ * @self: A #GstModuleManager
+ * @module: The module registering the hook
+ * @hook_point: The hook point to register at
+ * @priority: Dispatch priority (lower runs first)
+ *
+ * Manually registers a module for a specific hook point.
+ * Normally hooks are auto-detected from interfaces during
+ * gst_module_manager_register(), but this allows manual
+ * registration for custom hook points.
+ */
+void
+gst_module_manager_register_hook(
+	GstModuleManager *self,
+	GstModule        *module,
+	GstHookPoint      hook_point,
+	gint               priority
+);
+
+/**
+ * gst_module_manager_unregister_hooks:
+ * @self: A #GstModuleManager
+ * @module: The module whose hooks to remove
+ *
+ * Removes all hook registrations for the given module.
+ */
+void
+gst_module_manager_unregister_hooks(
+	GstModuleManager *self,
+	GstModule        *module
+);
+
+/* ===== Hook Dispatch ===== */
+
+/**
+ * gst_module_manager_dispatch_hook:
+ * @self: A #GstModuleManager
+ * @hook_point: The hook point to dispatch
+ * @event_data: (nullable): Opaque event data passed to handlers
+ *
+ * Dispatches a generic hook to all registered modules in priority order.
+ * For consumable hooks (input), stops when a handler returns %TRUE.
+ *
+ * Returns: %TRUE if any handler consumed the event
+ */
+gboolean
+gst_module_manager_dispatch_hook(
+	GstModuleManager *self,
+	GstHookPoint      hook_point,
+	gpointer          event_data
+);
+
+/**
+ * gst_module_manager_dispatch_key_event:
+ * @self: A #GstModuleManager
+ * @keyval: The key value
+ * @keycode: The hardware keycode
+ * @state: The modifier state
+ *
+ * Dispatches a key event to all #GstInputHandler modules.
+ * Stops at the first handler that returns %TRUE (consumed).
+ *
+ * Returns: %TRUE if a module consumed the key event
+ */
+gboolean
+gst_module_manager_dispatch_key_event(
+	GstModuleManager *self,
+	guint             keyval,
+	guint             keycode,
+	guint             state
+);
+
+/**
+ * gst_module_manager_dispatch_bell:
+ * @self: A #GstModuleManager
+ *
+ * Dispatches a bell event to all #GstBellHandler modules.
+ * All registered bell handlers are called (non-consumable).
+ */
+void
+gst_module_manager_dispatch_bell(GstModuleManager *self);
+
+/**
+ * gst_module_manager_dispatch_render_overlay:
+ * @self: A #GstModuleManager
+ * @render_context: (type gpointer): Opaque rendering context
+ * @width: Width of the render area in pixels
+ * @height: Height of the render area in pixels
+ *
+ * Dispatches a render overlay event to all #GstRenderOverlay modules.
+ * All registered overlay renderers are called (non-consumable).
+ */
+void
+gst_module_manager_dispatch_render_overlay(
+	GstModuleManager *self,
+	gpointer          render_context,
+	gint              width,
+	gint              height
+);
+
+/* ===== Module Loading ===== */
+
+/**
+ * gst_module_manager_load_module:
+ * @self: A #GstModuleManager
+ * @path: Path to the .so module file
+ * @error: (out) (optional): Location to store a #GError on failure
+ *
+ * Loads a module from a shared object file. The .so must export
+ * a `gst_module_register` function that returns a #GType.
+ * The module is instantiated, registered, and its hooks are
+ * auto-detected from implemented interfaces.
+ *
+ * Returns: (transfer none) (nullable): The loaded module, or %NULL on error
+ */
+GstModule *
+gst_module_manager_load_module(
+	GstModuleManager *self,
+	const gchar      *path,
+	GError          **error
+);
+
+/**
+ * gst_module_manager_load_from_directory:
+ * @self: A #GstModuleManager
+ * @dir_path: Path to a directory containing .so module files
+ *
+ * Scans a directory for .so files and loads each as a module.
+ * Silently skips files that fail to load.
+ *
+ * Returns: The number of modules successfully loaded
+ */
+guint
+gst_module_manager_load_from_directory(
+	GstModuleManager *self,
+	const gchar      *dir_path
+);
+
+/* ===== Config Integration ===== */
+
+/**
+ * gst_module_manager_set_config:
+ * @self: A #GstModuleManager
+ * @config: (type gpointer): The #GstConfig to pass to modules
+ *
+ * Sets the configuration object. When modules are activated,
+ * their configure vfunc is called with this config.
+ */
+void
+gst_module_manager_set_config(
+	GstModuleManager *self,
+	gpointer          config
+);
+
+/**
+ * gst_module_manager_activate_all:
+ * @self: A #GstModuleManager
+ *
+ * Activates all registered modules. Calls configure with the
+ * stored config (if set) before activating each module.
+ */
+void
+gst_module_manager_activate_all(GstModuleManager *self);
+
+/**
+ * gst_module_manager_deactivate_all:
+ * @self: A #GstModuleManager
+ *
+ * Deactivates all registered modules.
+ */
+void
+gst_module_manager_deactivate_all(GstModuleManager *self);
 
 G_END_DECLS
 

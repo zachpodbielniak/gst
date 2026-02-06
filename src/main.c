@@ -36,6 +36,7 @@
 #include "selection/gst-selection.h"
 #include "config/gst-config.h"
 #include "config/gst-color-scheme.h"
+#include "module/gst-module-manager.h"
 
 /* ===== Constants ===== */
 
@@ -344,13 +345,19 @@ on_terminal_title_changed(
 }
 
 /*
- * Terminal bell: flash urgency hint.
+ * Terminal bell: dispatch to modules, then flash urgency hint.
  */
 static void
 on_terminal_bell(
 	GstTerminal *term,
 	gpointer    user_data
 ){
+	GstModuleManager *mgr;
+
+	mgr = gst_module_manager_get_default();
+	gst_module_manager_dispatch_bell(mgr);
+
+	/* Default bell behavior */
 	gst_x11_window_bell(window);
 }
 
@@ -369,7 +376,7 @@ on_child_exited(
 }
 
 /*
- * Window key-press: check shortcuts, then forward to PTY.
+ * Window key-press: let modules intercept, check shortcuts, then forward to PTY.
  */
 static void
 on_key_press(
@@ -380,8 +387,16 @@ on_key_press(
 	gint        len,
 	gpointer    user_data
 ){
+	GstModuleManager *mgr;
 	gchar buf[64];
 	gint out_len;
+
+	/* Let modules intercept key events before built-in shortcuts */
+	mgr = gst_module_manager_get_default();
+	if (gst_module_manager_dispatch_key_event(mgr, keysym, 0, state))
+	{
+		return;
+	}
 
 	/* Ctrl+Shift+C: copy to clipboard */
 	if (keysym == XK_C && (state & ControlMask) && (state & ShiftMask)) {
@@ -798,6 +813,45 @@ main(
 	shell_cmd = (opt_execute != NULL) ? opt_execute
 		: gst_config_get_shell(config);
 
+	/* Step 0.5: Load modules */
+	{
+		GstModuleManager *mod_mgr;
+		const gchar *mod_env;
+
+		mod_mgr = gst_module_manager_get_default();
+		gst_module_manager_set_config(mod_mgr, config);
+
+		/* $GST_MODULE_PATH: colon-separated list of directories */
+		mod_env = g_getenv("GST_MODULE_PATH");
+		if (mod_env != NULL)
+		{
+			gchar **paths;
+			guint pi;
+
+			paths = g_strsplit(mod_env, ":", -1);
+			for (pi = 0; paths[pi] != NULL; pi++)
+			{
+				gst_module_manager_load_from_directory(mod_mgr, paths[pi]);
+			}
+			g_strfreev(paths);
+		}
+
+		/* User module directory: ~/.config/gst/modules/ */
+		{
+			g_autofree gchar *user_mod_dir = NULL;
+
+			user_mod_dir = g_build_filename(
+				g_get_user_config_dir(), "gst", "modules", NULL);
+			gst_module_manager_load_from_directory(mod_mgr, user_mod_dir);
+		}
+
+		/* System module directory */
+		gst_module_manager_load_from_directory(mod_mgr, GST_MODULEDIR);
+
+		/* Activate all loaded modules */
+		gst_module_manager_activate_all(mod_mgr);
+	}
+
 	/* Step 1: Create terminal */
 	terminal = gst_terminal_new(cols, rows);
 
@@ -991,6 +1045,8 @@ main(
 	g_main_loop_run(main_loop);
 
 	/* Cleanup */
+	gst_module_manager_deactivate_all(gst_module_manager_get_default());
+
 	if (draw_timeout_id != 0) {
 		g_source_remove(draw_timeout_id);
 	}

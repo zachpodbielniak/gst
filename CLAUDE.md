@@ -119,6 +119,19 @@ Phase 4 (YAML Configuration):
 - CLI options (--font, --geometry, --title, --config) override config values
 - Save/load round-trip via yaml-glib builder/generator
 
+Phase 5 (Module System):
+- GstModule: added configure vfunc, priority (get/set), is_active accessor
+- GstModuleManager: hook table with priority-sorted dispatch per hook point
+- Interface auto-detection: registers hooks based on implemented interfaces
+- .so loading via GModule: gst_module_register() entry point convention
+- Directory scanning: load_from_directory() for bulk module loading
+- Typed dispatchers: dispatch_bell(), dispatch_key_event(), dispatch_render_overlay()
+- Config integration: set_config(), activate_all(), deactivate_all()
+- main.c wiring: module loading from $GST_MODULE_PATH/user/system dirs
+- main.c: bell dispatch through modules, key event interception by modules
+- Visual bell sample module (modules/visualbell/) validates architecture end-to-end
+- 12 new module tests (122 total tests pass)
+
 Next phases:
-- Build module system with hook dispatch
 - Implement built-in modules (scrollback, transparency, etc.)
+- Module configuration from YAML (per-module config sections)
