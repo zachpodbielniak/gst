@@ -130,7 +130,8 @@ typedef enum {
     GST_CURSOR_STATE_VISIBLE  = 1 << 0,
     GST_CURSOR_STATE_BLINK    = 1 << 1,
     GST_CURSOR_STATE_BLINK_ON = 1 << 2,
-    GST_CURSOR_STATE_WRAPNEXT = 1 << 3
+    GST_CURSOR_STATE_WRAPNEXT = 1 << 3,
+    GST_CURSOR_STATE_ORIGIN   = 1 << 4   /* Origin mode (DECOM) */
 } GstCursorState;
 
 GType gst_cursor_state_get_type(void) G_GNUC_CONST;
@@ -240,17 +241,19 @@ GType gst_selection_snap_get_type(void) G_GNUC_CONST;
 /*
  * GstEscapeState:
  *
- * Escape sequence parser state.
+ * Escape sequence parser state flags (bit field).
+ * Multiple flags can be set simultaneously to track
+ * the current state of escape sequence parsing.
  */
 typedef enum {
-    GST_ESC_START,
-    GST_ESC_CSI,
-    GST_ESC_STR,
-    GST_ESC_ALTCHARSET,
-    GST_ESC_STR_END,
-    GST_ESC_TEST,
-    GST_ESC_UTF8,
-    GST_ESC_DCS
+    GST_ESC_START      = 1 << 0,   /* ESC received, waiting for command */
+    GST_ESC_CSI        = 1 << 1,   /* ESC [ received (CSI) */
+    GST_ESC_STR        = 1 << 2,   /* In string (OSC, DCS, APC, PM) */
+    GST_ESC_ALTCHARSET = 1 << 3,   /* In charset sequence ESC ( */
+    GST_ESC_STR_END    = 1 << 4,   /* String terminator received */
+    GST_ESC_TEST       = 1 << 5,   /* In DEC test sequence ESC # */
+    GST_ESC_UTF8       = 1 << 6,   /* In UTF-8 mode sequence ESC % */
+    GST_ESC_DCS        = 1 << 7    /* Device Control String */
 } GstEscapeState;
 
 GType gst_escape_state_get_type(void) G_GNUC_CONST;
