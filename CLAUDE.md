@@ -156,6 +156,15 @@ Phase 7 (Per-Module YAML Configuration):
 - Fixed config key naming: `url_click` → `urlclick` to match module name
 - 3 new tests (130 total tests pass)
 
+Phase 8 (Configurable Key Bindings):
+- GstAction enum for all bindable terminal actions
+- Key string parser: "Ctrl+Shift+c" → keysym + modifier flags
+- GstKeybind/GstMousebind structs with parsing and lookup
+- GstConfig loads keybinds/mousebinds from YAML (replaces defaults when present)
+- main.c refactored: clipboard/paste/zoom use configurable bindings
+- Mouse bindings parsed and stored (dispatch wiring deferred)
+- Shift+letter normalization and lock-bit stripping for reliable matching
+- 13 new tests (143 total tests pass)
+
 Next phases:
-- Key binding parsing and remapping
 - Wayland renderer backend

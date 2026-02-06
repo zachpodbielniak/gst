@@ -404,6 +404,32 @@ GType gst_win_mode_get_type(void) G_GNUC_CONST;
 #define GST_TYPE_WIN_MODE (gst_win_mode_get_type())
 
 /*
+ * GstAction:
+ *
+ * Bindable terminal actions for key and mouse bindings.
+ * Each value represents a discrete action that can be
+ * triggered by a configured key or mouse binding.
+ */
+typedef enum {
+    GST_ACTION_NONE = 0,
+    GST_ACTION_CLIPBOARD_COPY,
+    GST_ACTION_CLIPBOARD_PASTE,
+    GST_ACTION_PASTE_PRIMARY,
+    GST_ACTION_SCROLL_UP,
+    GST_ACTION_SCROLL_DOWN,
+    GST_ACTION_SCROLL_TOP,
+    GST_ACTION_SCROLL_BOTTOM,
+    GST_ACTION_SCROLL_UP_FAST,
+    GST_ACTION_SCROLL_DOWN_FAST,
+    GST_ACTION_ZOOM_IN,
+    GST_ACTION_ZOOM_OUT,
+    GST_ACTION_ZOOM_RESET
+} GstAction;
+
+GType gst_action_get_type(void) G_GNUC_CONST;
+#define GST_TYPE_ACTION (gst_action_get_type())
+
+/*
  * GstFontStyle:
  *
  * Font style variants for rendering.

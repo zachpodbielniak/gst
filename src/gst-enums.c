@@ -573,6 +573,43 @@ gst_win_mode_get_type(void)
 }
 
 /*
+ * gst_action_get_type:
+ *
+ * Registers the GstAction enumeration type.
+ *
+ * Returns: the GType for GstAction
+ */
+GType
+gst_action_get_type(void)
+{
+    static GType type = 0;
+
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            { GST_ACTION_NONE, "GST_ACTION_NONE", "none" },
+            { GST_ACTION_CLIPBOARD_COPY, "GST_ACTION_CLIPBOARD_COPY", "clipboard-copy" },
+            { GST_ACTION_CLIPBOARD_PASTE, "GST_ACTION_CLIPBOARD_PASTE", "clipboard-paste" },
+            { GST_ACTION_PASTE_PRIMARY, "GST_ACTION_PASTE_PRIMARY", "paste-primary" },
+            { GST_ACTION_SCROLL_UP, "GST_ACTION_SCROLL_UP", "scroll-up" },
+            { GST_ACTION_SCROLL_DOWN, "GST_ACTION_SCROLL_DOWN", "scroll-down" },
+            { GST_ACTION_SCROLL_TOP, "GST_ACTION_SCROLL_TOP", "scroll-top" },
+            { GST_ACTION_SCROLL_BOTTOM, "GST_ACTION_SCROLL_BOTTOM", "scroll-bottom" },
+            { GST_ACTION_SCROLL_UP_FAST, "GST_ACTION_SCROLL_UP_FAST", "scroll-up-fast" },
+            { GST_ACTION_SCROLL_DOWN_FAST, "GST_ACTION_SCROLL_DOWN_FAST", "scroll-down-fast" },
+            { GST_ACTION_ZOOM_IN, "GST_ACTION_ZOOM_IN", "zoom-in" },
+            { GST_ACTION_ZOOM_OUT, "GST_ACTION_ZOOM_OUT", "zoom-out" },
+            { GST_ACTION_ZOOM_RESET, "GST_ACTION_ZOOM_RESET", "zoom-reset" },
+            { 0, NULL, NULL }
+        };
+
+        GType new_type = g_enum_register_static("GstAction", values);
+        g_once_init_leave(&type, new_type);
+    }
+
+    return type;
+}
+
+/*
  * gst_font_style_get_type:
  *
  * Registers the GstFontStyle enumeration type.

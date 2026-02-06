@@ -73,6 +73,10 @@ struct _GstConfig
 
 	/* Module configs — raw YAML mapping keyed by module name */
 	YamlMapping *module_configs;
+
+	/* Key and mouse bindings */
+	GArray *keybinds;     /* GArray of GstKeybind */
+	GArray *mousebinds;   /* GArray of GstMousebind */
 };
 
 G_DEFINE_TYPE(GstConfig, gst_config, G_TYPE_OBJECT)
@@ -97,6 +101,8 @@ gst_config_dispose(GObject *object)
 	g_clear_pointer(&self->palette_hex, g_strfreev);
 	g_clear_pointer(&self->word_delimiters, g_free);
 	g_clear_pointer(&self->module_configs, yaml_mapping_unref);
+	g_clear_pointer(&self->keybinds, g_array_unref);
+	g_clear_pointer(&self->mousebinds, g_array_unref);
 
 	G_OBJECT_CLASS(gst_config_parent_class)->dispose(object);
 }
@@ -163,6 +169,66 @@ gst_config_init(GstConfig *self)
 
 	/* No module configs yet */
 	self->module_configs = NULL;
+
+	/* Default key bindings (match data/default-config.yaml) */
+	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GstKeybind));
+	{
+		GstKeybind kb;
+
+		gst_keybind_parse("Ctrl+Shift+c", "clipboard_copy", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+v", "clipboard_paste", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Shift+Insert", "paste_primary", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Shift+Page_Up", "scroll_up", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Shift+Page_Down", "scroll_down", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+Page_Up", "scroll_top", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+Page_Down", "scroll_bottom", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+Home", "scroll_top", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+End", "scroll_bottom", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+plus", "zoom_in", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+minus", "zoom_out", &kb);
+		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+0", "zoom_reset", &kb);
+		g_array_append_val(self->keybinds, kb);
+	}
+
+	/* Default mouse bindings */
+	self->mousebinds = g_array_new(FALSE, TRUE, sizeof(GstMousebind));
+	{
+		GstMousebind mb;
+
+		gst_mousebind_parse("Button4", "scroll_up", &mb);
+		g_array_append_val(self->mousebinds, mb);
+
+		gst_mousebind_parse("Button5", "scroll_down", &mb);
+		g_array_append_val(self->mousebinds, mb);
+
+		gst_mousebind_parse("Shift+Button4", "scroll_up_fast", &mb);
+		g_array_append_val(self->mousebinds, mb);
+
+		gst_mousebind_parse("Shift+Button5", "scroll_down_fast", &mb);
+		g_array_append_val(self->mousebinds, mb);
+	}
 }
 
 /* ===== YAML section loaders ===== */
@@ -600,6 +666,114 @@ load_modules_section(
 	return TRUE;
 }
 
+/*
+ * load_keybinds_section:
+ *
+ * Parse the "keybinds:" mapping. Each key is a binding string
+ * (e.g. "Ctrl+Shift+c"), each value is an action string
+ * (e.g. "clipboard_copy"). If the section is present, it fully
+ * replaces the built-in default keybinds.
+ */
+static gboolean
+load_keybinds_section(
+	GstConfig   *self,
+	YamlMapping *root,
+	GError     **error
+){
+	YamlMapping *section;
+	guint i;
+	guint size;
+
+	(void)error;
+
+	section = yaml_mapping_get_mapping_member(root, "keybinds");
+	if (section == NULL) {
+		return TRUE;
+	}
+
+	/* Replace defaults: clear existing bindings */
+	g_array_set_size(self->keybinds, 0);
+
+	size = yaml_mapping_get_size(section);
+	for (i = 0; i < size; i++) {
+		const gchar *key_str;
+		YamlNode *val_node;
+		const gchar *action_str;
+		GstKeybind kb;
+
+		key_str = yaml_mapping_get_key(section, i);
+		val_node = yaml_mapping_get_value(section, i);
+		action_str = yaml_node_get_string(val_node);
+
+		if (key_str == NULL || action_str == NULL) {
+			continue;
+		}
+
+		if (!gst_keybind_parse(key_str, action_str, &kb)) {
+			g_warning("Ignoring invalid keybind: '%s' -> '%s'",
+				key_str, action_str);
+			continue;
+		}
+
+		g_array_append_val(self->keybinds, kb);
+	}
+
+	return TRUE;
+}
+
+/*
+ * load_mousebinds_section:
+ *
+ * Parse the "mousebinds:" mapping. Same pattern as keybinds:
+ * if present, fully replaces defaults.
+ */
+static gboolean
+load_mousebinds_section(
+	GstConfig   *self,
+	YamlMapping *root,
+	GError     **error
+){
+	YamlMapping *section;
+	guint i;
+	guint size;
+
+	(void)error;
+
+	section = yaml_mapping_get_mapping_member(root, "mousebinds");
+	if (section == NULL) {
+		return TRUE;
+	}
+
+	/* Replace defaults: clear existing bindings */
+	g_array_set_size(self->mousebinds, 0);
+
+	size = yaml_mapping_get_size(section);
+	for (i = 0; i < size; i++) {
+		const gchar *key_str;
+		YamlNode *val_node;
+		const gchar *action_str;
+		GstMousebind mb;
+
+		key_str = yaml_mapping_get_key(section, i);
+		val_node = yaml_mapping_get_value(section, i);
+		action_str = yaml_node_get_string(val_node);
+
+		if (key_str == NULL || action_str == NULL) {
+			continue;
+		}
+
+		if (!gst_mousebind_parse(key_str, action_str, &mb)) {
+			g_warning("Ignoring invalid mousebind: '%s' -> '%s'",
+				key_str, action_str);
+			continue;
+		}
+
+		g_array_append_val(self->mousebinds, mb);
+	}
+
+	return TRUE;
+}
+
 /* ===== YAML save helpers ===== */
 
 /*
@@ -888,6 +1062,12 @@ gst_config_load_from_file(
 		return FALSE;
 	}
 	if (!load_modules_section(self, root_map, error)) {
+		return FALSE;
+	}
+	if (!load_keybinds_section(self, root_map, error)) {
+		return FALSE;
+	}
+	if (!load_mousebinds_section(self, root_map, error)) {
 		return FALSE;
 	}
 
@@ -1360,4 +1540,80 @@ gst_config_get_module_config(
 
 	return yaml_mapping_get_mapping_member(
 		self->module_configs, module_name);
+}
+
+/* ===== Key binding getters ===== */
+
+/**
+ * gst_config_get_keybinds:
+ * @self: A #GstConfig
+ *
+ * Gets the configured key bindings array.
+ *
+ * Returns: (transfer none) (element-type GstKeybind): The key bindings
+ */
+const GArray *
+gst_config_get_keybinds(GstConfig *self)
+{
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+
+	return self->keybinds;
+}
+
+/**
+ * gst_config_get_mousebinds:
+ * @self: A #GstConfig
+ *
+ * Gets the configured mouse bindings array.
+ *
+ * Returns: (transfer none) (element-type GstMousebind): The mouse bindings
+ */
+const GArray *
+gst_config_get_mousebinds(GstConfig *self)
+{
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+
+	return self->mousebinds;
+}
+
+/**
+ * gst_config_lookup_key_action:
+ * @self: A #GstConfig
+ * @keyval: X11 keysym
+ * @state: X11 modifier state
+ *
+ * Convenience wrapper: looks up a key action from the config's bindings.
+ *
+ * Returns: The matching #GstAction, or %GST_ACTION_NONE
+ */
+GstAction
+gst_config_lookup_key_action(
+	GstConfig *self,
+	guint     keyval,
+	guint     state
+){
+	g_return_val_if_fail(GST_IS_CONFIG(self), GST_ACTION_NONE);
+
+	return gst_keybind_lookup(self->keybinds, keyval, state);
+}
+
+/**
+ * gst_config_lookup_mouse_action:
+ * @self: A #GstConfig
+ * @button: Mouse button number
+ * @state: X11 modifier state
+ *
+ * Convenience wrapper: looks up a mouse action from the config's bindings.
+ *
+ * Returns: The matching #GstAction, or %GST_ACTION_NONE
+ */
+GstAction
+gst_config_lookup_mouse_action(
+	GstConfig *self,
+	guint     button,
+	guint     state
+){
+	g_return_val_if_fail(GST_IS_CONFIG(self), GST_ACTION_NONE);
+
+	return gst_mousebind_lookup(self->mousebinds, button, state);
 }

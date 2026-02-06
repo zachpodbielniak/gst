@@ -23,6 +23,7 @@
 #include <glib-object.h>
 #include <gio/gio.h>
 #include "../gst-enums.h"
+#include "gst-keybind.h"
 #include <yaml-glib.h>
 
 G_BEGIN_DECLS
@@ -402,6 +403,64 @@ YamlMapping *
 gst_config_get_module_config(
 	GstConfig   *self,
 	const gchar *module_name
+);
+
+/* ===== Key binding getters ===== */
+
+/**
+ * gst_config_get_keybinds:
+ * @self: A #GstConfig
+ *
+ * Gets the configured key bindings array.
+ *
+ * Returns: (transfer none) (element-type GstKeybind): The key bindings
+ */
+const GArray *
+gst_config_get_keybinds(GstConfig *self);
+
+/**
+ * gst_config_get_mousebinds:
+ * @self: A #GstConfig
+ *
+ * Gets the configured mouse bindings array.
+ *
+ * Returns: (transfer none) (element-type GstMousebind): The mouse bindings
+ */
+const GArray *
+gst_config_get_mousebinds(GstConfig *self);
+
+/**
+ * gst_config_lookup_key_action:
+ * @self: A #GstConfig
+ * @keyval: X11 keysym
+ * @state: X11 modifier state
+ *
+ * Convenience wrapper: looks up a key action from the config's bindings.
+ *
+ * Returns: The matching #GstAction, or %GST_ACTION_NONE
+ */
+GstAction
+gst_config_lookup_key_action(
+	GstConfig *self,
+	guint     keyval,
+	guint     state
+);
+
+/**
+ * gst_config_lookup_mouse_action:
+ * @self: A #GstConfig
+ * @button: Mouse button number
+ * @state: X11 modifier state
+ *
+ * Convenience wrapper: looks up a mouse action from the config's bindings.
+ *
+ * Returns: The matching #GstAction, or %GST_ACTION_NONE
+ */
+GstAction
+gst_config_lookup_mouse_action(
+	GstConfig *self,
+	guint     button,
+	guint     state
 );
 
 G_END_DECLS

@@ -35,6 +35,7 @@
 #include "window/gst-x11-window.h"
 #include "selection/gst-selection.h"
 #include "config/gst-config.h"
+#include "config/gst-keybind.h"
 #include "config/gst-color-scheme.h"
 #include "module/gst-module-manager.h"
 
@@ -388,6 +389,8 @@ on_key_press(
 	gpointer    user_data
 ){
 	GstModuleManager *mgr;
+	GstConfig *config;
+	GstAction action;
 	gchar buf[64];
 	gint out_len;
 
@@ -398,29 +401,37 @@ on_key_press(
 		return;
 	}
 
-	/* Ctrl+Shift+C: copy to clipboard */
-	if (keysym == XK_C && (state & ControlMask) && (state & ShiftMask)) {
-		gchar *sel_text;
+	/* Look up configured keybind action */
+	config = gst_config_get_default();
+	action = gst_config_lookup_key_action(config, keysym, state);
 
-		sel_text = gst_selection_get_text(selection);
-		if (sel_text != NULL) {
-			gst_x11_window_set_selection(window, sel_text, FALSE);
-			gst_x11_window_copy_to_clipboard(window);
-			g_free(sel_text);
+	switch (action) {
+	case GST_ACTION_CLIPBOARD_COPY:
+		{
+			gchar *sel_text;
+
+			sel_text = gst_selection_get_text(selection);
+			if (sel_text != NULL) {
+				gst_x11_window_set_selection(window,
+					sel_text, FALSE);
+				gst_x11_window_copy_to_clipboard(window);
+				g_free(sel_text);
+			}
 		}
 		return;
-	}
-
-	/* Ctrl+Shift+V: paste from clipboard */
-	if (keysym == XK_V && (state & ControlMask) && (state & ShiftMask)) {
+	case GST_ACTION_CLIPBOARD_PASTE:
 		gst_x11_window_paste_clipboard(window);
 		return;
-	}
-
-	/* Shift+Insert: paste primary */
-	if (keysym == XK_Insert && (state & ShiftMask)) {
+	case GST_ACTION_PASTE_PRIMARY:
 		gst_x11_window_paste_primary(window);
 		return;
+	case GST_ACTION_ZOOM_IN:
+	case GST_ACTION_ZOOM_OUT:
+	case GST_ACTION_ZOOM_RESET:
+		/* TODO: implement zoom (requires font cache resize) */
+		return;
+	default:
+		break;
 	}
 
 	/* Forward text to PTY */
