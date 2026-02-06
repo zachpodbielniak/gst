@@ -1,0 +1,10 @@
+prefix=@PREFIX@
+libdir=@LIBDIR@
+includedir=@INCLUDEDIR@
+
+Name: gst
+Description: GObject Simple Terminal - A GObject-based terminal emulator library
+Version: @VERSION@
+Requires: glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
+Libs: -L${libdir} -lgst
+Cflags: -I${includedir}/gst

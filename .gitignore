@@ -1,0 +1,52 @@
+# Build directories
+build/
+*.o
+*.a
+*.so
+*.so.*
+
+# Generated files
+src/gst-version.h
+*.pc
+*.gir
+*.typelib
+
+# Editor files
+*~
+*.swp
+*.swo
+.*.swp
+*.bak
+.vscode/
+.idea/
+
+# Debug files
+*.dSYM/
+core
+vgcore.*
+*.log
+
+# Tags
+tags
+TAGS
+.tags
+.TAGS
+
+# Dependency tracking
+*.d
+
+# Coverage
+*.gcno
+*.gcda
+*.gcov
+coverage/
+
+# Distribution
+*.tar.gz
+*.tar.xz
+*.tar.bz2
+*.zip
+
+# Misc
+.DS_Store
+Thumbs.db
