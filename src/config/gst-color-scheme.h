@@ -12,6 +12,9 @@
 
 G_BEGIN_DECLS
 
+/* Forward declaration — full type in gst-config.h */
+struct _GstConfig;
+
 #define GST_TYPE_COLOR_SCHEME (gst_color_scheme_get_type())
 
 G_DECLARE_FINAL_TYPE(GstColorScheme, gst_color_scheme, GST, COLOR_SCHEME, GObject)
@@ -29,6 +32,8 @@ gst_color_scheme_get_type(void) G_GNUC_CONST;
  */
 GstColorScheme *
 gst_color_scheme_new(const gchar *name);
+
+/* ===== Getters ===== */
 
 /**
  * gst_color_scheme_get_name:
@@ -64,6 +69,17 @@ guint32
 gst_color_scheme_get_background(GstColorScheme *self);
 
 /**
+ * gst_color_scheme_get_cursor_color:
+ * @self: A #GstColorScheme
+ *
+ * Gets the cursor color as ARGB.
+ *
+ * Returns: The cursor color
+ */
+guint32
+gst_color_scheme_get_cursor_color(GstColorScheme *self);
+
+/**
  * gst_color_scheme_get_color:
  * @self: A #GstColorScheme
  * @index: The color index (0-255)
@@ -76,6 +92,82 @@ guint32
 gst_color_scheme_get_color(
 	GstColorScheme *self,
 	guint           index
+);
+
+/* ===== Setters ===== */
+
+/**
+ * gst_color_scheme_set_foreground:
+ * @self: A #GstColorScheme
+ * @color: ARGB color value
+ *
+ * Sets the default foreground color.
+ */
+void
+gst_color_scheme_set_foreground(
+	GstColorScheme *self,
+	guint32         color
+);
+
+/**
+ * gst_color_scheme_set_background:
+ * @self: A #GstColorScheme
+ * @color: ARGB color value
+ *
+ * Sets the default background color.
+ */
+void
+gst_color_scheme_set_background(
+	GstColorScheme *self,
+	guint32         color
+);
+
+/**
+ * gst_color_scheme_set_cursor_color:
+ * @self: A #GstColorScheme
+ * @color: ARGB color value
+ *
+ * Sets the cursor color.
+ */
+void
+gst_color_scheme_set_cursor_color(
+	GstColorScheme *self,
+	guint32         color
+);
+
+/**
+ * gst_color_scheme_set_color:
+ * @self: A #GstColorScheme
+ * @index: The color index (0-255)
+ * @color: ARGB color value
+ *
+ * Sets a palette color by index.
+ */
+void
+gst_color_scheme_set_color(
+	GstColorScheme *self,
+	guint           index,
+	guint32         color
+);
+
+/* ===== Config integration ===== */
+
+/**
+ * gst_color_scheme_load_from_config:
+ * @self: A #GstColorScheme
+ * @config: A #GstConfig with palette data
+ *
+ * Applies palette colors from a configuration object.
+ * Reads the palette_hex entries from @config and overwrites
+ * the corresponding palette indices (0-15). Also sets
+ * foreground/background from the configured palette indices.
+ *
+ * Returns: %TRUE on success, %FALSE if a hex color could not be parsed
+ */
+gboolean
+gst_color_scheme_load_from_config(
+	GstColorScheme     *self,
+	struct _GstConfig  *config
 );
 
 G_END_DECLS

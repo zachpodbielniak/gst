@@ -6,6 +6,10 @@
  */
 
 #include "gst-color-scheme.h"
+#include "gst-config.h"
+
+#include <string.h>
+#include <stdlib.h>
 
 /**
  * SECTION:gst-color-scheme
@@ -14,6 +18,7 @@
  *
  * #GstColorScheme manages the 256-color palette used for terminal
  * rendering, including the 16 standard colors and extended palette.
+ * Colors are stored as ARGB (0xAARRGGBB).
  */
 
 #define GST_COLOR_PALETTE_SIZE (256)
@@ -159,6 +164,8 @@ gst_color_scheme_new(const gchar *name)
 	return scheme;
 }
 
+/* ===== Getters ===== */
+
 /**
  * gst_color_scheme_get_name:
  * @self: A #GstColorScheme
@@ -208,6 +215,22 @@ gst_color_scheme_get_background(GstColorScheme *self)
 }
 
 /**
+ * gst_color_scheme_get_cursor_color:
+ * @self: A #GstColorScheme
+ *
+ * Gets the cursor color as ARGB.
+ *
+ * Returns: The cursor color
+ */
+guint32
+gst_color_scheme_get_cursor_color(GstColorScheme *self)
+{
+	g_return_val_if_fail(GST_IS_COLOR_SCHEME(self), 0xFFFFFFFF);
+
+	return self->cursor_color;
+}
+
+/**
  * gst_color_scheme_get_color:
  * @self: A #GstColorScheme
  * @index: The color index (0-255)
@@ -225,4 +248,179 @@ gst_color_scheme_get_color(
 	g_return_val_if_fail(index < GST_COLOR_PALETTE_SIZE, 0);
 
 	return self->palette[index];
+}
+
+/* ===== Setters ===== */
+
+/**
+ * gst_color_scheme_set_foreground:
+ * @self: A #GstColorScheme
+ * @color: ARGB color value
+ *
+ * Sets the default foreground color.
+ */
+void
+gst_color_scheme_set_foreground(
+	GstColorScheme *self,
+	guint32         color
+){
+	g_return_if_fail(GST_IS_COLOR_SCHEME(self));
+
+	self->foreground = color;
+}
+
+/**
+ * gst_color_scheme_set_background:
+ * @self: A #GstColorScheme
+ * @color: ARGB color value
+ *
+ * Sets the default background color.
+ */
+void
+gst_color_scheme_set_background(
+	GstColorScheme *self,
+	guint32         color
+){
+	g_return_if_fail(GST_IS_COLOR_SCHEME(self));
+
+	self->background = color;
+}
+
+/**
+ * gst_color_scheme_set_cursor_color:
+ * @self: A #GstColorScheme
+ * @color: ARGB color value
+ *
+ * Sets the cursor color.
+ */
+void
+gst_color_scheme_set_cursor_color(
+	GstColorScheme *self,
+	guint32         color
+){
+	g_return_if_fail(GST_IS_COLOR_SCHEME(self));
+
+	self->cursor_color = color;
+}
+
+/**
+ * gst_color_scheme_set_color:
+ * @self: A #GstColorScheme
+ * @index: The color index (0-255)
+ * @color: ARGB color value
+ *
+ * Sets a palette color by index.
+ */
+void
+gst_color_scheme_set_color(
+	GstColorScheme *self,
+	guint           index,
+	guint32         color
+){
+	g_return_if_fail(GST_IS_COLOR_SCHEME(self));
+	g_return_if_fail(index < GST_COLOR_PALETTE_SIZE);
+
+	self->palette[index] = color;
+}
+
+/* ===== Config integration ===== */
+
+/*
+ * parse_hex_color:
+ * @hex: A "#RRGGBB" string
+ * @out_color: (out): The parsed ARGB color (0xFFRRGGBB)
+ *
+ * Converts a hex color string to an ARGB value with full alpha.
+ *
+ * Returns: %TRUE if parsing succeeded
+ */
+static gboolean
+parse_hex_color(
+	const gchar *hex,
+	guint32     *out_color
+){
+	gulong val;
+	gchar *endptr;
+
+	if (hex == NULL || hex[0] != '#' || strlen(hex) != 7) {
+		return FALSE;
+	}
+
+	/* Parse the 6 hex digits after '#' */
+	val = strtoul(hex + 1, &endptr, 16);
+	if (*endptr != '\0') {
+		return FALSE;
+	}
+
+	/* ARGB with full alpha */
+	*out_color = 0xFF000000 | (guint32)(val & 0x00FFFFFF);
+	return TRUE;
+}
+
+/**
+ * gst_color_scheme_load_from_config:
+ * @self: A #GstColorScheme
+ * @config: A #GstConfig with palette data
+ *
+ * Applies palette colors from a configuration object.
+ * Reads the palette_hex entries from @config and overwrites
+ * the corresponding palette indices. Sets foreground and
+ * background from the configured palette indices.
+ *
+ * Returns: %TRUE on success, %FALSE if a hex color could not be parsed
+ */
+gboolean
+gst_color_scheme_load_from_config(
+	GstColorScheme *self,
+	GstConfig      *config
+){
+	const gchar *const *palette_hex;
+	guint n_palette;
+	guint fg_idx;
+	guint bg_idx;
+	guint cursor_fg_idx;
+	guint cursor_bg_idx;
+	guint i;
+
+	g_return_val_if_fail(GST_IS_COLOR_SCHEME(self), FALSE);
+	g_return_val_if_fail(config != NULL, FALSE);
+
+	/* Apply palette hex colors (overwrite indices 0-N) */
+	palette_hex = gst_config_get_palette_hex(config);
+	n_palette = gst_config_get_n_palette(config);
+
+	for (i = 0; i < n_palette && palette_hex != NULL; i++) {
+		guint32 color;
+
+		if (!parse_hex_color(palette_hex[i], &color)) {
+			g_warning("Invalid palette color at index %u: '%s'",
+				i, palette_hex[i]);
+			return FALSE;
+		}
+		self->palette[i] = color;
+	}
+
+	/*
+	 * Set foreground/background from palette indices.
+	 * The config stores indices into the palette, so
+	 * look up the ARGB value from the (possibly overwritten) palette.
+	 */
+	fg_idx = gst_config_get_fg_index(config);
+	bg_idx = gst_config_get_bg_index(config);
+	cursor_fg_idx = gst_config_get_cursor_fg_index(config);
+	cursor_bg_idx = gst_config_get_cursor_bg_index(config);
+
+	if (fg_idx < GST_COLOR_PALETTE_SIZE) {
+		self->foreground = self->palette[fg_idx];
+	}
+	if (bg_idx < GST_COLOR_PALETTE_SIZE) {
+		self->background = self->palette[bg_idx];
+	}
+	if (cursor_bg_idx < GST_COLOR_PALETTE_SIZE) {
+		self->cursor_color = self->palette[cursor_bg_idx];
+	}
+
+	(void)cursor_fg_idx;
+
+	return TRUE;
 }

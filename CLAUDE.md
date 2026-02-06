@@ -92,16 +92,33 @@ Hook points are defined in `GstHookPoint` enum in `src/gst-enums.h`.
 
 ## Current Status
 
-Phase 1 (Foundation) is complete:
-- Build system
-- Core headers and types
+Phases 1-4 are complete (110 tests pass):
+
+Phase 1 (Foundation):
+- Build system, core headers and types
 - Boxed types (GstGlyph, GstCursor, GstLine)
 - GstTerminal skeleton with properties/signals
-- Stub implementations for all major classes
+
+Phase 2 (Terminal Emulation):
+- Escape sequence parser ported from st.c
+- PTY management (GstPty)
+- Selection system (GstSelection)
+
+Phase 3 (X11 Rendering):
+- Font cache (GstFontCache)
+- X11 renderer (GstX11Renderer)
+- X11 window (GstX11Window)
+- main.c wiring via GObject signals
+
+Phase 4 (YAML Configuration):
+- GstConfig: full YAML loading from ~/.config/gst/config.yaml
+- Config search path: --config > XDG_CONFIG_HOME > /etc > /usr/share
+- Sections: terminal, window, font, colors, cursor, selection, draw, modules
+- GstColorScheme: setters + load_from_config() for palette application
+- main.c integrated: all hardcoded constants replaced with config getters
+- CLI options (--font, --geometry, --title, --config) override config values
+- Save/load round-trip via yaml-glib builder/generator
 
 Next phases:
-- Port escape sequence parser from st.c
-- Implement PTY management
-- Port X11 rendering
-- Implement YAML configuration loading
 - Build module system with hook dispatch
+- Implement built-in modules (scrollback, transparency, etc.)

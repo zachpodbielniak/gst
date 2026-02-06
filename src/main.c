@@ -11,6 +11,9 @@
  * Draw timing uses an adaptive latency model ported from st:
  * coalesce rapid PTY writes into single frames, bounded by
  * minlatency and maxlatency thresholds.
+ *
+ * Configuration is loaded from YAML files via GstConfig.
+ * CLI options override config values where applicable.
  */
 
 #include <glib.h>
@@ -31,18 +34,10 @@
 #include "rendering/gst-x11-renderer.h"
 #include "window/gst-x11-window.h"
 #include "selection/gst-selection.h"
+#include "config/gst-config.h"
+#include "config/gst-color-scheme.h"
 
 /* ===== Constants ===== */
-
-/* Default font */
-#define GST_DEFAULT_FONT    "Liberation Mono:pixelsize=14:antialias=true:autohint=true"
-
-/* Default border padding (pixels) */
-#define GST_DEFAULT_BORDER  (2)
-
-/* Draw latency timing (milliseconds) */
-#define GST_MIN_LATENCY     (8)
-#define GST_MAX_LATENCY     (33)
 
 /* Keyboard modifier mask for forced mouse reporting */
 #define GST_FORCE_MOUSE_MOD (ShiftMask)
@@ -123,6 +118,11 @@ static guint draw_timeout_id = 0;
 static gint64 draw_trigger_time = 0;
 static gboolean drawing = FALSE;
 
+/* Runtime config values (populated from GstConfig on startup) */
+static guint cfg_border_px = 2;
+static guint cfg_min_latency = 8;
+static guint cfg_max_latency = 33;
+
 /* ===== Helper functions ===== */
 
 static gboolean
@@ -157,6 +157,49 @@ parse_geometry(
 }
 
 /*
+ * find_default_config:
+ *
+ * Search the XDG config path and system paths for config.yaml.
+ * Returns the first path that exists, or NULL if none found.
+ *
+ * Search order:
+ *  1. $XDG_CONFIG_HOME/gst/config.yaml (~/.config/gst/config.yaml)
+ *  2. /etc/gst/config.yaml
+ *  3. /usr/share/gst/config.yaml
+ */
+static gchar *
+find_default_config(void)
+{
+	const gchar *xdg_config;
+	g_autofree gchar *user_path = NULL;
+	const gchar *system_paths[] = {
+		"/etc/gst/config.yaml",
+		"/usr/share/gst/config.yaml",
+		NULL
+	};
+	guint i;
+
+	/* XDG user config */
+	xdg_config = g_get_user_config_dir();
+	if (xdg_config != NULL) {
+		user_path = g_build_filename(xdg_config, "gst",
+			"config.yaml", NULL);
+		if (g_file_test(user_path, G_FILE_TEST_IS_REGULAR)) {
+			return g_steal_pointer(&user_path);
+		}
+	}
+
+	/* System config paths */
+	for (i = 0; system_paths[i] != NULL; i++) {
+		if (g_file_test(system_paths[i], G_FILE_TEST_IS_REGULAR)) {
+			return g_strdup(system_paths[i]);
+		}
+	}
+
+	return NULL;
+}
+
+/*
  * Convert pixel coordinates to terminal column/row,
  * accounting for border padding.
  */
@@ -169,7 +212,7 @@ pixel_to_col(gint px)
 
 	cw = gst_font_cache_get_char_width(font_cache);
 	cols = gst_terminal_get_cols(terminal);
-	x = (px - GST_DEFAULT_BORDER) / cw;
+	x = (px - (gint)cfg_border_px) / cw;
 	if (x < 0) x = 0;
 	if (x >= cols) x = cols - 1;
 	return x;
@@ -184,7 +227,7 @@ pixel_to_row(gint py)
 
 	ch = gst_font_cache_get_char_height(font_cache);
 	rows = gst_terminal_get_rows(terminal);
-	y = (py - GST_DEFAULT_BORDER) / ch;
+	y = (py - (gint)cfg_border_px) / ch;
 	if (y < 0) y = 0;
 	if (y >= rows) y = rows - 1;
 	return y;
@@ -238,7 +281,7 @@ schedule_draw(void)
 
 	elapsed = (now - draw_trigger_time) / 1000; /* to ms */
 
-	if (elapsed >= GST_MAX_LATENCY) {
+	if (elapsed >= (gint64)cfg_max_latency) {
 		/* Max latency exceeded: draw immediately */
 		if (draw_timeout_id != 0) {
 			g_source_remove(draw_timeout_id);
@@ -249,9 +292,9 @@ schedule_draw(void)
 	}
 
 	/* Schedule draw at minlatency, adapting to remaining budget */
-	delay = (guint)(GST_MAX_LATENCY - elapsed);
-	if (delay > GST_MIN_LATENCY) {
-		delay = GST_MIN_LATENCY;
+	delay = (guint)((gint64)cfg_max_latency - elapsed);
+	if (delay > cfg_min_latency) {
+		delay = cfg_min_latency;
 	}
 
 	if (draw_timeout_id == 0) {
@@ -531,8 +574,8 @@ on_configure(
 	cw = gst_font_cache_get_char_width(font_cache);
 	ch = gst_font_cache_get_char_height(font_cache);
 
-	cols = ((gint)width - 2 * GST_DEFAULT_BORDER) / cw;
-	rows = ((gint)height - 2 * GST_DEFAULT_BORDER) / ch;
+	cols = ((gint)width - 2 * (gint)cfg_border_px) / cw;
+	rows = ((gint)height - 2 * (gint)cfg_border_px) / ch;
 
 	if (cols < 1) cols = 1;
 	if (rows < 1) rows = 1;
@@ -644,11 +687,14 @@ main(
 ){
 	GOptionContext *context;
 	GError *error = NULL;
+	GstConfig *config;
+	GstColorScheme *scheme;
 	gint cols;
 	gint rows;
 	gint cw;
 	gint ch;
 	const gchar *fontstr;
+	const gchar *shell_cmd;
 	gulong embed_id;
 	Display *display;
 	Window xid;
@@ -701,9 +747,40 @@ main(
 		return EXIT_SUCCESS;
 	}
 
-	/* Determine terminal dimensions */
-	cols = GST_DEFAULT_COLS;
-	rows = GST_DEFAULT_ROWS;
+	/* Step 0: Load configuration */
+	config = gst_config_get_default();
+
+	if (opt_config != NULL) {
+		/* Explicit config path from --config */
+		if (!gst_config_load_from_path(config, opt_config, &error)) {
+			g_printerr("Failed to load config '%s': %s\n",
+				opt_config, error->message);
+			g_error_free(error);
+			return EXIT_FAILURE;
+		}
+	} else {
+		/* Search default paths, silently ignore missing */
+		g_autofree gchar *default_path = NULL;
+
+		default_path = find_default_config();
+		if (default_path != NULL) {
+			if (!gst_config_load_from_path(config, default_path, &error)) {
+				g_printerr("Warning: failed to load config '%s': %s\n",
+					default_path, error->message);
+				g_clear_error(&error);
+				/* Continue with defaults */
+			}
+		}
+	}
+
+	/* Cache runtime config values for hot paths */
+	cfg_border_px = gst_config_get_border_px(config);
+	cfg_min_latency = gst_config_get_min_latency(config);
+	cfg_max_latency = gst_config_get_max_latency(config);
+
+	/* Determine terminal dimensions (CLI overrides config) */
+	cols = (gint)gst_config_get_cols(config);
+	rows = (gint)gst_config_get_rows(config);
 
 	if (opt_geometry != NULL) {
 		if (!parse_geometry(opt_geometry, &cols, &rows)) {
@@ -712,6 +789,14 @@ main(
 			return EXIT_FAILURE;
 		}
 	}
+
+	/* Determine font (CLI overrides config) */
+	fontstr = (opt_font != NULL) ? opt_font
+		: gst_config_get_font_primary(config);
+
+	/* Determine shell (CLI --exec overrides config) */
+	shell_cmd = (opt_execute != NULL) ? opt_execute
+		: gst_config_get_shell(config);
 
 	/* Step 1: Create terminal */
 	terminal = gst_terminal_new(cols, rows);
@@ -726,7 +811,6 @@ main(
 		return EXIT_FAILURE;
 	}
 
-	fontstr = (opt_font != NULL) ? opt_font : GST_DEFAULT_FONT;
 	font_cache = gst_font_cache_new();
 
 	/*
@@ -781,7 +865,8 @@ main(
 	}
 
 	/* Step 5: Create X11 window with proper dimensions */
-	window = gst_x11_window_new(cols, rows, cw, ch, GST_DEFAULT_BORDER, embed_id);
+	window = gst_x11_window_new(cols, rows, cw, ch,
+		(gint)cfg_border_px, embed_id);
 	if (window == NULL) {
 		g_printerr("Cannot create X11 window\n");
 		g_object_unref(font_cache);
@@ -807,11 +892,15 @@ main(
 	ch = gst_font_cache_get_char_height(font_cache);
 
 	/* Step 7: Show window and set WM hints */
-	gst_x11_window_set_wm_hints(window, cw, ch, GST_DEFAULT_BORDER);
+	gst_x11_window_set_wm_hints(window, cw, ch, (gint)cfg_border_px);
 	gst_window_show(GST_WINDOW(window));
 
+	/* Apply title: CLI --title overrides config */
 	if (opt_title != NULL) {
 		gst_x11_window_set_title_x11(window, opt_title);
+	} else {
+		gst_x11_window_set_title_x11(window,
+			gst_config_get_title(config));
 	}
 
 	/* Step 8: Create X11 renderer */
@@ -821,12 +910,17 @@ main(
 
 	renderer = gst_x11_renderer_new(
 		terminal, display, xid, visual, colormap,
-		screen, font_cache, GST_DEFAULT_BORDER);
+		screen, font_cache, (gint)cfg_border_px);
 
-	/* Step 9: Load colors */
+	/* Step 9: Load colors from config */
+	scheme = gst_color_scheme_new("config");
+	gst_color_scheme_load_from_config(scheme, config);
+
 	if (!gst_x11_renderer_load_colors(renderer)) {
 		g_printerr("Cannot load colors\n");
 	}
+
+	g_object_unref(scheme);
 
 	/* Set initial win_mode */
 	gst_x11_renderer_set_win_mode(renderer,
@@ -835,7 +929,7 @@ main(
 	/* Step 10: Create PTY and spawn shell */
 	pty = gst_pty_new();
 
-	if (!gst_pty_spawn(pty, opt_execute, NULL, &error)) {
+	if (!gst_pty_spawn(pty, shell_cmd, NULL, &error)) {
 		g_printerr("Failed to spawn shell: %s\n", error->message);
 		g_error_free(error);
 		g_object_unref(renderer);
