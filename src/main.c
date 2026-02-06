@@ -4,15 +4,13 @@
  * Copyright (C) 2024 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Main entry point for the gst terminal emulator.
- * Currently operates in headless mode (no X11 yet):
- * - Spawns a shell via GstPty
- * - Feeds PTY output through GstTerminal for escape processing
- * - Writes raw PTY output to stdout for display
- * - Reads stdin and forwards to the PTY
+ * Full windowed terminal emulator entry point.
+ * Creates a terminal, X11 window, renderer, and PTY,
+ * wires all signals together, and runs the GLib main loop.
  *
- * Once Phase 3 (rendering) is complete, this will be replaced
- * with proper X11 window creation and event handling.
+ * Draw timing uses an adaptive latency model ported from st:
+ * coalesce rapid PTY writes into single frames, bounded by
+ * minlatency and maxlatency thresholds.
  */
 
 #include <glib.h>
@@ -22,14 +20,42 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <termios.h>
-#include <sys/ioctl.h>
+#include <fontconfig/fontconfig.h>
+#include <X11/keysym.h>
+#include <X11/Xlib.h>
 
 #include "gst.h"
 #include "core/gst-terminal.h"
 #include "core/gst-pty.h"
+#include "rendering/gst-font-cache.h"
+#include "rendering/gst-x11-renderer.h"
+#include "window/gst-x11-window.h"
+#include "selection/gst-selection.h"
 
-/* Command line options */
+/* ===== Constants ===== */
+
+/* Default font */
+#define GST_DEFAULT_FONT    "Liberation Mono:pixelsize=14:antialias=true:autohint=true"
+
+/* Default border padding (pixels) */
+#define GST_DEFAULT_BORDER  (2)
+
+/* Draw latency timing (milliseconds) */
+#define GST_MIN_LATENCY     (8)
+#define GST_MAX_LATENCY     (33)
+
+/* Keyboard modifier mask for forced mouse reporting */
+#define GST_FORCE_MOUSE_MOD (ShiftMask)
+
+/* Mouse reporting mode check */
+#define IS_MOUSE_MODE(m) \
+	(gst_terminal_has_mode(terminal, GST_MODE_MOUSE_X10) || \
+	 gst_terminal_has_mode(terminal, GST_MODE_MOUSE_BTN) || \
+	 gst_terminal_has_mode(terminal, GST_MODE_MOUSE_MOTION) || \
+	 gst_terminal_has_mode(terminal, GST_MODE_MOUSE_MANY))
+
+/* ===== Command line options ===== */
+
 static gchar *opt_config = NULL;
 static gchar *opt_title = NULL;
 static gchar *opt_geometry = NULL;
@@ -82,23 +108,23 @@ static const gchar *license_text =
 	"You should have received a copy of the GNU Affero General Public License\n"
 	"along with this program.  If not, see <https://www.gnu.org/licenses/>.\n";
 
-/* Application state */
+/* ===== Application state ===== */
+
 static GMainLoop *main_loop = NULL;
 static GstTerminal *terminal = NULL;
+static GstSelection *selection = NULL;
 static GstPty *pty = NULL;
-static struct termios orig_termios;
-static gboolean termios_saved = FALSE;
+static GstFontCache *font_cache = NULL;
+static GstX11Window *window = NULL;
+static GstX11Renderer *renderer = NULL;
 
-/*
- * parse_geometry:
- * @geometry: geometry string in format "COLSxROWS"
- * @cols: (out): location for columns
- * @rows: (out): location for rows
- *
- * Parses a geometry string.
- *
- * Returns: TRUE if parsing succeeded
- */
+/* Draw timing state */
+static guint draw_timeout_id = 0;
+static gint64 draw_trigger_time = 0;
+static gboolean drawing = FALSE;
+
+/* ===== Helper functions ===== */
+
 static gboolean
 parse_geometry(
 	const gchar *geometry,
@@ -131,97 +157,112 @@ parse_geometry(
 }
 
 /*
- * restore_terminal:
- *
- * Restores the host terminal settings saved before entering raw mode.
+ * Convert pixel coordinates to terminal column/row,
+ * accounting for border padding.
  */
+static gint
+pixel_to_col(gint px)
+{
+	gint cw;
+	gint cols;
+	gint x;
+
+	cw = gst_font_cache_get_char_width(font_cache);
+	cols = gst_terminal_get_cols(terminal);
+	x = (px - GST_DEFAULT_BORDER) / cw;
+	if (x < 0) x = 0;
+	if (x >= cols) x = cols - 1;
+	return x;
+}
+
+static gint
+pixel_to_row(gint py)
+{
+	gint ch;
+	gint rows;
+	gint y;
+
+	ch = gst_font_cache_get_char_height(font_cache);
+	rows = gst_terminal_get_rows(terminal);
+	y = (py - GST_DEFAULT_BORDER) / ch;
+	if (y < 0) y = 0;
+	if (y >= rows) y = rows - 1;
+	return y;
+}
+
+/* ===== Draw scheduling ===== */
+
+/*
+ * schedule_draw:
+ *
+ * Called when there is new content to render.
+ * Implements adaptive latency: waits up to minlatency
+ * for more data, draws immediately after maxlatency.
+ */
+static gboolean
+do_draw(gpointer user_data)
+{
+	GstWinMode wm;
+
+	draw_timeout_id = 0;
+	drawing = FALSE;
+
+	wm = gst_x11_renderer_get_win_mode(renderer);
+	if (!(wm & GST_WIN_MODE_VISIBLE)) {
+		return G_SOURCE_REMOVE;
+	}
+
+	if (!gst_renderer_start_draw(GST_RENDERER(renderer))) {
+		return G_SOURCE_REMOVE;
+	}
+
+	gst_renderer_render(GST_RENDERER(renderer));
+	gst_renderer_finish_draw(GST_RENDERER(renderer));
+
+	return G_SOURCE_REMOVE;
+}
+
 static void
-restore_terminal(void)
+schedule_draw(void)
 {
-	if (termios_saved) {
-		tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
-		termios_saved = FALSE;
+	gint64 now;
+	gint64 elapsed;
+	guint delay;
+
+	now = g_get_monotonic_time();
+
+	if (!drawing) {
+		draw_trigger_time = now;
+		drawing = TRUE;
+	}
+
+	elapsed = (now - draw_trigger_time) / 1000; /* to ms */
+
+	if (elapsed >= GST_MAX_LATENCY) {
+		/* Max latency exceeded: draw immediately */
+		if (draw_timeout_id != 0) {
+			g_source_remove(draw_timeout_id);
+			draw_timeout_id = 0;
+		}
+		do_draw(NULL);
+		return;
+	}
+
+	/* Schedule draw at minlatency, adapting to remaining budget */
+	delay = (guint)(GST_MAX_LATENCY - elapsed);
+	if (delay > GST_MIN_LATENCY) {
+		delay = GST_MIN_LATENCY;
+	}
+
+	if (draw_timeout_id == 0) {
+		draw_timeout_id = g_timeout_add(delay, do_draw, NULL);
 	}
 }
 
-/*
- * set_raw_mode:
- *
- * Puts the host terminal into raw mode so that keypresses are
- * forwarded directly to the child PTY without line buffering
- * or local echo.
- *
- * Returns: TRUE on success
- */
-static gboolean
-set_raw_mode(void)
-{
-	struct termios raw;
-
-	if (!isatty(STDIN_FILENO)) {
-		return FALSE;
-	}
-
-	if (tcgetattr(STDIN_FILENO, &orig_termios) < 0) {
-		return FALSE;
-	}
-	termios_saved = TRUE;
-
-	raw = orig_termios;
-	/* Input: no break, no CR to NL, no parity check, no strip, no flow control */
-	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-	/* Output: disable post-processing */
-	raw.c_oflag &= ~(OPOST);
-	/* Control: set 8-bit chars */
-	raw.c_cflag |= (CS8);
-	/* Local: no echo, no canonical, no extended, no signal chars */
-	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-	/* Return as soon as any input is available */
-	raw.c_cc[VMIN] = 1;
-	raw.c_cc[VTIME] = 0;
-
-	if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
-		return FALSE;
-	}
-
-	return TRUE;
-}
+/* ===== Signal handlers ===== */
 
 /*
- * get_host_winsize:
- * @cols: (out): location for columns
- * @rows: (out): location for rows
- *
- * Queries the host terminal for its current window size.
- *
- * Returns: TRUE if the size was obtained
- */
-static gboolean
-get_host_winsize(
-	gint *cols,
-	gint *rows
-){
-	struct winsize ws;
-
-	if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) < 0) {
-		return FALSE;
-	}
-
-	*cols = (gint)ws.ws_col;
-	*rows = (gint)ws.ws_row;
-	return TRUE;
-}
-
-/*
- * on_pty_data_received:
- * @pty_obj: the GstPty emitting the signal
- * @data: raw data from the child process
- * @len: length of data
- * @user_data: pointer to GstTerminal
- *
- * Signal handler for GstPty::data-received.
- * Feeds data through the terminal emulator for escape processing,
- * and writes raw output to stdout for display.
+ * PTY data-received: feed through terminal emulator and schedule redraw.
  */
 static void
 on_pty_data_received(
@@ -230,27 +271,12 @@ on_pty_data_received(
 	gulong      len,
 	gpointer    user_data
 ){
-	GstTerminal *term;
-
-	term = GST_TERMINAL(user_data);
-
-	/* Write raw data to stdout for display in headless mode */
-	write(STDOUT_FILENO, data, (size_t)len);
-
-	/* Feed data through terminal emulator for state tracking */
-	gst_terminal_write(term, (const gchar *)data, (gssize)len);
+	gst_terminal_write(terminal, (const gchar *)data, (gssize)len);
+	schedule_draw();
 }
 
 /*
- * on_terminal_response:
- * @term: the GstTerminal emitting the signal
- * @data: response data to send to PTY
- * @len: length of response data
- * @user_data: pointer to GstPty
- *
- * Signal handler for GstTerminal::response.
- * Forwards terminal responses (DA, DSR, cursor reports) back
- * to the child process via the PTY.
+ * Terminal response: forward DA/DSR/cursor report to child via PTY.
  */
 static void
 on_terminal_response(
@@ -259,21 +285,34 @@ on_terminal_response(
 	glong       len,
 	gpointer    user_data
 ){
-	GstPty *pty_obj;
-
-	pty_obj = GST_PTY(user_data);
-
-	gst_pty_write(pty_obj, data, (gssize)len);
+	gst_pty_write(pty, data, (gssize)len);
 }
 
 /*
- * on_child_exited:
- * @pty_obj: the GstPty emitting the signal
- * @status: exit status of the child process
- * @user_data: unused
- *
- * Signal handler for GstPty::child-exited.
- * Quits the main loop when the child shell exits.
+ * Terminal title-changed: update X11 window title.
+ */
+static void
+on_terminal_title_changed(
+	GstTerminal *term,
+	const gchar *title,
+	gpointer    user_data
+){
+	gst_x11_window_set_title_x11(window, title);
+}
+
+/*
+ * Terminal bell: flash urgency hint.
+ */
+static void
+on_terminal_bell(
+	GstTerminal *term,
+	gpointer    user_data
+){
+	gst_x11_window_bell(window);
+}
+
+/*
+ * Child process exited: quit main loop.
  */
 static void
 on_child_exited(
@@ -287,75 +326,304 @@ on_child_exited(
 }
 
 /*
- * on_stdin_readable:
- * @source: the GIOChannel for stdin
- * @condition: the I/O condition
- * @user_data: pointer to GstPty
- *
- * GIOChannel callback for stdin. Reads input and forwards
- * it to the child process via the PTY.
- *
- * Returns: TRUE to keep the watch active
+ * Window key-press: check shortcuts, then forward to PTY.
  */
-static gboolean
-on_stdin_readable(
-	GIOChannel      *source,
-	GIOCondition    condition,
-	gpointer        user_data
+static void
+on_key_press(
+	GstWindow   *win,
+	guint       keysym,
+	guint       state,
+	const gchar *text,
+	gint        len,
+	gpointer    user_data
 ){
-	GstPty *pty_obj;
-	gchar buf[4096];
-	gssize n;
+	gchar buf[64];
+	gint out_len;
 
-	pty_obj = GST_PTY(user_data);
+	/* Ctrl+Shift+C: copy to clipboard */
+	if (keysym == XK_C && (state & ControlMask) && (state & ShiftMask)) {
+		gchar *sel_text;
 
-	if (condition & (G_IO_HUP | G_IO_ERR)) {
-		return FALSE;
+		sel_text = gst_selection_get_text(selection);
+		if (sel_text != NULL) {
+			gst_x11_window_set_selection(window, sel_text, FALSE);
+			gst_x11_window_copy_to_clipboard(window);
+			g_free(sel_text);
+		}
+		return;
 	}
 
-	if (condition & G_IO_IN) {
-		n = read(STDIN_FILENO, buf, sizeof(buf));
-		if (n > 0) {
-			gst_pty_write(pty_obj, buf, n);
-		} else if (n <= 0) {
-			return FALSE;
+	/* Ctrl+Shift+V: paste from clipboard */
+	if (keysym == XK_V && (state & ControlMask) && (state & ShiftMask)) {
+		gst_x11_window_paste_clipboard(window);
+		return;
+	}
+
+	/* Shift+Insert: paste primary */
+	if (keysym == XK_Insert && (state & ShiftMask)) {
+		gst_x11_window_paste_primary(window);
+		return;
+	}
+
+	/* Forward text to PTY */
+	if (len > 0 && text != NULL) {
+		out_len = len;
+
+		/* Alt+key: send ESC prefix */
+		if (len == 1 && (state & Mod1Mask)) {
+			buf[0] = '\033';
+			buf[1] = text[0];
+			gst_pty_write(pty, buf, 2);
+			return;
+		}
+
+		gst_pty_write(pty, text, (gssize)out_len);
+	}
+}
+
+/*
+ * Window button-press: handle selection or mouse reporting.
+ */
+static void
+on_button_press(
+	GstWindow   *win,
+	guint       button,
+	guint       state,
+	gint        px,
+	gint        py,
+	gulong      time,
+	gpointer    user_data
+){
+	gint col;
+	gint row;
+
+	col = pixel_to_col(px);
+	row = pixel_to_row(py);
+
+	/* If mouse reporting is enabled, send to app */
+	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
+		/* TODO: mouse reporting protocol (SGR, X10, etc.) */
+		return;
+	}
+
+	/* Left button starts selection */
+	if (button == Button1) {
+		gst_selection_start(selection, col, row, GST_SELECTION_SNAP_NONE);
+		schedule_draw();
+	}
+
+	/* Middle button pastes primary */
+	if (button == Button2) {
+		gst_x11_window_paste_primary(window);
+	}
+}
+
+/*
+ * Window button-release: finalize selection.
+ */
+static void
+on_button_release(
+	GstWindow   *win,
+	guint       button,
+	guint       state,
+	gint        px,
+	gint        py,
+	gulong      time,
+	gpointer    user_data
+){
+	gint col;
+	gint row;
+	gchar *sel_text;
+
+	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
+		return;
+	}
+
+	col = pixel_to_col(px);
+	row = pixel_to_row(py);
+
+	if (button == Button1) {
+		gst_selection_extend(selection, col, row,
+			GST_SELECTION_TYPE_REGULAR, TRUE);
+
+		/* Set primary selection */
+		sel_text = gst_selection_get_text(selection);
+		if (sel_text != NULL) {
+			gst_x11_window_set_selection(window, sel_text, FALSE);
+			g_free(sel_text);
+		}
+		schedule_draw();
+	}
+}
+
+/*
+ * Window motion-notify: extend selection.
+ */
+static void
+on_motion_notify(
+	GstWindow   *win,
+	guint       state,
+	gint        px,
+	gint        py,
+	gpointer    user_data
+){
+	gint col;
+	gint row;
+
+	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
+		return;
+	}
+
+	col = pixel_to_col(px);
+	row = pixel_to_row(py);
+
+	gst_selection_extend(selection, col, row,
+		GST_SELECTION_TYPE_REGULAR, FALSE);
+	schedule_draw();
+}
+
+/*
+ * Window focus-change: update renderer mode, send focus escapes.
+ */
+static void
+on_focus_change(
+	GstWindow   *win,
+	gboolean    focused,
+	gpointer    user_data
+){
+	GstWinMode wm;
+
+	wm = gst_x11_renderer_get_win_mode(renderer);
+	if (focused) {
+		wm |= GST_WIN_MODE_FOCUSED;
+	} else {
+		wm &= ~GST_WIN_MODE_FOCUSED;
+	}
+	gst_x11_renderer_set_win_mode(renderer, wm);
+
+	/* Send focus escape sequences if enabled */
+	if (gst_terminal_has_mode(terminal, GST_MODE_FOCUS)) {
+		if (focused) {
+			gst_pty_write(pty, "\033[I", 3);
+		} else {
+			gst_pty_write(pty, "\033[O", 3);
 		}
 	}
 
-	return TRUE;
+	schedule_draw();
 }
 
 /*
- * on_sigwinch:
- * @user_data: unused
- *
- * Signal handler for SIGWINCH. Resizes both the terminal
- * emulator and PTY to match the host terminal's new size.
- *
- * Returns: G_SOURCE_CONTINUE to keep the handler active
+ * Window configure: resize terminal, renderer, and PTY.
  */
-static gboolean
-on_sigwinch(gpointer user_data)
-{
+static void
+on_configure(
+	GstWindow   *win,
+	guint       width,
+	guint       height,
+	gpointer    user_data
+){
+	gint cw;
+	gint ch;
 	gint cols;
 	gint rows;
 
-	if (get_host_winsize(&cols, &rows)) {
-		gst_terminal_resize(terminal, cols, rows);
-		gst_pty_resize(pty, cols, rows);
-	}
+	cw = gst_font_cache_get_char_width(font_cache);
+	ch = gst_font_cache_get_char_height(font_cache);
 
-	return G_SOURCE_CONTINUE;
+	cols = ((gint)width - 2 * GST_DEFAULT_BORDER) / cw;
+	rows = ((gint)height - 2 * GST_DEFAULT_BORDER) / ch;
+
+	if (cols < 1) cols = 1;
+	if (rows < 1) rows = 1;
+
+	gst_terminal_resize(terminal, cols, rows);
+	gst_renderer_resize(GST_RENDERER(renderer), width, height);
+	gst_pty_resize(pty, cols, rows);
+
+	schedule_draw();
 }
 
 /*
- * on_sigterm:
- * @user_data: unused
- *
- * Signal handler for SIGTERM/SIGINT. Quits the main loop
- * for clean shutdown.
- *
- * Returns: G_SOURCE_REMOVE
+ * Window expose: mark all lines dirty and redraw.
+ */
+static void
+on_expose(
+	GstWindow   *win,
+	gpointer    user_data
+){
+	gint rows;
+	gint y;
+
+	rows = gst_terminal_get_rows(terminal);
+	for (y = 0; y < rows; y++) {
+		gst_terminal_mark_dirty(terminal, y);
+	}
+
+	schedule_draw();
+}
+
+/*
+ * Window visibility: update renderer win_mode.
+ */
+static void
+on_visibility(
+	GstWindow   *win,
+	gboolean    visible,
+	gpointer    user_data
+){
+	GstWinMode wm;
+
+	wm = gst_x11_renderer_get_win_mode(renderer);
+	if (visible) {
+		wm |= GST_WIN_MODE_VISIBLE;
+	} else {
+		wm &= ~GST_WIN_MODE_VISIBLE;
+	}
+	gst_x11_renderer_set_win_mode(renderer, wm);
+}
+
+/*
+ * Window close-request: quit main loop.
+ */
+static void
+on_close_request(
+	GstWindow   *win,
+	gpointer    user_data
+){
+	if (main_loop != NULL) {
+		g_main_loop_quit(main_loop);
+	}
+}
+
+/*
+ * Window selection-notify: paste data to PTY.
+ */
+static void
+on_selection_notify(
+	GstWindow   *win,
+	const gchar *data,
+	gint        len,
+	gpointer    user_data
+){
+	if (data == NULL || len <= 0) {
+		return;
+	}
+
+	/* Wrap in bracketed paste if enabled */
+	if (gst_terminal_has_mode(terminal, GST_MODE_BRCKTPASTE)) {
+		gst_pty_write(pty, "\033[200~", 6);
+	}
+
+	gst_pty_write(pty, data, (gssize)len);
+
+	if (gst_terminal_has_mode(terminal, GST_MODE_BRCKTPASTE)) {
+		gst_pty_write(pty, "\033[201~", 6);
+	}
+}
+
+/*
+ * SIGTERM/SIGINT handler: clean shutdown.
  */
 static gboolean
 on_sigterm(gpointer user_data)
@@ -367,6 +635,8 @@ on_sigterm(gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+/* ===== Main ===== */
+
 int
 main(
 	int     argc,
@@ -374,10 +644,17 @@ main(
 ){
 	GOptionContext *context;
 	GError *error = NULL;
-	GIOChannel *stdin_channel;
-	guint stdin_watch_id;
 	gint cols;
 	gint rows;
+	gint cw;
+	gint ch;
+	const gchar *fontstr;
+	gulong embed_id;
+	Display *display;
+	Window xid;
+	Visual *visual;
+	Colormap colormap;
+	gint screen;
 
 	/* Set locale for proper UTF-8 handling */
 	setlocale(LC_ALL, "");
@@ -428,86 +705,209 @@ main(
 	cols = GST_DEFAULT_COLS;
 	rows = GST_DEFAULT_ROWS;
 
-	/* Parse explicit geometry if given */
 	if (opt_geometry != NULL) {
 		if (!parse_geometry(opt_geometry, &cols, &rows)) {
 			g_printerr("Invalid geometry: %s\n", opt_geometry);
 			g_printerr("Expected format: COLSxROWS (e.g., 80x24)\n");
 			return EXIT_FAILURE;
 		}
-	} else {
-		/* Otherwise inherit size from host terminal */
-		get_host_winsize(&cols, &rows);
 	}
 
-	/* Create the terminal emulator */
+	/* Step 1: Create terminal */
 	terminal = gst_terminal_new(cols, rows);
 
-	/* Create the PTY */
-	pty = gst_pty_new();
+	/* Step 2: Create selection */
+	selection = gst_selection_new(terminal);
 
-	/* Connect PTY data-received -> terminal write + stdout */
-	g_signal_connect(pty, "data-received",
-	                 G_CALLBACK(on_pty_data_received), terminal);
-
-	/* Connect terminal response -> PTY write (for DA, DSR replies) */
-	g_signal_connect(terminal, "response",
-	                 G_CALLBACK(on_terminal_response), pty);
-
-	/* Connect child-exited -> quit main loop */
-	g_signal_connect(pty, "child-exited",
-	                 G_CALLBACK(on_child_exited), NULL);
-
-	/* Set host terminal to raw mode */
-	if (!set_raw_mode()) {
-		g_printerr("Warning: could not set raw mode on stdin\n");
-	}
-
-	/* Ensure terminal is restored on exit */
-	atexit(restore_terminal);
-
-	/* Spawn the shell */
-	if (!gst_pty_spawn(pty, opt_execute, NULL, &error)) {
-		restore_terminal();
-		g_printerr("Failed to spawn shell: %s\n", error->message);
-		g_error_free(error);
+	/* Step 3: Initialize fontconfig and load fonts */
+	if (!FcInit()) {
+		g_printerr("Could not initialize fontconfig\n");
 		g_object_unref(terminal);
-		g_object_unref(pty);
 		return EXIT_FAILURE;
 	}
 
-	/* Set up stdin reading via GIOChannel */
-	stdin_channel = g_io_channel_unix_new(STDIN_FILENO);
-	g_io_channel_set_encoding(stdin_channel, NULL, NULL);
-	g_io_channel_set_buffered(stdin_channel, FALSE);
-	g_io_channel_set_flags(stdin_channel,
-		g_io_channel_get_flags(stdin_channel) | G_IO_FLAG_NONBLOCK,
-		NULL);
+	fontstr = (opt_font != NULL) ? opt_font : GST_DEFAULT_FONT;
+	font_cache = gst_font_cache_new();
 
-	stdin_watch_id = g_io_add_watch(stdin_channel,
-		G_IO_IN | G_IO_ERR | G_IO_HUP,
-		on_stdin_readable, pty);
+	/*
+	 * We need an X display to load fonts. Create the window first,
+	 * then use its display for font loading and renderer creation.
+	 */
 
-	/* Set up SIGWINCH handler for terminal resize */
-	g_unix_signal_add(SIGWINCH, on_sigwinch, NULL);
+	/* Step 4: Create X11 window with estimated dimensions */
+	embed_id = 0;
+	if (opt_windowid != NULL) {
+		embed_id = strtoul(opt_windowid, NULL, 0);
+	}
+
+	/*
+	 * Bootstrap: we need cw/ch from fonts to size the window,
+	 * but we need a display to load fonts. Open a temporary display
+	 * connection for font loading, then use window's display.
+	 */
+	{
+		Display *tmp_dpy;
+		gint tmp_screen;
+
+		tmp_dpy = XOpenDisplay(NULL);
+		if (tmp_dpy == NULL) {
+			g_printerr("Cannot open X11 display\n");
+			g_object_unref(font_cache);
+			g_object_unref(selection);
+			g_object_unref(terminal);
+			return EXIT_FAILURE;
+		}
+		tmp_screen = XDefaultScreen(tmp_dpy);
+
+		if (!gst_font_cache_load_fonts(font_cache, tmp_dpy, tmp_screen, fontstr, 0)) {
+			g_printerr("Cannot load font: %s\n", fontstr);
+			XCloseDisplay(tmp_dpy);
+			g_object_unref(font_cache);
+			g_object_unref(selection);
+			g_object_unref(terminal);
+			return EXIT_FAILURE;
+		}
+
+		/* Font cache now holds references to tmp_dpy's resources,
+		 * but we'll use the window's display instead. Unload and
+		 * reload after window creation.
+		 */
+		cw = gst_font_cache_get_char_width(font_cache);
+		ch = gst_font_cache_get_char_height(font_cache);
+
+		/* Unload from tmp display, we'll reload on window display */
+		gst_font_cache_unload_fonts(font_cache);
+		XCloseDisplay(tmp_dpy);
+	}
+
+	/* Step 5: Create X11 window with proper dimensions */
+	window = gst_x11_window_new(cols, rows, cw, ch, GST_DEFAULT_BORDER, embed_id);
+	if (window == NULL) {
+		g_printerr("Cannot create X11 window\n");
+		g_object_unref(font_cache);
+		g_object_unref(selection);
+		g_object_unref(terminal);
+		return EXIT_FAILURE;
+	}
+
+	/* Step 6: Reload fonts on window's display */
+	display = gst_x11_window_get_display(window);
+	screen = gst_x11_window_get_screen(window);
+
+	if (!gst_font_cache_load_fonts(font_cache, display, screen, fontstr, 0)) {
+		g_printerr("Cannot load font on window display: %s\n", fontstr);
+		g_object_unref(window);
+		g_object_unref(font_cache);
+		g_object_unref(selection);
+		g_object_unref(terminal);
+		return EXIT_FAILURE;
+	}
+
+	cw = gst_font_cache_get_char_width(font_cache);
+	ch = gst_font_cache_get_char_height(font_cache);
+
+	/* Step 7: Show window and set WM hints */
+	gst_x11_window_set_wm_hints(window, cw, ch, GST_DEFAULT_BORDER);
+	gst_window_show(GST_WINDOW(window));
+
+	if (opt_title != NULL) {
+		gst_x11_window_set_title_x11(window, opt_title);
+	}
+
+	/* Step 8: Create X11 renderer */
+	xid = gst_x11_window_get_xid(window);
+	visual = gst_x11_window_get_visual(window);
+	colormap = gst_x11_window_get_colormap(window);
+
+	renderer = gst_x11_renderer_new(
+		terminal, display, xid, visual, colormap,
+		screen, font_cache, GST_DEFAULT_BORDER);
+
+	/* Step 9: Load colors */
+	if (!gst_x11_renderer_load_colors(renderer)) {
+		g_printerr("Cannot load colors\n");
+	}
+
+	/* Set initial win_mode */
+	gst_x11_renderer_set_win_mode(renderer,
+		GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED | GST_WIN_MODE_NUMLOCK);
+
+	/* Step 10: Create PTY and spawn shell */
+	pty = gst_pty_new();
+
+	if (!gst_pty_spawn(pty, opt_execute, NULL, &error)) {
+		g_printerr("Failed to spawn shell: %s\n", error->message);
+		g_error_free(error);
+		g_object_unref(renderer);
+		g_object_unref(window);
+		g_object_unref(font_cache);
+		g_object_unref(pty);
+		g_object_unref(selection);
+		g_object_unref(terminal);
+		return EXIT_FAILURE;
+	}
+
+	/* Step 11: Connect all signals */
+
+	/* PTY signals */
+	g_signal_connect(pty, "data-received",
+		G_CALLBACK(on_pty_data_received), NULL);
+	g_signal_connect(pty, "child-exited",
+		G_CALLBACK(on_child_exited), NULL);
+
+	/* Terminal signals */
+	g_signal_connect(terminal, "response",
+		G_CALLBACK(on_terminal_response), NULL);
+	g_signal_connect(terminal, "title-changed",
+		G_CALLBACK(on_terminal_title_changed), NULL);
+	g_signal_connect(terminal, "bell",
+		G_CALLBACK(on_terminal_bell), NULL);
+
+	/* Window signals */
+	g_signal_connect(window, "key-press",
+		G_CALLBACK(on_key_press), NULL);
+	g_signal_connect(window, "button-press",
+		G_CALLBACK(on_button_press), NULL);
+	g_signal_connect(window, "button-release",
+		G_CALLBACK(on_button_release), NULL);
+	g_signal_connect(window, "motion-notify",
+		G_CALLBACK(on_motion_notify), NULL);
+	g_signal_connect(window, "focus-change",
+		G_CALLBACK(on_focus_change), NULL);
+	g_signal_connect(window, "configure",
+		G_CALLBACK(on_configure), NULL);
+	g_signal_connect(window, "expose",
+		G_CALLBACK(on_expose), NULL);
+	g_signal_connect(window, "visibility",
+		G_CALLBACK(on_visibility), NULL);
+	g_signal_connect(window, "close-request",
+		G_CALLBACK(on_close_request), NULL);
+	g_signal_connect(window, "selection-notify",
+		G_CALLBACK(on_selection_notify), NULL);
+
+	/* Step 12: Start X11 event watch */
+	gst_x11_window_start_event_watch(window);
 
 	/* Set up SIGTERM/SIGINT for clean shutdown */
 	g_unix_signal_add(SIGTERM, on_sigterm, NULL);
 	g_unix_signal_add(SIGINT, on_sigterm, NULL);
 
-	/* Create and run main loop */
+	/* Step 13: Run main loop */
 	main_loop = g_main_loop_new(NULL, FALSE);
 	g_main_loop_run(main_loop);
 
 	/* Cleanup */
-	restore_terminal();
-
-	if (g_main_context_find_source_by_id(NULL, stdin_watch_id) != NULL) {
-		g_source_remove(stdin_watch_id);
+	if (draw_timeout_id != 0) {
+		g_source_remove(draw_timeout_id);
 	}
-	g_io_channel_unref(stdin_channel);
+
 	g_main_loop_unref(main_loop);
+	g_object_unref(renderer);
 	g_object_unref(pty);
+	g_object_unref(window);
+	gst_font_cache_unload_fonts(font_cache);
+	g_object_unref(font_cache);
+	g_object_unref(selection);
 	g_object_unref(terminal);
 
 	g_free(opt_config);

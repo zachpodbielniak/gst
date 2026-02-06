@@ -387,6 +387,38 @@ typedef enum {
 GType gst_mouse_button_get_type(void) G_GNUC_CONST;
 #define GST_TYPE_MOUSE_BUTTON (gst_mouse_button_get_type())
 
+/*
+ * GstWinMode:
+ *
+ * Window mode flags for rendering state.
+ * Tracks visibility, focus, blink phase, and numlock state.
+ */
+typedef enum {
+    GST_WIN_MODE_VISIBLE  = 1 << 0,
+    GST_WIN_MODE_FOCUSED  = 1 << 1,
+    GST_WIN_MODE_BLINK    = 1 << 2,
+    GST_WIN_MODE_NUMLOCK  = 1 << 3
+} GstWinMode;
+
+GType gst_win_mode_get_type(void) G_GNUC_CONST;
+#define GST_TYPE_WIN_MODE (gst_win_mode_get_type())
+
+/*
+ * GstFontStyle:
+ *
+ * Font style variants for rendering.
+ * Used to select regular, italic, bold, or bold+italic fonts.
+ */
+typedef enum {
+    GST_FONT_STYLE_NORMAL,
+    GST_FONT_STYLE_ITALIC,
+    GST_FONT_STYLE_BOLD,
+    GST_FONT_STYLE_BOLD_ITALIC
+} GstFontStyle;
+
+GType gst_font_style_get_type(void) G_GNUC_CONST;
+#define GST_TYPE_FONT_STYLE (gst_font_style_get_type())
+
 G_END_DECLS
 
 #endif /* GST_ENUMS_H */

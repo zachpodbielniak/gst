@@ -3,6 +3,11 @@
  *
  * Copyright (C) 2024 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Abstract base class for terminal windows. Defines signals
+ * that replace st's handler[] array for event dispatch.
+ * Subclasses (X11, Wayland, etc.) translate platform events
+ * into these GObject signals.
  */
 
 #ifndef GST_WINDOW_H
@@ -64,6 +69,50 @@ gst_window_set_title(
 	GstWindow   *self,
 	const gchar *title
 );
+
+/**
+ * gst_window_get_width:
+ * @self: A #GstWindow
+ *
+ * Gets the window width in pixels.
+ *
+ * Returns: width in pixels
+ */
+guint
+gst_window_get_width(GstWindow *self);
+
+/**
+ * gst_window_get_height:
+ * @self: A #GstWindow
+ *
+ * Gets the window height in pixels.
+ *
+ * Returns: height in pixels
+ */
+guint
+gst_window_get_height(GstWindow *self);
+
+/**
+ * gst_window_is_visible:
+ * @self: A #GstWindow
+ *
+ * Checks if the window is visible.
+ *
+ * Returns: TRUE if visible
+ */
+gboolean
+gst_window_is_visible(GstWindow *self);
+
+/**
+ * gst_window_get_title:
+ * @self: A #GstWindow
+ *
+ * Gets the window title.
+ *
+ * Returns: (transfer none) (nullable): the title
+ */
+const gchar *
+gst_window_get_title(GstWindow *self);
 
 G_END_DECLS
 

@@ -71,6 +71,21 @@ typedef guint32 GstColor;
 #define GST_COLOR_RGB(r, g, b)  GST_COLOR_RGBA(r, g, b, 0xFF)
 
 /*
+ * True color (24-bit RGB) encoding for foreground/background values.
+ * Bit 24 serves as a flag to distinguish indexed colors from true colors.
+ * The remaining 24 bits encode R/G/B (8 bits each).
+ *
+ * The TRUERED/GREEN/BLUE macros extract components as 16-bit values
+ * suitable for XRenderColor (which uses 16-bit per channel).
+ */
+#define GST_TRUECOLOR_FLAG      (1 << 24)
+#define GST_TRUECOLOR(r,g,b)   (GST_TRUECOLOR_FLAG | ((guint32)(r) << 16) | ((guint32)(g) << 8) | (guint32)(b))
+#define GST_IS_TRUECOLOR(c)    ((c) & GST_TRUECOLOR_FLAG)
+#define GST_TRUERED(x)         (((x) & 0xff0000) >> 8)
+#define GST_TRUEGREEN(x)       (((x) & 0xff00))
+#define GST_TRUEBLUE(x)        (((x) & 0xff) << 8)
+
+/*
  * Maximum values
  */
 

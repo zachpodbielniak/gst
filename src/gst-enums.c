@@ -543,3 +543,59 @@ gst_mouse_button_get_type(void)
 
     return type;
 }
+
+/*
+ * gst_win_mode_get_type:
+ *
+ * Registers the GstWinMode flags type.
+ *
+ * Returns: the GType for GstWinMode
+ */
+GType
+gst_win_mode_get_type(void)
+{
+    static GType type = 0;
+
+    if (g_once_init_enter(&type)) {
+        static const GFlagsValue values[] = {
+            { GST_WIN_MODE_VISIBLE, "GST_WIN_MODE_VISIBLE", "visible" },
+            { GST_WIN_MODE_FOCUSED, "GST_WIN_MODE_FOCUSED", "focused" },
+            { GST_WIN_MODE_BLINK, "GST_WIN_MODE_BLINK", "blink" },
+            { GST_WIN_MODE_NUMLOCK, "GST_WIN_MODE_NUMLOCK", "numlock" },
+            { 0, NULL, NULL }
+        };
+
+        GType new_type = g_flags_register_static("GstWinMode", values);
+        g_once_init_leave(&type, new_type);
+    }
+
+    return type;
+}
+
+/*
+ * gst_font_style_get_type:
+ *
+ * Registers the GstFontStyle enumeration type.
+ *
+ * Returns: the GType for GstFontStyle
+ */
+GType
+gst_font_style_get_type(void)
+{
+    static GType type = 0;
+
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            { GST_FONT_STYLE_NORMAL, "GST_FONT_STYLE_NORMAL", "normal" },
+            { GST_FONT_STYLE_ITALIC, "GST_FONT_STYLE_ITALIC", "italic" },
+            { GST_FONT_STYLE_BOLD, "GST_FONT_STYLE_BOLD", "bold" },
+            { GST_FONT_STYLE_BOLD_ITALIC, "GST_FONT_STYLE_BOLD_ITALIC", "bold-italic" },
+            { 0, NULL, NULL }
+        };
+
+        GType new_type = g_enum_register_static("GstFontStyle", values);
+        g_once_init_leave(&type, new_type);
+    }
+
+    return type;
+}
