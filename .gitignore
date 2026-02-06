@@ -10,6 +10,7 @@ src/gst-version.h
 *.pc
 *.gir
 *.typelib
+g-ir-cpp-*.c
 
 # Editor files
 *~
