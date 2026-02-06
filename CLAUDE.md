@@ -132,6 +132,30 @@ Phase 5 (Module System):
 - Visual bell sample module (modules/visualbell/) validates architecture end-to-end
 - 12 new module tests (122 total tests pass)
 
+Phase 6 (Built-in Modules):
+- Six built-in modules: scrollback, transparency, urlclick, externalpipe, boxdraw, visualbell
+- Ring buffer scrollback with Shift+PgUp/PgDn keyboard navigation and overlay rendering
+- Window transparency via _NET_WM_WINDOW_OPACITY with focus/unfocus tracking
+- URL detection and opening via configurable regex and opener command
+- External pipe: pipe visible terminal content to shell commands
+- Box-drawing: pixel-perfect rendering of U+2500-U+259F using X11 primitives
+- Visual bell: flash notification on bell event
+- Render context (GstX11RenderContext) shared between renderer and modules
+- Undercurl rendering support via GstRenderOverlay
+- 5 new tests (127 total tests pass)
+
+Phase 7 (Per-Module YAML Configuration):
+- Module manager checks `enabled: false` in module config to skip activation
+- All 6 built-in modules read config via gst_config_get_module_config()
+- Scrollback: `lines` (capacity), `mouse_scroll_lines`
+- Transparency: `opacity`, `focus_opacity`, `unfocus_opacity`
+- URL click: `opener`, `regex` (recompiles GRegex on change)
+- External pipe: `command`
+- Boxdraw: `bold_offset`
+- Visual bell: `duration` (flash_duration_ms)
+- Fixed config key naming: `url_click` → `urlclick` to match module name
+- 3 new tests (130 total tests pass)
+
 Next phases:
-- Implement built-in modules (scrollback, transparency, etc.)
-- Module configuration from YAML (per-module config sections)
+- Key binding parsing and remapping
+- Wayland renderer backend

@@ -12,6 +12,7 @@
 
 #include "gst-transparency-module.h"
 #include "../../src/module/gst-module-manager.h"
+#include "../../src/config/gst-config.h"
 #include "../../src/rendering/gst-render-context.h"
 
 #include <X11/Xlib.h>
@@ -159,11 +160,62 @@ gst_transparency_module_deactivate(GstModule *module)
 	g_debug("transparency: deactivated");
 }
 
+/*
+ * configure:
+ *
+ * Reads transparency configuration from the YAML config:
+ *  - opacity: static opacity value (clamped to 0.0-1.0)
+ *  - focus_opacity: opacity when window is focused (clamped to 0.0-1.0)
+ *  - unfocus_opacity: opacity when window loses focus (clamped to 0.0-1.0)
+ */
 static void
 gst_transparency_module_configure(GstModule *module, gpointer config)
 {
-	(void)config;
-	g_debug("transparency: configured");
+	GstTransparencyModule *self;
+	YamlMapping *mod_cfg;
+
+	self = GST_TRANSPARENCY_MODULE(module);
+
+	mod_cfg = gst_config_get_module_config(
+		(GstConfig *)config, "transparency");
+	if (mod_cfg == NULL)
+	{
+		g_debug("transparency: no config section, using defaults");
+		return;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "opacity"))
+	{
+		gdouble val;
+
+		val = yaml_mapping_get_double_member(mod_cfg, "opacity");
+		if (val < 0.0) val = 0.0;
+		if (val > 1.0) val = 1.0;
+		self->opacity = val;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "focus_opacity"))
+	{
+		gdouble val;
+
+		val = yaml_mapping_get_double_member(mod_cfg, "focus_opacity");
+		if (val < 0.0) val = 0.0;
+		if (val > 1.0) val = 1.0;
+		self->focus_opacity = val;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "unfocus_opacity"))
+	{
+		gdouble val;
+
+		val = yaml_mapping_get_double_member(mod_cfg, "unfocus_opacity");
+		if (val < 0.0) val = 0.0;
+		if (val > 1.0) val = 1.0;
+		self->unfocus_opacity = val;
+	}
+
+	g_debug("transparency: configured (opacity=%.2f, focus=%.2f, unfocus=%.2f)",
+		self->opacity, self->focus_opacity, self->unfocus_opacity);
 }
 
 /* ===== GObject lifecycle ===== */

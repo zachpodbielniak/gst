@@ -8,6 +8,7 @@
 #include <gmodule.h>
 #include <gio/gio.h>
 #include "gst-module-manager.h"
+#include "../config/gst-config.h"
 #include "../interfaces/gst-input-handler.h"
 #include "../interfaces/gst-output-filter.h"
 #include "../interfaces/gst-bell-handler.h"
@@ -1041,6 +1042,24 @@ gst_module_manager_activate_all(GstModuleManager *self)
 		if (self->config != NULL)
 		{
 			gst_module_configure(module, self->config);
+		}
+
+		/* Check if module is disabled by config */
+		if (self->config != NULL)
+		{
+			YamlMapping *mod_cfg;
+
+			mod_cfg = gst_config_get_module_config(
+				(GstConfig *)self->config,
+				gst_module_get_name(module));
+			if (mod_cfg != NULL &&
+				yaml_mapping_has_member(mod_cfg, "enabled") &&
+				!yaml_mapping_get_boolean_member(mod_cfg, "enabled"))
+			{
+				g_debug("Module '%s' disabled by config",
+					gst_module_get_name(module));
+				continue;
+			}
 		}
 
 		if (!gst_module_activate(module))

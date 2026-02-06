@@ -11,6 +11,7 @@
  */
 
 #include "gst-visualbell-module.h"
+#include "../../src/config/gst-config.h"
 
 /**
  * SECTION:gst-visualbell-module
@@ -91,15 +92,37 @@ gst_visualbell_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Configures the module from the application config.
- * Placeholder: a full implementation would read flash_duration_ms
- * from the config's modules.visualbell section.
+ * Reads visual bell configuration from the YAML config:
+ *  - duration: flash duration in milliseconds (clamped to 10-5000)
  */
 static void
 gst_visualbell_module_configure(GstModule *module, gpointer config)
 {
-	(void)config;
-	g_debug("visualbell: configured");
+	GstVisualbellModule *self;
+	YamlMapping *mod_cfg;
+
+	self = GST_VISUALBELL_MODULE(module);
+
+	mod_cfg = gst_config_get_module_config(
+		(GstConfig *)config, "visualbell");
+	if (mod_cfg == NULL)
+	{
+		g_debug("visualbell: no config section, using defaults");
+		return;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "duration"))
+	{
+		gint64 val;
+
+		val = yaml_mapping_get_int_member(mod_cfg, "duration");
+		if (val < 10) val = 10;
+		if (val > 5000) val = 5000;
+		self->flash_duration_ms = (guint)val;
+	}
+
+	g_debug("visualbell: configured (duration=%u ms)",
+		self->flash_duration_ms);
 }
 
 /* ===== GstBellHandler interface ===== */

@@ -126,8 +126,9 @@ TYPELIB_FILE := $(GIR_NAMESPACE)-$(GIR_VERSION).typelib
 TEST_CFLAGS := $(CFLAGS) $(shell $(PKG_CONFIG) --cflags glib-2.0)
 TEST_LDFLAGS := $(LDFLAGS) -L$(OUTDIR) -lgst -Wl,-rpath,$(OUTDIR)
 
-# Module flags
-MODULE_CFLAGS := $(CFLAGS)
+# Module flags (absolute include paths for out-of-tree compilation)
+MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src
+MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DEPS)
 MODULE_LDFLAGS := -shared -fPIC
 
 # Print configuration (for debugging)

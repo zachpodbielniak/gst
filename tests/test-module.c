@@ -10,9 +10,11 @@
  */
 
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <glib-object.h>
 #include "module/gst-module.h"
 #include "module/gst-module-manager.h"
+#include "config/gst-config.h"
 #include "interfaces/gst-bell-handler.h"
 #include "interfaces/gst-input-handler.h"
 #include "interfaces/gst-glyph-transformer.h"
@@ -404,6 +406,87 @@ test_glyph_module_init(TestGlyphModule *self)
 
 G_DEFINE_TYPE_WITH_CODE(TestGlyphModule, test_glyph_module, GST_TYPE_MODULE,
 	G_IMPLEMENT_INTERFACE(GST_TYPE_GLYPH_TRANSFORMER, test_glyph_transformer_iface_init))
+
+/* ===================================================================
+ * TestConfigModule - a GstModule that tracks configure() calls.
+ * Used for testing config wiring and enabled flag.
+ * =================================================================== */
+
+typedef struct
+{
+	GstModule parent_instance;
+	gboolean  configure_called;
+	gpointer  last_config;       /* config pointer received in configure() */
+} TestConfigModule;
+
+typedef struct
+{
+	GstModuleClass parent_class;
+} TestConfigModuleClass;
+
+static GType test_config_module_get_type(void);
+
+#define TEST_TYPE_CONFIG_MODULE (test_config_module_get_type())
+#define TEST_CONFIG_MODULE(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj), TEST_TYPE_CONFIG_MODULE, TestConfigModule))
+
+static const gchar *
+test_config_module_get_name(GstModule *module)
+{
+	(void)module;
+	return "test-config";
+}
+
+static const gchar *
+test_config_module_get_description(GstModule *module)
+{
+	(void)module;
+	return "Test config module";
+}
+
+static gboolean
+test_config_module_activate(GstModule *module)
+{
+	(void)module;
+	return TRUE;
+}
+
+static void
+test_config_module_deactivate(GstModule *module)
+{
+	(void)module;
+}
+
+static void
+test_config_module_configure(GstModule *module, gpointer config)
+{
+	TestConfigModule *self;
+
+	self = TEST_CONFIG_MODULE(module);
+	self->configure_called = TRUE;
+	self->last_config = config;
+}
+
+static void
+test_config_module_class_init(TestConfigModuleClass *klass)
+{
+	GstModuleClass *mod_class;
+
+	mod_class = GST_MODULE_CLASS(klass);
+	mod_class->get_name = test_config_module_get_name;
+	mod_class->get_description = test_config_module_get_description;
+	mod_class->activate = test_config_module_activate;
+	mod_class->deactivate = test_config_module_deactivate;
+	mod_class->configure = test_config_module_configure;
+}
+
+static void
+test_config_module_init(TestConfigModule *self)
+{
+	self->configure_called = FALSE;
+	self->last_config = NULL;
+}
+
+G_DEFINE_TYPE(TestConfigModule, test_config_module, GST_TYPE_MODULE)
 
 /* ===================================================================
  * Test cases
@@ -890,6 +973,130 @@ test_dispatch_glyph_transform_inactive(void)
 	g_object_unref(mgr);
 }
 
+/*
+ * test_module_manager_enabled_flag:
+ * Create a module, register it with a config that has enabled: false,
+ * call activate_all(), verify the module is NOT active.
+ */
+static void
+test_module_manager_enabled_flag(void)
+{
+	GstModuleManager *mgr;
+	TestConfigModule *mod;
+	GstConfig *config;
+	g_autofree gchar *path = NULL;
+	GError *error = NULL;
+	const gchar *yaml_data;
+	gboolean ok;
+
+	/* Write a temp YAML config with enabled: false for test-config */
+	yaml_data =
+		"modules:\n"
+		"  test-config:\n"
+		"    enabled: false\n";
+
+	path = g_build_filename(g_get_tmp_dir(), "gst-test-enabled.yaml", NULL);
+	ok = g_file_set_contents(path, yaml_data, -1, &error);
+	g_assert_true(ok);
+
+	config = gst_config_new();
+	ok = gst_config_load_from_path(config, path, &error);
+	g_assert_true(ok);
+
+	mgr = gst_module_manager_new();
+	mod = (TestConfigModule *)g_object_new(TEST_TYPE_CONFIG_MODULE, NULL);
+
+	gst_module_manager_register(mgr, GST_MODULE(mod));
+	gst_module_manager_set_config(mgr, config);
+	gst_module_manager_activate_all(mgr);
+
+	/* Module should have been configured but NOT activated */
+	g_assert_true(mod->configure_called);
+	g_assert_false(gst_module_is_active(GST_MODULE(mod)));
+
+	g_unlink(path);
+	g_object_unref(mod);
+	g_object_unref(mgr);
+	g_object_unref(config);
+}
+
+/*
+ * test_module_manager_enabled_default:
+ * Module with no 'enabled' key in config defaults to activated.
+ */
+static void
+test_module_manager_enabled_default(void)
+{
+	GstModuleManager *mgr;
+	TestConfigModule *mod;
+	GstConfig *config;
+	g_autofree gchar *path = NULL;
+	GError *error = NULL;
+	const gchar *yaml_data;
+	gboolean ok;
+
+	/* Write a temp YAML config with module section but no enabled key */
+	yaml_data =
+		"modules:\n"
+		"  test-config:\n"
+		"    some_option: 42\n";
+
+	path = g_build_filename(g_get_tmp_dir(), "gst-test-enabled-default.yaml", NULL);
+	ok = g_file_set_contents(path, yaml_data, -1, &error);
+	g_assert_true(ok);
+
+	config = gst_config_new();
+	ok = gst_config_load_from_path(config, path, &error);
+	g_assert_true(ok);
+
+	mgr = gst_module_manager_new();
+	mod = (TestConfigModule *)g_object_new(TEST_TYPE_CONFIG_MODULE, NULL);
+
+	gst_module_manager_register(mgr, GST_MODULE(mod));
+	gst_module_manager_set_config(mgr, config);
+	gst_module_manager_activate_all(mgr);
+
+	/* Module should be both configured AND activated */
+	g_assert_true(mod->configure_called);
+	g_assert_true(gst_module_is_active(GST_MODULE(mod)));
+
+	g_unlink(path);
+	g_object_unref(mod);
+	g_object_unref(mgr);
+	g_object_unref(config);
+}
+
+/*
+ * test_module_configure_receives_config:
+ * Verify configure() vfunc is called with the config object
+ * during activate_all().
+ */
+static void
+test_module_configure_receives_config(void)
+{
+	GstModuleManager *mgr;
+	TestConfigModule *mod;
+	GstConfig *config;
+
+	config = gst_config_new();
+	mgr = gst_module_manager_new();
+	mod = (TestConfigModule *)g_object_new(TEST_TYPE_CONFIG_MODULE, NULL);
+
+	gst_module_manager_register(mgr, GST_MODULE(mod));
+	gst_module_manager_set_config(mgr, config);
+
+	g_assert_false(mod->configure_called);
+	gst_module_manager_activate_all(mgr);
+
+	/* configure() should have been called with the config pointer */
+	g_assert_true(mod->configure_called);
+	g_assert_true(mod->last_config == (gpointer)config);
+
+	g_object_unref(mod);
+	g_object_unref(mgr);
+	g_object_unref(config);
+}
+
 /* ===================================================================
  * Main
  * =================================================================== */
@@ -916,6 +1123,9 @@ main(int argc, char **argv)
 	g_test_add_func("/module/dispatch-glyph-transform-consumed", test_dispatch_glyph_transform_consumed);
 	g_test_add_func("/module/dispatch-glyph-transform-passthrough", test_dispatch_glyph_transform_passthrough);
 	g_test_add_func("/module/dispatch-glyph-transform-inactive", test_dispatch_glyph_transform_inactive);
+	g_test_add_func("/module/manager-enabled-flag", test_module_manager_enabled_flag);
+	g_test_add_func("/module/manager-enabled-default", test_module_manager_enabled_default);
+	g_test_add_func("/module/configure-receives-config", test_module_configure_receives_config);
 
 	return g_test_run();
 }

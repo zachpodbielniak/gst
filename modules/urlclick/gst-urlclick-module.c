@@ -12,6 +12,7 @@
 
 #include "gst-urlclick-module.h"
 #include "../../src/module/gst-module-manager.h"
+#include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
 #include "../../src/core/gst-line.h"
 #include "../../src/boxed/gst-glyph.h"
@@ -255,11 +256,69 @@ gst_urlclick_module_deactivate(GstModule *module)
 	g_debug("urlclick: deactivated");
 }
 
+/*
+ * configure:
+ *
+ * Reads urlclick configuration from the YAML config:
+ *  - opener: command to open URLs (e.g. "xdg-open")
+ *  - regex: URL detection regex pattern (recompiles on change)
+ */
 static void
 gst_urlclick_module_configure(GstModule *module, gpointer config)
 {
-	(void)config;
-	g_debug("urlclick: configured");
+	GstUrlclickModule *self;
+	YamlMapping *mod_cfg;
+
+	self = GST_URLCLICK_MODULE(module);
+
+	mod_cfg = gst_config_get_module_config(
+		(GstConfig *)config, "urlclick");
+	if (mod_cfg == NULL)
+	{
+		g_debug("urlclick: no config section, using defaults");
+		return;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "opener"))
+	{
+		const gchar *val;
+
+		val = yaml_mapping_get_string_member(mod_cfg, "opener");
+		if (val != NULL && val[0] != '\0')
+		{
+			g_free(self->opener);
+			self->opener = g_strdup(val);
+		}
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "regex"))
+	{
+		const gchar *val;
+
+		val = yaml_mapping_get_string_member(mod_cfg, "regex");
+		if (val != NULL && val[0] != '\0')
+		{
+			GRegex *new_regex;
+			GError *error = NULL;
+
+			new_regex = g_regex_new(val,
+				G_REGEX_CASELESS | G_REGEX_OPTIMIZE,
+				0, &error);
+			if (new_regex != NULL)
+			{
+				g_clear_pointer(&self->url_regex, g_regex_unref);
+				self->url_regex = new_regex;
+			}
+			else
+			{
+				g_warning("urlclick: invalid regex '%s': %s",
+					val, error->message);
+				g_error_free(error);
+			}
+		}
+	}
+
+	g_debug("urlclick: configured (opener=%s)", self->opener);
 }
 
 /* ===== GObject lifecycle ===== */

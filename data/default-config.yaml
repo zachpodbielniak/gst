@@ -80,7 +80,7 @@ modules:
     focus_opacity: 1.0
     unfocus_opacity: 0.85
 
-  url_click:
+  urlclick:
     enabled: true
     opener: xdg-open
     regex: "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"

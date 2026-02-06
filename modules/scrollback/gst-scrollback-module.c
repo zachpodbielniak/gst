@@ -12,6 +12,7 @@
 
 #include "gst-scrollback-module.h"
 #include "../../src/module/gst-module-manager.h"
+#include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
 #include "../../src/core/gst-line.h"
 #include "../../src/boxed/gst-glyph.h"
@@ -471,11 +472,51 @@ gst_scrollback_module_deactivate(GstModule *module)
 	g_debug("scrollback: deactivated");
 }
 
+/*
+ * configure:
+ *
+ * Reads scrollback configuration from the YAML config:
+ *  - lines: ring buffer capacity (clamped to 100-1000000)
+ *  - mouse_scroll_lines: lines per mouse scroll step (clamped to 1-100)
+ */
 static void
 gst_scrollback_module_configure(GstModule *module, gpointer config)
 {
-	(void)config;
-	g_debug("scrollback: configured");
+	GstScrollbackModule *self;
+	YamlMapping *mod_cfg;
+
+	self = GST_SCROLLBACK_MODULE(module);
+
+	mod_cfg = gst_config_get_module_config(
+		(GstConfig *)config, "scrollback");
+	if (mod_cfg == NULL)
+	{
+		g_debug("scrollback: no config section, using defaults");
+		return;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "lines"))
+	{
+		gint64 val;
+
+		val = yaml_mapping_get_int_member(mod_cfg, "lines");
+		if (val < 100) val = 100;
+		if (val > 1000000) val = 1000000;
+		self->capacity = (gint)val;
+	}
+
+	if (yaml_mapping_has_member(mod_cfg, "mouse_scroll_lines"))
+	{
+		gint64 val;
+
+		val = yaml_mapping_get_int_member(mod_cfg, "mouse_scroll_lines");
+		if (val < 1) val = 1;
+		if (val > 100) val = 100;
+		self->scroll_lines = (gint)val;
+	}
+
+	g_debug("scrollback: configured (capacity=%d, scroll_lines=%d)",
+		self->capacity, self->scroll_lines);
 }
 
 /* ===== GObject lifecycle ===== */
