@@ -1,7 +1,7 @@
 /*
  * test-renderer.c - Tests for rendering enums, macros, and abstract renderer
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Tests what's testable without an X11 display:

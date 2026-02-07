@@ -1,7 +1,7 @@
 /*
  * gst-enums.c - GST Enumeration GType Registration
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * This file registers all enumeration types with the GObject type system.

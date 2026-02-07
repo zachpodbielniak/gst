@@ -1,7 +1,7 @@
 /*
  * gst-x11-render-context.c - X11 vtable implementations
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Implements the GstRenderContextOps vtable for the X11 backend.

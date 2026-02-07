@@ -1,7 +1,7 @@
 /*
  * gst-transparency-module.h - Window transparency module
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Controls window opacity via _NET_WM_WINDOW_OPACITY with focus tracking.

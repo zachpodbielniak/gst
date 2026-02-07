@@ -1,7 +1,7 @@
 /*
  * gst-urlclick-module.h - URL detection and opening module
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Detects URLs in terminal output and opens them on keyboard shortcut.

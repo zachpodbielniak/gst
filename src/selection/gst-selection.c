@@ -1,7 +1,7 @@
 /*
  * gst-selection.c - GST Text Selection Implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Port of st.c's selection system (selstart, selextend, selnormalize,

@@ -1,7 +1,7 @@
 /*
  * gst-keybind.h - Configurable key and mouse bindings
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Provides structs and functions for parsing key binding strings

@@ -1,7 +1,7 @@
 /*
  * gst-version.h.in - GST Version Information Template
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * This file is processed by the build system to generate gst-version.h

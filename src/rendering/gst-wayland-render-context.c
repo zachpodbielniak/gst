@@ -1,7 +1,7 @@
 /*
  * gst-wayland-render-context.c - Wayland render context vtable implementations
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Implements the GstRenderContextOps vtable for the Wayland/Cairo

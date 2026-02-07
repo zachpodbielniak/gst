@@ -1,7 +1,7 @@
 /*
  * gst-base64.h - GST Base64 Utilities
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 

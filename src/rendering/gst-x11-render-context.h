@@ -1,7 +1,7 @@
 /*
  * gst-x11-render-context.h - X11 render context extending abstract base
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Extends GstRenderContext with X11-specific drawing resources.

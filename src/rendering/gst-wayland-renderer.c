@@ -1,7 +1,7 @@
 /*
  * gst-wayland-renderer.c - Wayland renderer implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Wayland rendering engine using Cairo for drawing and wl_shm

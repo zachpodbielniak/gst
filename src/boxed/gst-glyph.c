@@ -1,7 +1,7 @@
 /*
  * gst-glyph.c - GST Glyph Boxed Type Implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Implementation of the GstGlyph boxed type representing

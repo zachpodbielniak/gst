@@ -1,7 +1,7 @@
 /*
  * gst-wayland-render-context.h - Wayland render context extending abstract base
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Extends GstRenderContext with Cairo drawing resources for the

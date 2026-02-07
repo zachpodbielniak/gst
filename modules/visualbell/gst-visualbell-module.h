@@ -1,7 +1,7 @@
 /*
  * gst-visualbell-module.h - Visual bell notification module
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Sample module that handles terminal bell events with a visual

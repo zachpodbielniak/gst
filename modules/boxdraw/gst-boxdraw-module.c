@@ -1,7 +1,7 @@
 /*
  * gst-boxdraw-module.c - Box-drawing glyph transformer module
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Table-driven rendering of Unicode box-drawing characters (U+2500-U+259F)

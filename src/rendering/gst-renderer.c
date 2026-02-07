@@ -1,7 +1,7 @@
 /*
  * gst-renderer.c - Abstract base renderer class
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Abstract base class for terminal renderers. Holds a reference

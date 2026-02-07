@@ -1,7 +1,7 @@
 /*
  * gst-wayland-window.c - Wayland window implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Wayland-based terminal window using xdg-shell, wl_keyboard + xkbcommon

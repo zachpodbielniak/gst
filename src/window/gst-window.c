@@ -1,7 +1,7 @@
 /*
  * gst-window.c - Abstract base window class
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Abstract base class for terminal windows. Provides GObject signals

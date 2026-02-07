@@ -1,7 +1,7 @@
 /*
  * gst-x11-window.c - X11 window implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Ports st's xinit(), event handling, IME, and X11 selection protocol.

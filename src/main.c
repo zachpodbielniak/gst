@@ -1,7 +1,7 @@
 /*
  * main.c - GST (GObject Simple Terminal) Entry Point
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Full windowed terminal emulator entry point.
@@ -109,7 +109,7 @@ static GOptionEntry entries[] = {
 
 static const gchar *license_text =
 	"GST - GObject Simple Terminal\n"
-	"Copyright (C) 2024 Zach Podbielniak\n"
+	"Copyright (C) 2026 Zach Podbielniak\n"
 	"\n"
 	"This program is free software: you can redistribute it and/or modify\n"
 	"it under the terms of the GNU Affero General Public License as published by\n"

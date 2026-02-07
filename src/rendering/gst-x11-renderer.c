@@ -1,7 +1,7 @@
 /*
  * gst-x11-renderer.c - X11 renderer implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Full X11 rendering engine porting st's xdrawline,

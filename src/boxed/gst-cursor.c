@@ -1,7 +1,7 @@
 /*
  * gst-cursor.c - GST Cursor Boxed Type Implementation
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Implementation of the GstCursor boxed type representing

@@ -1,7 +1,7 @@
 /*
  * gst-externalpipe-module.c - External pipe module
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Pipes visible terminal screen content to an external command

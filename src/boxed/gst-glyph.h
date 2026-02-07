@@ -1,7 +1,7 @@
 /*
  * gst-glyph.h - GST Glyph Boxed Type
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * A glyph represents a single character cell in the terminal,

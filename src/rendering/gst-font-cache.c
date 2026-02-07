@@ -1,7 +1,7 @@
 /*
  * gst-font-cache.c - Font caching for terminal rendering
  *
- * Copyright (C) 2024 Zach Podbielniak
+ * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Manages Xft font loading, four font variants (regular, bold,
