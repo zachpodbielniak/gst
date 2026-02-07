@@ -70,6 +70,7 @@ gst_terminal_new(
 - x11, xft, fontconfig
 - libyaml
 - deps/yaml-glib (submodule)
+- Optional (Wayland backend): wayland-client, wayland-cursor, xkbcommon, cairo, cairo-ft
 
 ## Testing
 
@@ -166,5 +167,23 @@ Phase 8 (Configurable Key Bindings):
 - Shift+letter normalization and lock-bit stripping for reliable matching
 - 13 new tests (143 total tests pass)
 
+Phase 9 (Wayland Backend + Abstract Render Context):
+- Abstract render context: GstRenderContext base struct with vtable (GstRenderContextOps)
+- GstX11RenderContext: extends base with X11/Xft drawing resources + vtable impl
+- GstWaylandRenderContext: extends base with Cairo drawing resources + vtable impl
+- Inline dispatch helpers: gst_render_context_fill_rect(), draw_glyph(), etc.
+- GstBackendType enum (GST_BACKEND_X11, GST_BACKEND_WAYLAND)
+- GstCairoFontCache: fontconfig + cairo-ft font loading without X11 dependency
+- GstWaylandWindow: xdg-shell, wl_keyboard + xkbcommon, wl_pointer, clipboard/primary selection
+- GstWaylandRenderer: Cairo + wl_shm double-buffered rendering, 262-color palette
+- Window abstraction: paste, selection, bell, opacity, pointer motion, WM hints, event watch as base vfuncs
+- Module compatibility: scrollback, boxdraw, transparency use abstract render context API
+- Runtime backend auto-detection ($WAYLAND_DISPLAY) with --x11/--wayland CLI flags
+- main.c refactored: abstract GstWindow/GstRenderer types, backend-branched initialization
+- Conditional compilation: BUILD_WAYLAND=0 produces X11-only binary
+- Wayland protocols: xdg-shell (stable), zwp_primary_selection_v1 (unstable)
+- 9 new render context tests (152 total tests pass)
+
 Next phases:
-- Wayland renderer backend
+- Mouse reporting protocol (SGR, X10, etc.)
+- Zoom support (font cache resize)

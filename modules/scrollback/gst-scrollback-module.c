@@ -18,7 +18,9 @@
 #include "../../src/boxed/gst-glyph.h"
 #include "../../src/rendering/gst-render-context.h"
 
+/* keysym values and modifier masks for scrollback navigation */
 #include <X11/keysym.h>
+#include <X11/X.h>
 #include <string.h>
 
 /**
@@ -235,7 +237,7 @@ gst_scrollback_module_render(
 	gint              height
 ){
 	GstScrollbackModule *self;
-	GstX11RenderContext *ctx;
+	GstRenderContext *ctx;
 	GstModuleManager *mgr;
 	GstTerminal *term;
 	gint rows;
@@ -250,7 +252,7 @@ gst_scrollback_module_render(
 		return;
 	}
 
-	ctx = (GstX11RenderContext *)render_context;
+	ctx = (GstRenderContext *)render_context;
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
 	if (term == NULL) {
@@ -259,9 +261,8 @@ gst_scrollback_module_render(
 
 	gst_terminal_get_size(term, &cols, &rows);
 
-	/* Clear the drawable with background color */
-	XftDrawRect(ctx->xft_draw, &ctx->colors[257],
-		0, 0, (guint)width, (guint)height);
+	/* Clear the drawable with background color (index 257 = default bg) */
+	gst_render_context_fill_rect(ctx, 0, 0, width, height, 257);
 
 	/* Render scrollback lines */
 	for (y = 0; y < rows; y++) {
@@ -295,12 +296,6 @@ gst_scrollback_module_render(
 		for (x = 0; x < sl->cols && x < cols; x++) {
 			GstGlyph *g;
 			gint pixel_x;
-			XftFont *font_out;
-			FT_UInt glyph_out;
-			XftGlyphFontSpec spec;
-			GstFontVariant *fv;
-			XftColor *fg_color;
-			XftColor *bg_color;
 
 			g = &sl->glyphs[x];
 			if (g->rune == 0) {
@@ -313,32 +308,16 @@ gst_scrollback_module_render(
 
 			pixel_x = ctx->borderpx + x * ctx->cw;
 
-			/* Determine colors from glyph fg/bg indices */
-			fg_color = (g->fg < ctx->num_colors)
-				? &ctx->colors[g->fg]
-				: &ctx->colors[256]; /* default fg */
-			bg_color = (g->bg < ctx->num_colors)
-				? &ctx->colors[g->bg]
-				: &ctx->colors[257]; /* default bg */
-
 			/* Draw background */
-			XftDrawRect(ctx->xft_draw, bg_color,
+			gst_render_context_fill_rect(ctx,
 				pixel_x, pixel_y,
-				(guint)ctx->cw, (guint)ctx->ch);
+				ctx->cw, ctx->ch, g->bg);
 
-			/* Look up and draw glyph */
-			fv = gst_font_cache_get_font(ctx->font_cache,
-				GST_FONT_STYLE_NORMAL);
-			gst_font_cache_lookup_glyph(ctx->font_cache,
+			/* Draw glyph via abstract dispatch */
+			gst_render_context_draw_glyph(ctx,
 				g->rune, GST_FONT_STYLE_NORMAL,
-				&font_out, &glyph_out);
-
-			spec.font = font_out;
-			spec.glyph = glyph_out;
-			spec.x = (gshort)pixel_x;
-			spec.y = (gshort)(pixel_y + fv->ascent);
-
-			XftDrawGlyphFontSpec(ctx->xft_draw, fg_color, &spec, 1);
+				pixel_x, pixel_y,
+				g->fg, g->bg, g->attr);
 		}
 	}
 
@@ -346,32 +325,18 @@ gst_scrollback_module_render(
 	ind_len = g_snprintf(indicator, sizeof(indicator),
 		"[%d/%d]", self->scroll_offset, self->count);
 	if (ind_len > 0) {
-		GstFontVariant *fv;
 		gint ind_x;
 		gint ind_y;
 		gint i;
 
-		fv = gst_font_cache_get_font(ctx->font_cache,
-			GST_FONT_STYLE_NORMAL);
 		ind_x = width - ind_len * ctx->cw - ctx->borderpx;
-		ind_y = ctx->borderpx + fv->ascent;
+		ind_y = ctx->borderpx;
 
 		for (i = 0; i < ind_len; i++) {
-			XftFont *font_out;
-			FT_UInt glyph_out;
-			XftGlyphFontSpec spec;
-
-			gst_font_cache_lookup_glyph(ctx->font_cache,
+			gst_render_context_draw_glyph(ctx,
 				(GstRune)indicator[i], GST_FONT_STYLE_NORMAL,
-				&font_out, &glyph_out);
-
-			spec.font = font_out;
-			spec.glyph = glyph_out;
-			spec.x = (gshort)(ind_x + i * ctx->cw);
-			spec.y = (gshort)ind_y;
-
-			XftDrawGlyphFontSpec(ctx->xft_draw,
-				&ctx->colors[256], &spec, 1);
+				ind_x + i * ctx->cw, ind_y,
+				256, 257, 0);
 		}
 	}
 }

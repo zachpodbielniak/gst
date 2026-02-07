@@ -37,6 +37,7 @@ ASAN ?= 0
 BUILD_GIR ?= 1
 BUILD_TESTS ?= 1
 BUILD_MODULES ?= 1
+BUILD_WAYLAND ?= 1
 
 # Select build directories based on DEBUG
 ifeq ($(DEBUG),1)
@@ -90,6 +91,14 @@ DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
 DEPS_REQUIRED += x11 xft fontconfig
 DEPS_REQUIRED += yaml-0.1 json-glib-1.0
 
+# Optional Wayland dependencies
+ifeq ($(BUILD_WAYLAND),1)
+DEPS_WAYLAND := wayland-client wayland-cursor xkbcommon cairo cairo-ft
+WAYLAND_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_WAYLAND) 2>/dev/null && echo 1 || echo 0)
+else
+WAYLAND_AVAILABLE := 0
+endif
+
 # Check for required dependencies
 define check_dep
 $(if $(shell $(PKG_CONFIG) --exists $(1) && echo yes),,$(error Missing dependency: $(1)))
@@ -98,6 +107,14 @@ endef
 # Get flags from pkg-config
 CFLAGS_DEPS := $(shell $(PKG_CONFIG) --cflags $(DEPS_REQUIRED) 2>/dev/null)
 LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(DEPS_REQUIRED) 2>/dev/null)
+
+# Add Wayland flags if available
+ifeq ($(WAYLAND_AVAILABLE),1)
+    CFLAGS_BASE += -DGST_HAVE_WAYLAND=1
+    CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags wayland-client wayland-cursor xkbcommon cairo cairo-ft 2>/dev/null)
+    LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs wayland-client wayland-cursor xkbcommon cairo cairo-ft 2>/dev/null)
+    LDFLAGS_DEPS += -lrt
+endif
 
 # Include paths
 CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src
@@ -148,3 +165,5 @@ show-config:
 	@echo "BUILD_GIR:    $(BUILD_GIR)"
 	@echo "BUILD_TESTS:  $(BUILD_TESTS)"
 	@echo "BUILD_MODULES:$(BUILD_MODULES)"
+	@echo "BUILD_WAYLAND:$(BUILD_WAYLAND)"
+	@echo "WAYLAND_AVAILABLE:$(WAYLAND_AVAILABLE)"

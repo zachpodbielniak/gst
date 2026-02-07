@@ -9,7 +9,6 @@
  */
 
 #include "gst-window.h"
-#include <X11/keysym.h>
 
 /**
  * SECTION:gst-window
@@ -89,6 +88,15 @@ gst_window_class_init(GstWindowClass *klass)
 	klass->hide = NULL;
 	klass->resize = NULL;
 	klass->set_title = NULL;
+	klass->set_selection = NULL;
+	klass->paste_clipboard = NULL;
+	klass->paste_primary = NULL;
+	klass->copy_to_clipboard = NULL;
+	klass->bell = NULL;
+	klass->set_opacity = NULL;
+	klass->set_pointer_motion = NULL;
+	klass->set_wm_hints = NULL;
+	klass->start_event_watch = NULL;
 
 	/**
 	 * GstWindow::key-press:
@@ -361,6 +369,134 @@ gst_window_set_title(
 	klass = GST_WINDOW_GET_CLASS(self);
 	if (klass->set_title != NULL) {
 		klass->set_title(self, title);
+	}
+}
+
+void
+gst_window_set_selection(
+	GstWindow   *self,
+	const gchar *text,
+	gboolean     is_clipboard
+){
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->set_selection != NULL) {
+		klass->set_selection(self, text, is_clipboard);
+	}
+}
+
+void
+gst_window_paste_clipboard(GstWindow *self)
+{
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->paste_clipboard != NULL) {
+		klass->paste_clipboard(self);
+	}
+}
+
+void
+gst_window_paste_primary(GstWindow *self)
+{
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->paste_primary != NULL) {
+		klass->paste_primary(self);
+	}
+}
+
+void
+gst_window_copy_to_clipboard(GstWindow *self)
+{
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->copy_to_clipboard != NULL) {
+		klass->copy_to_clipboard(self);
+	}
+}
+
+void
+gst_window_bell(GstWindow *self)
+{
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->bell != NULL) {
+		klass->bell(self);
+	}
+}
+
+void
+gst_window_set_opacity(
+	GstWindow *self,
+	gdouble    opacity
+){
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->set_opacity != NULL) {
+		klass->set_opacity(self, opacity);
+	}
+}
+
+void
+gst_window_set_pointer_motion(
+	GstWindow *self,
+	gboolean   enable
+){
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->set_pointer_motion != NULL) {
+		klass->set_pointer_motion(self, enable);
+	}
+}
+
+void
+gst_window_set_wm_hints(
+	GstWindow *self,
+	gint       cw,
+	gint       ch,
+	gint       borderpx
+){
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->set_wm_hints != NULL) {
+		klass->set_wm_hints(self, cw, ch, borderpx);
+	}
+}
+
+void
+gst_window_start_event_watch(GstWindow *self)
+{
+	GstWindowClass *klass;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+
+	klass = GST_WINDOW_GET_CLASS(self);
+	if (klass->start_event_watch != NULL) {
+		klass->start_event_watch(self);
 	}
 }
 

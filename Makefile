@@ -32,7 +32,9 @@ LIB_SRCS := \
 	src/core/gst-pty.c \
 	src/core/gst-escape-parser.c \
 	src/rendering/gst-renderer.c \
+	src/rendering/gst-render-context.c \
 	src/rendering/gst-x11-renderer.c \
+	src/rendering/gst-x11-render-context.c \
 	src/rendering/gst-font-cache.c \
 	src/window/gst-window.c \
 	src/window/gst-x11-window.c \
@@ -56,6 +58,15 @@ LIB_SRCS := \
 	src/util/gst-utf8.c \
 	src/util/gst-base64.c
 
+# Wayland/Cairo sources (conditional)
+ifeq ($(WAYLAND_AVAILABLE),1)
+LIB_SRCS += \
+	src/rendering/gst-cairo-font-cache.c \
+	src/rendering/gst-wayland-renderer.c \
+	src/rendering/gst-wayland-render-context.c \
+	src/window/gst-wayland-window.c
+endif
+
 # Header files (for GIR scanner and installation)
 LIB_HDRS := \
 	src/gst.h \
@@ -69,7 +80,9 @@ LIB_HDRS := \
 	src/core/gst-pty.h \
 	src/core/gst-escape-parser.h \
 	src/rendering/gst-renderer.h \
+	src/rendering/gst-render-context.h \
 	src/rendering/gst-x11-renderer.h \
+	src/rendering/gst-x11-render-context.h \
 	src/rendering/gst-font-cache.h \
 	src/window/gst-window.h \
 	src/window/gst-x11-window.h \
@@ -92,6 +105,15 @@ LIB_HDRS := \
 	src/interfaces/gst-external-pipe.h \
 	src/util/gst-utf8.h \
 	src/util/gst-base64.h
+
+# Wayland/Cairo headers (conditional)
+ifeq ($(WAYLAND_AVAILABLE),1)
+LIB_HDRS += \
+	src/rendering/gst-cairo-font-cache.h \
+	src/rendering/gst-wayland-renderer.h \
+	src/rendering/gst-wayland-render-context.h \
+	src/window/gst-wayland-window.h
+endif
 
 # yaml-glib sources (built-in dependency)
 YAMLGLIB_SRCS := \

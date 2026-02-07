@@ -445,6 +445,20 @@ typedef enum {
 GType gst_font_style_get_type(void) G_GNUC_CONST;
 #define GST_TYPE_FONT_STYLE (gst_font_style_get_type())
 
+/*
+ * GstBackendType:
+ *
+ * Display backend type for renderer and window selection.
+ * Determines which rendering and windowing backend to use.
+ */
+typedef enum {
+    GST_BACKEND_X11 = 0,
+    GST_BACKEND_WAYLAND
+} GstBackendType;
+
+GType gst_backend_type_get_type(void) G_GNUC_CONST;
+#define GST_TYPE_BACKEND_TYPE (gst_backend_type_get_type())
+
 G_END_DECLS
 
 #endif /* GST_ENUMS_H */

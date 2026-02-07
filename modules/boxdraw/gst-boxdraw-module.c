@@ -263,7 +263,7 @@ G_DEFINE_TYPE_WITH_CODE(GstBoxdrawModule, gst_boxdraw_module,
  */
 static void
 draw_box_op(
-	GstX11RenderContext *ctx,
+	GstRenderContext    *ctx,
 	const BoxDrawOp     *op,
 	gint                px,
 	gint                py,
@@ -285,16 +285,16 @@ draw_box_op(
 
 	switch (op->type) {
 	case 0: /* horizontal line */
-		XftDrawRect(ctx->xft_draw, ctx->fg,
-			x1, y1, (guint)(x2 - x1), (guint)thickness);
+		gst_render_context_fill_rect_fg(ctx,
+			x1, y1, x2 - x1, thickness);
 		break;
 	case 1: /* vertical line */
-		XftDrawRect(ctx->xft_draw, ctx->fg,
-			x1, y1, (guint)thickness, (guint)(y2 - y1));
+		gst_render_context_fill_rect_fg(ctx,
+			x1, y1, thickness, y2 - y1);
 		break;
 	case 2: /* filled rectangle */
-		XftDrawRect(ctx->xft_draw, ctx->fg,
-			x1, y1, (guint)(x2 - x1), (guint)(y2 - y1));
+		gst_render_context_fill_rect_fg(ctx,
+			x1, y1, x2 - x1, y2 - y1);
 		break;
 	}
 }
@@ -318,12 +318,12 @@ gst_boxdraw_module_transform_glyph(
 	gint                 height
 ){
 	GstBoxdrawModule *self;
-	GstX11RenderContext *ctx;
+	GstRenderContext *ctx;
 	guint idx;
 	guint i;
 
 	self = GST_BOXDRAW_MODULE(transformer);
-	ctx = (GstX11RenderContext *)render_context;
+	ctx = (GstRenderContext *)render_context;
 
 	/* Box-drawing characters: U+2500-U+257F */
 	if (codepoint >= 0x2500 && codepoint <= 0x257F) {
@@ -337,8 +337,7 @@ gst_boxdraw_module_transform_glyph(
 		}
 
 		/* Clear background first */
-		XftDrawRect(ctx->xft_draw, ctx->bg, x, y,
-			(guint)width, (guint)height);
+		gst_render_context_fill_rect_bg(ctx, x, y, width, height);
 
 		/* Draw each operation */
 		for (i = 0; i < entry->nops; i++) {
@@ -366,8 +365,7 @@ gst_boxdraw_module_transform_glyph(
 		}
 
 		/* Clear background */
-		XftDrawRect(ctx->xft_draw, ctx->bg, x, y,
-			(guint)width, (guint)height);
+		gst_render_context_fill_rect_bg(ctx, x, y, width, height);
 
 		/* Draw filled block */
 		bx = x + (gint)(b[0] * (gfloat)width);
@@ -376,8 +374,7 @@ gst_boxdraw_module_transform_glyph(
 		bh = (gint)((b[3] - b[1]) * (gfloat)height);
 
 		if (bw > 0 && bh > 0) {
-			XftDrawRect(ctx->xft_draw, ctx->fg, bx, by,
-				(guint)bw, (guint)bh);
+			gst_render_context_fill_rect_fg(ctx, bx, by, bw, bh);
 		}
 
 		return TRUE;

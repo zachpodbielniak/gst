@@ -4,7 +4,7 @@
  * Copyright (C) 2024 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Controls window opacity via _NET_WM_WINDOW_OPACITY X11 property.
+ * Controls window opacity via the abstract GstWindow set_opacity vfunc.
  * Tracks focus state and adjusts opacity for focused/unfocused windows.
  * Implements GstRenderOverlay to hook into the render cycle for
  * focus-change detection.
@@ -14,17 +14,15 @@
 #include "../../src/module/gst-module-manager.h"
 #include "../../src/config/gst-config.h"
 #include "../../src/rendering/gst-render-context.h"
-
-#include <X11/Xlib.h>
-#include <X11/Xatom.h>
+#include "../../src/window/gst-window.h"
 
 /**
  * SECTION:gst-transparency-module
  * @title: GstTransparencyModule
  * @short_description: Window opacity control with focus tracking
  *
- * #GstTransparencyModule sets window opacity using the
- * _NET_WM_WINDOW_OPACITY X11 property. Supports different
+ * #GstTransparencyModule sets window opacity using the abstract
+ * GstWindow set_opacity virtual method. Supports different
  * opacity values for focused and unfocused states.
  */
 
@@ -51,32 +49,22 @@ G_DEFINE_TYPE_WITH_CODE(GstTransparencyModule, gst_transparency_module,
 /* ===== Internal helpers ===== */
 
 /*
- * set_window_opacity:
+ * apply_opacity:
  *
- * Sets the _NET_WM_WINDOW_OPACITY property on the given X11 window.
- * opacity is a value from 0.0 (fully transparent) to 1.0 (opaque).
+ * Sets window opacity via the abstract GstWindow vfunc.
+ * Gets the window from the module manager.
  */
 static void
-set_window_opacity(Display *display, Window window, gdouble opacity)
+apply_opacity(gdouble opacity)
 {
-	guint32 val;
-	Atom atom;
+	GstModuleManager *mgr;
+	GstWindow *win;
 
-	/* Clamp opacity */
-	if (opacity < 0.0) {
-		opacity = 0.0;
+	mgr = gst_module_manager_get_default();
+	win = (GstWindow *)gst_module_manager_get_window(mgr);
+	if (win != NULL) {
+		gst_window_set_opacity(win, opacity);
 	}
-	if (opacity > 1.0) {
-		opacity = 1.0;
-	}
-
-	val = (guint32)(0xFFFFFFFFU * opacity);
-	atom = XInternAtom(display, "_NET_WM_WINDOW_OPACITY", False);
-
-	XChangeProperty(display, window, atom,
-		XA_CARDINAL, 32, PropModeReplace,
-		(guchar *)&val, 1);
-	XFlush(display);
 }
 
 /* ===== GstRenderOverlay interface ===== */
@@ -95,14 +83,14 @@ gst_transparency_module_render(
 	gint              height
 ){
 	GstTransparencyModule *self;
-	GstX11RenderContext *ctx;
+	GstRenderContext *ctx;
 	gboolean focused;
 
 	(void)width;
 	(void)height;
 
 	self = GST_TRANSPARENCY_MODULE(overlay);
-	ctx = (GstX11RenderContext *)render_context;
+	ctx = (GstRenderContext *)render_context;
 
 	focused = (ctx->win_mode & GST_WIN_MODE_FOCUSED) != 0;
 
@@ -110,8 +98,8 @@ gst_transparency_module_render(
 	if (!self->initial_set) {
 		self->initial_set = TRUE;
 		self->was_focused = focused;
-		set_window_opacity(ctx->display, ctx->window,
-			focused ? self->focus_opacity : self->unfocus_opacity);
+		apply_opacity(focused ? self->focus_opacity
+			: self->unfocus_opacity);
 		return;
 	}
 
@@ -121,7 +109,7 @@ gst_transparency_module_render(
 
 		self->was_focused = focused;
 		target = focused ? self->focus_opacity : self->unfocus_opacity;
-		set_window_opacity(ctx->display, ctx->window, target);
+		apply_opacity(target);
 	}
 }
 

@@ -13,7 +13,7 @@
  */
 
 #include "gst-x11-renderer.h"
-#include "gst-render-context.h"
+#include "gst-x11-render-context.h"
 #include "../core/gst-terminal.h"
 #include "../core/gst-line.h"
 #include "../boxed/gst-glyph.h"
@@ -219,6 +219,19 @@ x11_fill_render_context(
 	GstX11Renderer       *self,
 	GstX11RenderContext   *ctx
 ){
+	/* Initialize vtable and backend type */
+	gst_x11_render_context_init_ops(ctx);
+
+	/* Base context fields */
+	ctx->base.cw         = self->cw;
+	ctx->base.ch         = self->ch;
+	ctx->base.borderpx   = self->borderpx;
+	ctx->base.win_w      = self->win_w;
+	ctx->base.win_h      = self->win_h;
+	ctx->base.win_mode   = self->win_mode;
+	ctx->base.glyph_attr = 0;
+
+	/* X11-specific fields */
 	ctx->display    = self->display;
 	ctx->window     = self->xwindow;
 	ctx->drawable   = self->buf;
@@ -229,15 +242,8 @@ x11_fill_render_context(
 	ctx->colors     = self->colors;
 	ctx->num_colors = self->num_colors;
 	ctx->font_cache = self->font_cache;
-	ctx->cw         = self->cw;
-	ctx->ch         = self->ch;
-	ctx->borderpx   = self->borderpx;
-	ctx->win_w      = self->win_w;
-	ctx->win_h      = self->win_h;
-	ctx->win_mode   = self->win_mode;
 	ctx->fg         = NULL;
 	ctx->bg         = NULL;
-	ctx->glyph_attr = 0;
 }
 
 /*
@@ -617,7 +623,7 @@ x11_renderer_draw_line_impl(
 			pixel_y = self->borderpx + row * self->ch;
 
 			if (gst_module_manager_dispatch_glyph_transform(
-				mgr, cur.rune, &gt_ctx,
+				mgr, cur.rune, &gt_ctx.base,
 				pixel_x, pixel_y, self->cw, self->ch))
 			{
 				/* Flush accumulated run before skipping */
@@ -818,7 +824,7 @@ x11_renderer_render_impl(GstRenderer *renderer)
 		mgr = gst_module_manager_get_default();
 		x11_fill_render_context(self, &ctx);
 		gst_module_manager_dispatch_render_overlay(
-			mgr, &ctx, self->win_w, self->win_h);
+			mgr, &ctx.base, self->win_w, self->win_h);
 	}
 
 	/* Copy pixmap to window (double-buffer flip) */

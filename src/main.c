@@ -5,7 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Full windowed terminal emulator entry point.
- * Creates a terminal, X11 window, renderer, and PTY,
+ * Creates a terminal, window, renderer, and PTY,
  * wires all signals together, and runs the GLib main loop.
  *
  * Draw timing uses an adaptive latency model ported from st:
@@ -14,6 +14,10 @@
  *
  * Configuration is loaded from YAML files via GstConfig.
  * CLI options override config values where applicable.
+ *
+ * Supports both X11 and Wayland backends. The backend is
+ * auto-detected at runtime (WAYLAND_DISPLAY check), or
+ * forced via --x11 / --wayland CLI flags.
  */
 
 #include <glib.h>
@@ -28,16 +32,25 @@
 #include <X11/Xlib.h>
 
 #include "gst.h"
+#include "gst-enums.h"
 #include "core/gst-terminal.h"
 #include "core/gst-pty.h"
+#include "rendering/gst-renderer.h"
 #include "rendering/gst-font-cache.h"
 #include "rendering/gst-x11-renderer.h"
+#include "window/gst-window.h"
 #include "window/gst-x11-window.h"
 #include "selection/gst-selection.h"
 #include "config/gst-config.h"
 #include "config/gst-keybind.h"
 #include "config/gst-color-scheme.h"
 #include "module/gst-module-manager.h"
+
+#ifdef GST_HAVE_WAYLAND
+#include "rendering/gst-cairo-font-cache.h"
+#include "rendering/gst-wayland-renderer.h"
+#include "window/gst-wayland-window.h"
+#endif
 
 /* ===== Constants ===== */
 
@@ -63,6 +76,8 @@ static gchar *opt_execute = NULL;
 static gboolean opt_line = FALSE;
 static gboolean opt_version = FALSE;
 static gboolean opt_license = FALSE;
+static gboolean opt_x11 = FALSE;
+static gboolean opt_wayland = FALSE;
 
 static GOptionEntry entries[] = {
 	{ "config", 'c', 0, G_OPTION_ARG_FILENAME, &opt_config,
@@ -85,6 +100,10 @@ static GOptionEntry entries[] = {
 	  "Show version", NULL },
 	{ "license", 0, 0, G_OPTION_ARG_NONE, &opt_license,
 	  "Show license (AGPLv3)", NULL },
+	{ "x11", 0, 0, G_OPTION_ARG_NONE, &opt_x11,
+	  "Force X11 backend", NULL },
+	{ "wayland", 0, 0, G_OPTION_ARG_NONE, &opt_wayland,
+	  "Force Wayland backend", NULL },
 	{ NULL }
 };
 
@@ -111,9 +130,20 @@ static GMainLoop *main_loop = NULL;
 static GstTerminal *terminal = NULL;
 static GstSelection *selection = NULL;
 static GstPty *pty = NULL;
+static GstWindow *window = NULL;
+static GstRenderer *renderer = NULL;
+static GstBackendType backend = GST_BACKEND_X11;
+
+/* X11-specific state (only valid when backend == GST_BACKEND_X11) */
 static GstFontCache *font_cache = NULL;
-static GstX11Window *window = NULL;
-static GstX11Renderer *renderer = NULL;
+
+#ifdef GST_HAVE_WAYLAND
+/* Wayland-specific state (only valid when backend == GST_BACKEND_WAYLAND) */
+static GstCairoFontCache *cairo_font_cache = NULL;
+#endif
+
+/* Window mode flags (shared between backends) */
+static GstWinMode win_mode = GST_WIN_MODE_NUMLOCK;
 
 /* Draw timing state */
 static guint draw_timeout_id = 0;
@@ -124,6 +154,10 @@ static gboolean drawing = FALSE;
 static guint cfg_border_px = 2;
 static guint cfg_min_latency = 8;
 static guint cfg_max_latency = 33;
+
+/* Character cell dimensions (set during font loading) */
+static gint cell_w = 0;
+static gint cell_h = 0;
 
 /* ===== Helper functions ===== */
 
@@ -208,13 +242,11 @@ find_default_config(void)
 static gint
 pixel_to_col(gint px)
 {
-	gint cw;
 	gint cols;
 	gint x;
 
-	cw = gst_font_cache_get_char_width(font_cache);
 	cols = gst_terminal_get_cols(terminal);
-	x = (px - (gint)cfg_border_px) / cw;
+	x = (px - (gint)cfg_border_px) / cell_w;
 	if (x < 0) x = 0;
 	if (x >= cols) x = cols - 1;
 	return x;
@@ -223,16 +255,65 @@ pixel_to_col(gint px)
 static gint
 pixel_to_row(gint py)
 {
-	gint ch;
 	gint rows;
 	gint y;
 
-	ch = gst_font_cache_get_char_height(font_cache);
 	rows = gst_terminal_get_rows(terminal);
-	y = (py - (gint)cfg_border_px) / ch;
+	y = (py - (gint)cfg_border_px) / cell_h;
 	if (y < 0) y = 0;
 	if (y >= rows) y = rows - 1;
 	return y;
+}
+
+/*
+ * set_win_mode:
+ * @mode: new window mode flags
+ *
+ * Sets the window mode flags on both the local state and
+ * the backend-specific renderer.
+ */
+static void
+set_win_mode(GstWinMode mode)
+{
+	win_mode = mode;
+
+	if (backend == GST_BACKEND_X11) {
+		gst_x11_renderer_set_win_mode(
+			GST_X11_RENDERER(renderer), mode);
+	}
+#ifdef GST_HAVE_WAYLAND
+	else if (backend == GST_BACKEND_WAYLAND) {
+		gst_wayland_renderer_set_win_mode(
+			GST_WAYLAND_RENDERER(renderer), mode);
+	}
+#endif
+}
+
+/*
+ * detect_backend:
+ *
+ * Auto-detect the display backend based on environment.
+ * CLI flags --x11 / --wayland override auto-detection.
+ *
+ * Returns: the detected GstBackendType
+ */
+static GstBackendType
+detect_backend(void)
+{
+#ifdef GST_HAVE_WAYLAND
+	if (opt_wayland) {
+		return GST_BACKEND_WAYLAND;
+	}
+#endif
+	if (opt_x11) {
+		return GST_BACKEND_X11;
+	}
+#ifdef GST_HAVE_WAYLAND
+	if (g_getenv("WAYLAND_DISPLAY") != NULL) {
+		return GST_BACKEND_WAYLAND;
+	}
+#endif
+	return GST_BACKEND_X11;
 }
 
 /* ===== Draw scheduling ===== */
@@ -247,22 +328,19 @@ pixel_to_row(gint py)
 static gboolean
 do_draw(gpointer user_data)
 {
-	GstWinMode wm;
-
 	draw_timeout_id = 0;
 	drawing = FALSE;
 
-	wm = gst_x11_renderer_get_win_mode(renderer);
-	if (!(wm & GST_WIN_MODE_VISIBLE)) {
+	if (!(win_mode & GST_WIN_MODE_VISIBLE)) {
 		return G_SOURCE_REMOVE;
 	}
 
-	if (!gst_renderer_start_draw(GST_RENDERER(renderer))) {
+	if (!gst_renderer_start_draw(renderer)) {
 		return G_SOURCE_REMOVE;
 	}
 
-	gst_renderer_render(GST_RENDERER(renderer));
-	gst_renderer_finish_draw(GST_RENDERER(renderer));
+	gst_renderer_render(renderer);
+	gst_renderer_finish_draw(renderer);
 
 	return G_SOURCE_REMOVE;
 }
@@ -334,7 +412,7 @@ on_terminal_response(
 }
 
 /*
- * Terminal title-changed: update X11 window title.
+ * Terminal title-changed: update window title.
  */
 static void
 on_terminal_title_changed(
@@ -342,11 +420,11 @@ on_terminal_title_changed(
 	const gchar *title,
 	gpointer    user_data
 ){
-	gst_x11_window_set_title_x11(window, title);
+	gst_window_set_title(window, title);
 }
 
 /*
- * Terminal bell: dispatch to modules, then flash urgency hint.
+ * Terminal bell: dispatch to modules, then trigger bell.
  */
 static void
 on_terminal_bell(
@@ -359,7 +437,7 @@ on_terminal_bell(
 	gst_module_manager_dispatch_bell(mgr);
 
 	/* Default bell behavior */
-	gst_x11_window_bell(window);
+	gst_window_bell(window);
 }
 
 /*
@@ -412,18 +490,17 @@ on_key_press(
 
 			sel_text = gst_selection_get_text(selection);
 			if (sel_text != NULL) {
-				gst_x11_window_set_selection(window,
-					sel_text, FALSE);
-				gst_x11_window_copy_to_clipboard(window);
+				gst_window_set_selection(window, sel_text, FALSE);
+				gst_window_copy_to_clipboard(window);
 				g_free(sel_text);
 			}
 		}
 		return;
 	case GST_ACTION_CLIPBOARD_PASTE:
-		gst_x11_window_paste_clipboard(window);
+		gst_window_paste_clipboard(window);
 		return;
 	case GST_ACTION_PASTE_PRIMARY:
-		gst_x11_window_paste_primary(window);
+		gst_window_paste_primary(window);
 		return;
 	case GST_ACTION_ZOOM_IN:
 	case GST_ACTION_ZOOM_OUT:
@@ -483,7 +560,7 @@ on_button_press(
 
 	/* Middle button pastes primary */
 	if (button == Button2) {
-		gst_x11_window_paste_primary(window);
+		gst_window_paste_primary(window);
 	}
 }
 
@@ -518,7 +595,7 @@ on_button_release(
 		/* Set primary selection */
 		sel_text = gst_selection_get_text(selection);
 		if (sel_text != NULL) {
-			gst_x11_window_set_selection(window, sel_text, FALSE);
+			gst_window_set_selection(window, sel_text, FALSE);
 			g_free(sel_text);
 		}
 		schedule_draw();
@@ -562,13 +639,13 @@ on_focus_change(
 ){
 	GstWinMode wm;
 
-	wm = gst_x11_renderer_get_win_mode(renderer);
+	wm = win_mode;
 	if (focused) {
 		wm |= GST_WIN_MODE_FOCUSED;
 	} else {
 		wm &= ~GST_WIN_MODE_FOCUSED;
 	}
-	gst_x11_renderer_set_win_mode(renderer, wm);
+	set_win_mode(wm);
 
 	/* Send focus escape sequences if enabled */
 	if (gst_terminal_has_mode(terminal, GST_MODE_FOCUS)) {
@@ -592,22 +669,17 @@ on_configure(
 	guint       height,
 	gpointer    user_data
 ){
-	gint cw;
-	gint ch;
 	gint cols;
 	gint rows;
 
-	cw = gst_font_cache_get_char_width(font_cache);
-	ch = gst_font_cache_get_char_height(font_cache);
-
-	cols = ((gint)width - 2 * (gint)cfg_border_px) / cw;
-	rows = ((gint)height - 2 * (gint)cfg_border_px) / ch;
+	cols = ((gint)width - 2 * (gint)cfg_border_px) / cell_w;
+	rows = ((gint)height - 2 * (gint)cfg_border_px) / cell_h;
 
 	if (cols < 1) cols = 1;
 	if (rows < 1) rows = 1;
 
 	gst_terminal_resize(terminal, cols, rows);
-	gst_renderer_resize(GST_RENDERER(renderer), width, height);
+	gst_renderer_resize(renderer, width, height);
 	gst_pty_resize(pty, cols, rows);
 
 	schedule_draw();
@@ -643,13 +715,13 @@ on_visibility(
 ){
 	GstWinMode wm;
 
-	wm = gst_x11_renderer_get_win_mode(renderer);
+	wm = win_mode;
 	if (visible) {
 		wm |= GST_WIN_MODE_VISIBLE;
 	} else {
 		wm &= ~GST_WIN_MODE_VISIBLE;
 	}
-	gst_x11_renderer_set_win_mode(renderer, wm);
+	set_win_mode(wm);
 }
 
 /*
@@ -704,6 +776,225 @@ on_sigterm(gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
+/* ===== Backend initialization ===== */
+
+/*
+ * init_x11_backend:
+ * @cols: terminal columns
+ * @rows: terminal rows
+ * @fontstr: font specification
+ * @config: configuration object
+ *
+ * Initializes X11 backend: loads fonts, creates window and renderer.
+ *
+ * Returns: TRUE on success
+ */
+static gboolean
+init_x11_backend(
+	gint            cols,
+	gint            rows,
+	const gchar     *fontstr,
+	GstConfig       *config
+){
+	gulong embed_id;
+	Display *display;
+	Window xid;
+	Visual *visual;
+	Colormap colormap;
+	gint screen;
+	GstX11Window *x11_win;
+	GstX11Renderer *x11_renderer;
+	GstColorScheme *scheme;
+
+	/* Initialize fontconfig */
+	if (!FcInit()) {
+		g_printerr("Could not initialize fontconfig\n");
+		return FALSE;
+	}
+
+	font_cache = gst_font_cache_new();
+
+	/* Bootstrap: open temp display for font metrics */
+	{
+		Display *tmp_dpy;
+		gint tmp_screen;
+
+		tmp_dpy = XOpenDisplay(NULL);
+		if (tmp_dpy == NULL) {
+			g_printerr("Cannot open X11 display\n");
+			g_object_unref(font_cache);
+			font_cache = NULL;
+			return FALSE;
+		}
+		tmp_screen = XDefaultScreen(tmp_dpy);
+
+		if (!gst_font_cache_load_fonts(font_cache, tmp_dpy,
+			tmp_screen, fontstr, 0))
+		{
+			g_printerr("Cannot load font: %s\n", fontstr);
+			XCloseDisplay(tmp_dpy);
+			g_object_unref(font_cache);
+			font_cache = NULL;
+			return FALSE;
+		}
+
+		cell_w = gst_font_cache_get_char_width(font_cache);
+		cell_h = gst_font_cache_get_char_height(font_cache);
+
+		gst_font_cache_unload_fonts(font_cache);
+		XCloseDisplay(tmp_dpy);
+	}
+
+	/* Create X11 window */
+	embed_id = 0;
+	if (opt_windowid != NULL) {
+		embed_id = strtoul(opt_windowid, NULL, 0);
+	}
+
+	x11_win = gst_x11_window_new(cols, rows, cell_w, cell_h,
+		(gint)cfg_border_px, embed_id);
+	if (x11_win == NULL) {
+		g_printerr("Cannot create X11 window\n");
+		g_object_unref(font_cache);
+		font_cache = NULL;
+		return FALSE;
+	}
+	window = GST_WINDOW(x11_win);
+
+	/* Reload fonts on window's display */
+	display = gst_x11_window_get_display(x11_win);
+	screen = gst_x11_window_get_screen(x11_win);
+
+	if (!gst_font_cache_load_fonts(font_cache, display, screen, fontstr, 0)) {
+		g_printerr("Cannot load font on window display: %s\n", fontstr);
+		g_object_unref(window);
+		window = NULL;
+		g_object_unref(font_cache);
+		font_cache = NULL;
+		return FALSE;
+	}
+
+	cell_w = gst_font_cache_get_char_width(font_cache);
+	cell_h = gst_font_cache_get_char_height(font_cache);
+
+	/* Show window and set WM hints */
+	gst_window_set_wm_hints(window, cell_w, cell_h, (gint)cfg_border_px);
+	gst_window_show(window);
+
+	/* Create X11 renderer */
+	xid = gst_x11_window_get_xid(x11_win);
+	visual = gst_x11_window_get_visual(x11_win);
+	colormap = gst_x11_window_get_colormap(x11_win);
+
+	x11_renderer = gst_x11_renderer_new(
+		terminal, display, xid, visual, colormap,
+		screen, font_cache, (gint)cfg_border_px);
+	renderer = GST_RENDERER(x11_renderer);
+
+	/* Load colors */
+	scheme = gst_color_scheme_new("config");
+	gst_color_scheme_load_from_config(scheme, config);
+
+	if (!gst_x11_renderer_load_colors(x11_renderer)) {
+		g_printerr("Cannot load colors\n");
+	}
+	g_object_unref(scheme);
+
+	/* Set initial win_mode */
+	set_win_mode(GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED
+		| GST_WIN_MODE_NUMLOCK);
+
+	return TRUE;
+}
+
+#ifdef GST_HAVE_WAYLAND
+/*
+ * init_wayland_backend:
+ * @cols: terminal columns
+ * @rows: terminal rows
+ * @fontstr: font specification
+ * @config: configuration object
+ *
+ * Initializes Wayland backend: loads fonts via Cairo,
+ * creates Wayland window and renderer.
+ *
+ * Returns: TRUE on success
+ */
+static gboolean
+init_wayland_backend(
+	gint            cols,
+	gint            rows,
+	const gchar     *fontstr,
+	GstConfig       *config
+){
+	GstWaylandWindow *wl_win;
+	GstWaylandRenderer *wl_renderer;
+	struct wl_display *wl_display;
+	struct wl_surface *wl_surface;
+	struct wl_shm *wl_shm;
+	GstColorScheme *scheme;
+
+	/* Initialize fontconfig */
+	if (!FcInit()) {
+		g_printerr("Could not initialize fontconfig\n");
+		return FALSE;
+	}
+
+	/* Load fonts via Cairo font cache (no Display needed) */
+	cairo_font_cache = gst_cairo_font_cache_new();
+
+	if (!gst_cairo_font_cache_load_fonts(cairo_font_cache, fontstr, 0)) {
+		g_printerr("Cannot load font: %s\n", fontstr);
+		g_object_unref(cairo_font_cache);
+		cairo_font_cache = NULL;
+		return FALSE;
+	}
+
+	cell_w = gst_cairo_font_cache_get_char_width(cairo_font_cache);
+	cell_h = gst_cairo_font_cache_get_char_height(cairo_font_cache);
+
+	/* Create Wayland window */
+	wl_win = gst_wayland_window_new(cols, rows, cell_w, cell_h,
+		(gint)cfg_border_px);
+	if (wl_win == NULL) {
+		g_printerr("Cannot create Wayland window\n");
+		g_object_unref(cairo_font_cache);
+		cairo_font_cache = NULL;
+		return FALSE;
+	}
+	window = GST_WINDOW(wl_win);
+
+	/* Show window and set WM hints */
+	gst_window_set_wm_hints(window, cell_w, cell_h, (gint)cfg_border_px);
+	gst_window_show(window);
+
+	/* Create Wayland renderer */
+	wl_display = gst_wayland_window_get_display(wl_win);
+	wl_surface = gst_wayland_window_get_surface(wl_win);
+	wl_shm = gst_wayland_window_get_shm(wl_win);
+
+	wl_renderer = gst_wayland_renderer_new(
+		terminal, wl_display, wl_surface, wl_shm,
+		cairo_font_cache, (gint)cfg_border_px);
+	renderer = GST_RENDERER(wl_renderer);
+
+	/* Load colors */
+	scheme = gst_color_scheme_new("config");
+	gst_color_scheme_load_from_config(scheme, config);
+
+	if (!gst_wayland_renderer_load_colors(wl_renderer)) {
+		g_printerr("Cannot load colors\n");
+	}
+	g_object_unref(scheme);
+
+	/* Set initial win_mode */
+	set_win_mode(GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED
+		| GST_WIN_MODE_NUMLOCK);
+
+	return TRUE;
+}
+#endif /* GST_HAVE_WAYLAND */
+
 /* ===== Main ===== */
 
 int
@@ -714,19 +1005,10 @@ main(
 	GOptionContext *context;
 	GError *error = NULL;
 	GstConfig *config;
-	GstColorScheme *scheme;
 	gint cols;
 	gint rows;
-	gint cw;
-	gint ch;
 	const gchar *fontstr;
 	const gchar *shell_cmd;
-	gulong embed_id;
-	Display *display;
-	Window xid;
-	Visual *visual;
-	Colormap colormap;
-	gint screen;
 
 	/* Set locale for proper UTF-8 handling */
 	setlocale(LC_ALL, "");
@@ -751,7 +1033,11 @@ main(
 		"  1. $GST_MODULE_PATH (colon-separated)\n"
 		"  2. ~/.config/gst/modules/\n"
 		"  3. /etc/gst/modules/\n"
-		"  4. /usr/share/gst/modules/");
+		"  4. /usr/share/gst/modules/\n"
+		"\n"
+		"Backend selection:\n"
+		"  Auto-detected (Wayland if $WAYLAND_DISPLAY is set, X11 otherwise).\n"
+		"  Use --x11 or --wayland to force a specific backend.");
 
 	if (!g_option_context_parse(context, &argc, &argv, &error)) {
 		g_printerr("Error parsing options: %s\n", error->message);
@@ -772,6 +1058,23 @@ main(
 		g_print("%s", license_text);
 		return EXIT_SUCCESS;
 	}
+
+	/* Validate mutually exclusive flags */
+	if (opt_x11 && opt_wayland) {
+		g_printerr("Cannot specify both --x11 and --wayland\n");
+		return EXIT_FAILURE;
+	}
+
+	/* Detect backend */
+	backend = detect_backend();
+
+#ifndef GST_HAVE_WAYLAND
+	if (backend == GST_BACKEND_WAYLAND) {
+		g_printerr("Wayland support not compiled in. "
+			"Rebuild with BUILD_WAYLAND=1\n");
+		return EXIT_FAILURE;
+	}
+#endif
 
 	/* Step 0: Load configuration */
 	config = gst_config_get_default();
@@ -869,129 +1172,42 @@ main(
 	/* Step 2: Create selection */
 	selection = gst_selection_new(terminal);
 
-	/* Step 3: Initialize fontconfig and load fonts */
-	if (!FcInit()) {
-		g_printerr("Could not initialize fontconfig\n");
-		g_object_unref(terminal);
-		return EXIT_FAILURE;
-	}
-
-	font_cache = gst_font_cache_new();
-
-	/*
-	 * We need an X display to load fonts. Create the window first,
-	 * then use its display for font loading and renderer creation.
-	 */
-
-	/* Step 4: Create X11 window with estimated dimensions */
-	embed_id = 0;
-	if (opt_windowid != NULL) {
-		embed_id = strtoul(opt_windowid, NULL, 0);
-	}
-
-	/*
-	 * Bootstrap: we need cw/ch from fonts to size the window,
-	 * but we need a display to load fonts. Open a temporary display
-	 * connection for font loading, then use window's display.
-	 */
+	/* Step 3: Initialize backend (fonts, window, renderer) */
 	{
-		Display *tmp_dpy;
-		gint tmp_screen;
+		gboolean ok;
 
-		tmp_dpy = XOpenDisplay(NULL);
-		if (tmp_dpy == NULL) {
-			g_printerr("Cannot open X11 display\n");
-			g_object_unref(font_cache);
+		ok = FALSE;
+
+		switch (backend) {
+		case GST_BACKEND_X11:
+			ok = init_x11_backend(cols, rows, fontstr, config);
+			break;
+#ifdef GST_HAVE_WAYLAND
+		case GST_BACKEND_WAYLAND:
+			ok = init_wayland_backend(cols, rows, fontstr, config);
+			break;
+#endif
+		default:
+			g_printerr("Unknown backend type\n");
+			break;
+		}
+
+		if (!ok) {
 			g_object_unref(selection);
 			g_object_unref(terminal);
 			return EXIT_FAILURE;
 		}
-		tmp_screen = XDefaultScreen(tmp_dpy);
-
-		if (!gst_font_cache_load_fonts(font_cache, tmp_dpy, tmp_screen, fontstr, 0)) {
-			g_printerr("Cannot load font: %s\n", fontstr);
-			XCloseDisplay(tmp_dpy);
-			g_object_unref(font_cache);
-			g_object_unref(selection);
-			g_object_unref(terminal);
-			return EXIT_FAILURE;
-		}
-
-		/* Font cache now holds references to tmp_dpy's resources,
-		 * but we'll use the window's display instead. Unload and
-		 * reload after window creation.
-		 */
-		cw = gst_font_cache_get_char_width(font_cache);
-		ch = gst_font_cache_get_char_height(font_cache);
-
-		/* Unload from tmp display, we'll reload on window display */
-		gst_font_cache_unload_fonts(font_cache);
-		XCloseDisplay(tmp_dpy);
 	}
-
-	/* Step 5: Create X11 window with proper dimensions */
-	window = gst_x11_window_new(cols, rows, cw, ch,
-		(gint)cfg_border_px, embed_id);
-	if (window == NULL) {
-		g_printerr("Cannot create X11 window\n");
-		g_object_unref(font_cache);
-		g_object_unref(selection);
-		g_object_unref(terminal);
-		return EXIT_FAILURE;
-	}
-
-	/* Step 6: Reload fonts on window's display */
-	display = gst_x11_window_get_display(window);
-	screen = gst_x11_window_get_screen(window);
-
-	if (!gst_font_cache_load_fonts(font_cache, display, screen, fontstr, 0)) {
-		g_printerr("Cannot load font on window display: %s\n", fontstr);
-		g_object_unref(window);
-		g_object_unref(font_cache);
-		g_object_unref(selection);
-		g_object_unref(terminal);
-		return EXIT_FAILURE;
-	}
-
-	cw = gst_font_cache_get_char_width(font_cache);
-	ch = gst_font_cache_get_char_height(font_cache);
-
-	/* Step 7: Show window and set WM hints */
-	gst_x11_window_set_wm_hints(window, cw, ch, (gint)cfg_border_px);
-	gst_window_show(GST_WINDOW(window));
 
 	/* Apply title: CLI --title overrides config */
 	if (opt_title != NULL) {
-		gst_x11_window_set_title_x11(window, opt_title);
+		gst_window_set_title(window, opt_title);
 	} else {
-		gst_x11_window_set_title_x11(window,
+		gst_window_set_title(window,
 			gst_config_get_title(config));
 	}
 
-	/* Step 8: Create X11 renderer */
-	xid = gst_x11_window_get_xid(window);
-	visual = gst_x11_window_get_visual(window);
-	colormap = gst_x11_window_get_colormap(window);
-
-	renderer = gst_x11_renderer_new(
-		terminal, display, xid, visual, colormap,
-		screen, font_cache, (gint)cfg_border_px);
-
-	/* Step 9: Load colors from config */
-	scheme = gst_color_scheme_new("config");
-	gst_color_scheme_load_from_config(scheme, config);
-
-	if (!gst_x11_renderer_load_colors(renderer)) {
-		g_printerr("Cannot load colors\n");
-	}
-
-	g_object_unref(scheme);
-
-	/* Set initial win_mode */
-	gst_x11_renderer_set_win_mode(renderer,
-		GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED | GST_WIN_MODE_NUMLOCK);
-
-	/* Step 10: Create PTY and spawn shell */
+	/* Step 4: Create PTY and spawn shell */
 	pty = gst_pty_new();
 
 	if (!gst_pty_spawn(pty, shell_cmd, NULL, &error)) {
@@ -999,14 +1215,21 @@ main(
 		g_error_free(error);
 		g_object_unref(renderer);
 		g_object_unref(window);
-		g_object_unref(font_cache);
+		if (font_cache != NULL) {
+			g_object_unref(font_cache);
+		}
+#ifdef GST_HAVE_WAYLAND
+		if (cairo_font_cache != NULL) {
+			g_object_unref(cairo_font_cache);
+		}
+#endif
 		g_object_unref(pty);
 		g_object_unref(selection);
 		g_object_unref(terminal);
 		return EXIT_FAILURE;
 	}
 
-	/* Step 11: Connect all signals */
+	/* Step 5: Connect all signals */
 
 	/* PTY signals */
 	g_signal_connect(pty, "data-received",
@@ -1044,10 +1267,10 @@ main(
 	g_signal_connect(window, "selection-notify",
 		G_CALLBACK(on_selection_notify), NULL);
 
-	/* Step 12: Start X11 event watch */
-	gst_x11_window_start_event_watch(window);
+	/* Step 6: Start event watch */
+	gst_window_start_event_watch(window);
 
-	/* Step 12.5: Provide core objects to module manager and activate */
+	/* Step 7: Provide core objects to module manager and activate */
 	{
 		GstModuleManager *mod_mgr;
 
@@ -1061,7 +1284,7 @@ main(
 	g_unix_signal_add(SIGTERM, on_sigterm, NULL);
 	g_unix_signal_add(SIGINT, on_sigterm, NULL);
 
-	/* Step 13: Run main loop */
+	/* Step 8: Run main loop */
 	main_loop = g_main_loop_new(NULL, FALSE);
 	g_main_loop_run(main_loop);
 
@@ -1076,8 +1299,18 @@ main(
 	g_object_unref(renderer);
 	g_object_unref(pty);
 	g_object_unref(window);
-	gst_font_cache_unload_fonts(font_cache);
-	g_object_unref(font_cache);
+
+	if (font_cache != NULL) {
+		gst_font_cache_unload_fonts(font_cache);
+		g_object_unref(font_cache);
+	}
+#ifdef GST_HAVE_WAYLAND
+	if (cairo_font_cache != NULL) {
+		gst_cairo_font_cache_unload_fonts(cairo_font_cache);
+		g_object_unref(cairo_font_cache);
+	}
+#endif
+
 	g_object_unref(selection);
 	g_object_unref(terminal);
 

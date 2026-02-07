@@ -356,13 +356,268 @@ gst_x11_window_set_title_impl(
 	const gchar *title
 ){
 	GstX11Window *self;
+	Atom utf8;
 
 	self = GST_X11_WINDOW(window);
 
 	g_free(self->title);
 	self->title = g_strdup(title);
 
-	gst_x11_window_set_title_x11(self, title);
+	if (title == NULL) {
+		title = "GST Terminal";
+	}
+
+	utf8 = XInternAtom(self->display, "UTF8_STRING", False);
+
+	XStoreName(self->display, self->xwindow, title);
+
+	XChangeProperty(self->display, self->xwindow, self->netwmname,
+		utf8, 8, PropModeReplace,
+		(const guchar *)title, (gint)strlen(title));
+	XChangeProperty(self->display, self->xwindow, self->netwmiconname,
+		utf8, 8, PropModeReplace,
+		(const guchar *)title, (gint)strlen(title));
+}
+
+/*
+ * gst_x11_window_set_selection_impl:
+ *
+ * Sets the X11 selection (PRIMARY or CLIPBOARD) by taking ownership
+ * via XSetSelectionOwner and storing the text locally.
+ */
+static void
+gst_x11_window_set_selection_impl(
+	GstWindow   *window,
+	const gchar *text,
+	gboolean     is_clipboard
+){
+	GstX11Window *self;
+	Atom sel;
+
+	self = GST_X11_WINDOW(window);
+
+	if (is_clipboard) {
+		g_free(self->sel_clipboard);
+		self->sel_clipboard = g_strdup(text);
+		sel = XInternAtom(self->display, "CLIPBOARD", 0);
+	} else {
+		g_free(self->sel_primary);
+		self->sel_primary = g_strdup(text);
+		sel = XA_PRIMARY;
+	}
+
+	XSetSelectionOwner(self->display, sel, self->xwindow, CurrentTime);
+}
+
+/*
+ * gst_x11_window_paste_clipboard_impl:
+ *
+ * Requests the CLIPBOARD contents via XConvertSelection.
+ * Data arrives asynchronously via SelectionNotify event.
+ */
+static void
+gst_x11_window_paste_clipboard_impl(GstWindow *window)
+{
+	GstX11Window *self;
+	Atom clipboard;
+
+	self = GST_X11_WINDOW(window);
+
+	clipboard = XInternAtom(self->display, "CLIPBOARD", 0);
+	XConvertSelection(self->display, clipboard, self->xtarget,
+		clipboard, self->xwindow, CurrentTime);
+}
+
+/*
+ * gst_x11_window_paste_primary_impl:
+ *
+ * Requests the PRIMARY selection contents via XConvertSelection.
+ */
+static void
+gst_x11_window_paste_primary_impl(GstWindow *window)
+{
+	GstX11Window *self;
+
+	self = GST_X11_WINDOW(window);
+
+	XConvertSelection(self->display, XA_PRIMARY, self->xtarget,
+		XA_PRIMARY, self->xwindow, CurrentTime);
+}
+
+/*
+ * gst_x11_window_copy_to_clipboard_impl:
+ *
+ * Copies the primary selection text to the clipboard selection.
+ */
+static void
+gst_x11_window_copy_to_clipboard_impl(GstWindow *window)
+{
+	GstX11Window *self;
+
+	self = GST_X11_WINDOW(window);
+
+	if (self->sel_primary != NULL) {
+		g_free(self->sel_clipboard);
+		self->sel_clipboard = g_strdup(self->sel_primary);
+		gst_x11_window_set_selection_impl(window, self->sel_clipboard, TRUE);
+	}
+}
+
+/*
+ * gst_x11_window_bell_impl:
+ *
+ * Triggers an X11 bell by setting the urgency hint on the window.
+ */
+static void
+gst_x11_window_bell_impl(GstWindow *window)
+{
+	GstX11Window *self;
+	XWMHints *wm;
+
+	self = GST_X11_WINDOW(window);
+
+	/* Set urgency hint briefly */
+	wm = XGetWMHints(self->display, self->xwindow);
+	if (wm != NULL) {
+		wm->flags |= XUrgencyHint;
+		XSetWMHints(self->display, self->xwindow, wm);
+		XFree(wm);
+	}
+}
+
+/*
+ * gst_x11_window_set_opacity_impl:
+ *
+ * Sets the window opacity via the _NET_WM_WINDOW_OPACITY X11 property.
+ */
+static void
+gst_x11_window_set_opacity_impl(
+	GstWindow *window,
+	gdouble    opacity
+){
+	GstX11Window *self;
+	Atom atom;
+	guint32 val;
+
+	self = GST_X11_WINDOW(window);
+
+	atom = XInternAtom(self->display, "_NET_WM_WINDOW_OPACITY", False);
+
+	/* Clamp opacity to [0.0, 1.0] */
+	if (opacity < 0.0) {
+		opacity = 0.0;
+	} else if (opacity > 1.0) {
+		opacity = 1.0;
+	}
+
+	val = (guint32)(opacity * (gdouble)0xFFFFFFFF);
+
+	XChangeProperty(self->display, self->xwindow, atom,
+		XA_CARDINAL, 32, PropModeReplace,
+		(guchar *)&val, 1);
+	XSync(self->display, False);
+}
+
+/*
+ * gst_x11_window_set_pointer_motion_impl:
+ *
+ * Enables or disables pointer motion event reporting by
+ * modifying the X11 event mask.
+ */
+static void
+gst_x11_window_set_pointer_motion_impl(
+	GstWindow *window,
+	gboolean   enable
+){
+	GstX11Window *self;
+	XWindowAttributes attrs;
+	long event_mask;
+
+	self = GST_X11_WINDOW(window);
+
+	XGetWindowAttributes(self->display, self->xwindow, &attrs);
+	event_mask = attrs.your_event_mask;
+
+	if (enable) {
+		event_mask |= PointerMotionMask;
+	} else {
+		event_mask &= ~PointerMotionMask;
+		event_mask |= ButtonMotionMask;
+	}
+
+	XSelectInput(self->display, self->xwindow, event_mask);
+}
+
+/*
+ * gst_x11_window_set_wm_hints_impl:
+ *
+ * Sets window manager hints for size increments so the WM
+ * snaps to character cell boundaries.
+ */
+static void
+gst_x11_window_set_wm_hints_impl(
+	GstWindow *window,
+	gint       cw,
+	gint       ch,
+	gint       borderpx
+){
+	GstX11Window *self;
+	XSizeHints *sizeh;
+	XClassHint class_hint;
+	XWMHints wm;
+
+	self = GST_X11_WINDOW(window);
+
+	sizeh = XAllocSizeHints();
+
+	sizeh->flags = PSize | PResizeInc | PBaseSize | PMinSize;
+	sizeh->height = (gint)self->height;
+	sizeh->width = (gint)self->width;
+	sizeh->height_inc = ch;
+	sizeh->width_inc = cw;
+	sizeh->base_height = 2 * borderpx;
+	sizeh->base_width = 2 * borderpx;
+	sizeh->min_height = ch + 2 * borderpx;
+	sizeh->min_width = cw + 2 * borderpx;
+
+	memset(&wm, 0, sizeof(wm));
+	wm.flags = InputHint;
+	wm.input = 1;
+
+	class_hint.res_name = (char *)"gst";
+	class_hint.res_class = (char *)"Gst";
+
+	XSetWMProperties(self->display, self->xwindow, NULL, NULL,
+		NULL, 0, sizeh, &wm, &class_hint);
+	XFree(sizeh);
+}
+
+/*
+ * gst_x11_window_start_event_watch_impl:
+ *
+ * Starts watching for X11 events via GLib main loop by
+ * setting up a GIOChannel on the X11 connection fd.
+ */
+static void
+gst_x11_window_start_event_watch_impl(GstWindow *window)
+{
+	GstX11Window *self;
+	gint xfd;
+
+	self = GST_X11_WINDOW(window);
+
+	if (self->x11_watch_id != 0) {
+		return; /* Already watching */
+	}
+
+	xfd = ConnectionNumber(self->display);
+	self->x11_channel = g_io_channel_unix_new(xfd);
+	g_io_channel_set_encoding(self->x11_channel, NULL, NULL);
+	g_io_channel_set_buffered(self->x11_channel, FALSE);
+
+	self->x11_watch_id = g_io_add_watch(self->x11_channel,
+		G_IO_IN | G_IO_ERR | G_IO_HUP,
+		on_x11_event, self);
 }
 
 /* ===== GObject lifecycle ===== */
@@ -439,6 +694,15 @@ gst_x11_window_class_init(GstX11WindowClass *klass)
 	window_class->hide = gst_x11_window_hide_impl;
 	window_class->resize = gst_x11_window_resize_impl;
 	window_class->set_title = gst_x11_window_set_title_impl;
+	window_class->set_selection = gst_x11_window_set_selection_impl;
+	window_class->paste_clipboard = gst_x11_window_paste_clipboard_impl;
+	window_class->paste_primary = gst_x11_window_paste_primary_impl;
+	window_class->copy_to_clipboard = gst_x11_window_copy_to_clipboard_impl;
+	window_class->bell = gst_x11_window_bell_impl;
+	window_class->set_opacity = gst_x11_window_set_opacity_impl;
+	window_class->set_pointer_motion = gst_x11_window_set_pointer_motion_impl;
+	window_class->set_wm_hints = gst_x11_window_set_wm_hints_impl;
+	window_class->start_event_watch = gst_x11_window_start_event_watch_impl;
 }
 
 static void
@@ -572,7 +836,7 @@ gst_x11_window_new(
 	}
 
 	/* Set window title */
-	gst_x11_window_set_title_x11(self, self->title);
+	gst_x11_window_set_title_impl(GST_WINDOW(self), self->title);
 
 	return self;
 }
@@ -615,182 +879,4 @@ gst_x11_window_get_screen(GstX11Window *self)
 	g_return_val_if_fail(GST_IS_X11_WINDOW(self), 0);
 
 	return self->screen;
-}
-
-void
-gst_x11_window_set_wm_hints(
-	GstX11Window    *self,
-	gint            cw,
-	gint            ch,
-	gint            borderpx
-){
-	XSizeHints *sizeh;
-	XClassHint class_hint;
-	XWMHints wm;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	sizeh = XAllocSizeHints();
-
-	sizeh->flags = PSize | PResizeInc | PBaseSize | PMinSize;
-	sizeh->height = (gint)self->height;
-	sizeh->width = (gint)self->width;
-	sizeh->height_inc = ch;
-	sizeh->width_inc = cw;
-	sizeh->base_height = 2 * borderpx;
-	sizeh->base_width = 2 * borderpx;
-	sizeh->min_height = ch + 2 * borderpx;
-	sizeh->min_width = cw + 2 * borderpx;
-
-	memset(&wm, 0, sizeof(wm));
-	wm.flags = InputHint;
-	wm.input = 1;
-
-	class_hint.res_name = (char *)"gst";
-	class_hint.res_class = (char *)"Gst";
-
-	XSetWMProperties(self->display, self->xwindow, NULL, NULL,
-		NULL, 0, sizeh, &wm, &class_hint);
-	XFree(sizeh);
-}
-
-void
-gst_x11_window_set_title_x11(
-	GstX11Window    *self,
-	const gchar     *title
-){
-	Atom utf8;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	if (title == NULL) {
-		title = "GST Terminal";
-	}
-
-	utf8 = XInternAtom(self->display, "UTF8_STRING", False);
-
-	XStoreName(self->display, self->xwindow, title);
-
-	XChangeProperty(self->display, self->xwindow, self->netwmname,
-		utf8, 8, PropModeReplace,
-		(const guchar *)title, (gint)strlen(title));
-	XChangeProperty(self->display, self->xwindow, self->netwmiconname,
-		utf8, 8, PropModeReplace,
-		(const guchar *)title, (gint)strlen(title));
-}
-
-void
-gst_x11_window_bell(GstX11Window *self)
-{
-	XWMHints *wm;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	/* Set urgency hint briefly */
-	wm = XGetWMHints(self->display, self->xwindow);
-	if (wm != NULL) {
-		wm->flags |= XUrgencyHint;
-		XSetWMHints(self->display, self->xwindow, wm);
-		XFree(wm);
-	}
-}
-
-void
-gst_x11_window_set_pointer_motion(
-	GstX11Window    *self,
-	gboolean        enable
-){
-	XWindowAttributes attrs;
-	long event_mask;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	XGetWindowAttributes(self->display, self->xwindow, &attrs);
-	event_mask = attrs.your_event_mask;
-
-	if (enable) {
-		event_mask |= PointerMotionMask;
-	} else {
-		event_mask &= ~PointerMotionMask;
-		event_mask |= ButtonMotionMask;
-	}
-
-	XSelectInput(self->display, self->xwindow, event_mask);
-}
-
-void
-gst_x11_window_set_selection(
-	GstX11Window    *self,
-	const gchar     *text,
-	gboolean        is_clipboard
-){
-	Atom sel;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	if (is_clipboard) {
-		g_free(self->sel_clipboard);
-		self->sel_clipboard = g_strdup(text);
-		sel = XInternAtom(self->display, "CLIPBOARD", 0);
-	} else {
-		g_free(self->sel_primary);
-		self->sel_primary = g_strdup(text);
-		sel = XA_PRIMARY;
-	}
-
-	XSetSelectionOwner(self->display, sel, self->xwindow, CurrentTime);
-}
-
-void
-gst_x11_window_paste_primary(GstX11Window *self)
-{
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	XConvertSelection(self->display, XA_PRIMARY, self->xtarget,
-		XA_PRIMARY, self->xwindow, CurrentTime);
-}
-
-void
-gst_x11_window_paste_clipboard(GstX11Window *self)
-{
-	Atom clipboard;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	clipboard = XInternAtom(self->display, "CLIPBOARD", 0);
-	XConvertSelection(self->display, clipboard, self->xtarget,
-		clipboard, self->xwindow, CurrentTime);
-}
-
-void
-gst_x11_window_copy_to_clipboard(GstX11Window *self)
-{
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	if (self->sel_primary != NULL) {
-		g_free(self->sel_clipboard);
-		self->sel_clipboard = g_strdup(self->sel_primary);
-		gst_x11_window_set_selection(self, self->sel_clipboard, TRUE);
-	}
-}
-
-void
-gst_x11_window_start_event_watch(GstX11Window *self)
-{
-	gint xfd;
-
-	g_return_if_fail(GST_IS_X11_WINDOW(self));
-
-	if (self->x11_watch_id != 0) {
-		return; /* Already watching */
-	}
-
-	xfd = ConnectionNumber(self->display);
-	self->x11_channel = g_io_channel_unix_new(xfd);
-	g_io_channel_set_encoding(self->x11_channel, NULL, NULL);
-	g_io_channel_set_buffered(self->x11_channel, FALSE);
-
-	self->x11_watch_id = g_io_add_watch(self->x11_channel,
-		G_IO_IN | G_IO_ERR | G_IO_HUP,
-		on_x11_event, self);
 }

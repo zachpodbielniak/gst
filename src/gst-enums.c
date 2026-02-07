@@ -636,3 +636,29 @@ gst_font_style_get_type(void)
 
     return type;
 }
+
+/*
+ * gst_backend_type_get_type:
+ *
+ * Registers the GstBackendType enumeration type.
+ *
+ * Returns: the GType for GstBackendType
+ */
+GType
+gst_backend_type_get_type(void)
+{
+    static GType type = 0;
+
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            { GST_BACKEND_X11, "GST_BACKEND_X11", "x11" },
+            { GST_BACKEND_WAYLAND, "GST_BACKEND_WAYLAND", "wayland" },
+            { 0, NULL, NULL }
+        };
+
+        GType new_type = g_enum_register_static("GstBackendType", values);
+        g_once_init_leave(&type, new_type);
+    }
+
+    return type;
+}
