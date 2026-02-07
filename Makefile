@@ -19,8 +19,11 @@
 # Include configuration
 include config.mk
 
-# Check dependencies before anything else
+# Check dependencies before anything else (skip for targets that don't need them)
+SKIP_DEP_CHECK_TARGETS := install-deps help check-deps show-config clean clean-all
+ifeq ($(filter $(SKIP_DEP_CHECK_TARGETS),$(MAKECMDGOALS)),)
 $(foreach dep,$(DEPS_REQUIRED),$(call check_dep,$(dep)))
+endif
 
 # Source files - Library
 LIB_SRCS := \
