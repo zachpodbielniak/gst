@@ -23,7 +23,7 @@ g-ir-cpp-*.c
 
 # Debug files
 *.dSYM/
-core
+/core
 vgcore.*
 *.log
 
