@@ -59,6 +59,24 @@ struct _GstRenderContextOps
 	void (*draw_glyph)(GstRenderContext *ctx, GstRune rune,
 	                   GstFontStyle style, gint px, gint py,
 	                   guint fg_idx, guint bg_idx, guint16 attr);
+
+	/* Draw an RGBA image at the given pixel position.
+	 * @data: pixel data in row-major RGBA format (4 bytes per pixel)
+	 * @src_w: source image width in pixels
+	 * @src_h: source image height in pixels
+	 * @src_stride: bytes per row in source data (usually src_w * 4)
+	 * @dst_x: destination x position in pixels
+	 * @dst_y: destination y position in pixels
+	 * @dst_w: destination width in pixels (may differ from src_w for scaling)
+	 * @dst_h: destination height in pixels (may differ from src_h for scaling)
+	 *
+	 * May be NULL if the backend does not support image drawing.
+	 */
+	void (*draw_image)(GstRenderContext *ctx,
+	                   const guint8 *data,
+	                   gint src_w, gint src_h, gint src_stride,
+	                   gint dst_x, gint dst_y,
+	                   gint dst_w, gint dst_h);
 };
 
 /**
@@ -211,6 +229,39 @@ gst_render_context_draw_glyph(
 	guint16           attr
 ){
 	ctx->ops->draw_glyph(ctx, rune, style, px, py, fg_idx, bg_idx, attr);
+}
+
+/**
+ * gst_render_context_draw_image:
+ * @ctx: render context
+ * @data: RGBA pixel data (4 bytes per pixel, row-major)
+ * @src_w: source image width in pixels
+ * @src_h: source image height in pixels
+ * @src_stride: bytes per row in source data
+ * @dst_x: destination x in pixels
+ * @dst_y: destination y in pixels
+ * @dst_w: destination width in pixels
+ * @dst_h: destination height in pixels
+ *
+ * Draws an RGBA image. Returns silently if the backend does not
+ * support image drawing (draw_image is %NULL).
+ */
+static inline void
+gst_render_context_draw_image(
+	GstRenderContext *ctx,
+	const guint8     *data,
+	gint              src_w,
+	gint              src_h,
+	gint              src_stride,
+	gint              dst_x,
+	gint              dst_y,
+	gint              dst_w,
+	gint              dst_h
+){
+	if (ctx->ops->draw_image != NULL) {
+		ctx->ops->draw_image(ctx, data, src_w, src_h, src_stride,
+			dst_x, dst_y, dst_w, dst_h);
+	}
 }
 
 G_END_DECLS

@@ -88,7 +88,7 @@ endif
 
 # Required dependencies
 DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
-DEPS_REQUIRED += x11 xft fontconfig
+DEPS_REQUIRED += x11 xft xrender fontconfig
 DEPS_REQUIRED += yaml-0.1 json-glib-1.0
 
 # Optional Wayland dependencies

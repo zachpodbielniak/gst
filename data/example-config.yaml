@@ -105,6 +105,28 @@ modules:
   undercurl:
     enabled: true
 
+  clipboard:
+    enabled: true
+
+  font2:
+    enabled: true
+    fonts:
+      - "Symbols Nerd Font:pixelsize=14"
+      - "Noto Color Emoji:pixelsize=14"
+
   keyboard_select:
     enabled: true
     key: Ctrl+Shift+Escape
+    show_crosshair: true
+    highlight_color: "#ff8800"
+    highlight_alpha: 100
+    search_color: "#ffff00"
+    search_alpha: 150
+
+  kittygfx:
+    enabled: true
+    max_total_ram_mb: 256
+    max_single_image_mb: 64
+    max_placements: 4096
+    allow_file_transfer: false
+    allow_shm_transfer: false

@@ -534,6 +534,117 @@ gst_scrollback_module_init(GstScrollbackModule *self)
 	self->sig_id = 0;
 }
 
+/* ===== Public accessors for other modules ===== */
+
+/**
+ * gst_scrollback_module_get_count:
+ * @self: A #GstScrollbackModule
+ *
+ * Gets the total number of stored scrollback lines.
+ *
+ * Returns: the number of stored lines
+ */
+gint
+gst_scrollback_module_get_count(GstScrollbackModule *self)
+{
+	g_return_val_if_fail(GST_IS_SCROLLBACK_MODULE(self), 0);
+
+	return self->count;
+}
+
+/**
+ * gst_scrollback_module_get_scroll_offset:
+ * @self: A #GstScrollbackModule
+ *
+ * Gets the current scroll offset.
+ *
+ * Returns: the current scroll offset
+ */
+gint
+gst_scrollback_module_get_scroll_offset(GstScrollbackModule *self)
+{
+	g_return_val_if_fail(GST_IS_SCROLLBACK_MODULE(self), 0);
+
+	return self->scroll_offset;
+}
+
+/**
+ * gst_scrollback_module_set_scroll_offset:
+ * @self: A #GstScrollbackModule
+ * @offset: new scroll offset (clamped to [0, count])
+ *
+ * Sets the scroll position. Triggers a redraw if changed.
+ */
+void
+gst_scrollback_module_set_scroll_offset(
+	GstScrollbackModule *self,
+	gint                 offset
+){
+	gint old_offset;
+
+	g_return_if_fail(GST_IS_SCROLLBACK_MODULE(self));
+
+	old_offset = self->scroll_offset;
+
+	self->scroll_offset = offset;
+	if (self->scroll_offset < 0)
+	{
+		self->scroll_offset = 0;
+	}
+	if (self->scroll_offset > self->count)
+	{
+		self->scroll_offset = self->count;
+	}
+
+	if (self->scroll_offset != old_offset)
+	{
+		mark_all_dirty();
+	}
+}
+
+/**
+ * gst_scrollback_module_get_line_glyphs:
+ * @self: A #GstScrollbackModule
+ * @index: line index (0 = most recent, positive = older)
+ * @cols_out: (out): number of columns in the returned line
+ *
+ * Gets the glyph data for a scrollback line.
+ *
+ * Returns: (transfer none) (nullable): the glyph array, or %NULL
+ */
+const GstGlyph *
+gst_scrollback_module_get_line_glyphs(
+	GstScrollbackModule *self,
+	gint                 index,
+	gint                *cols_out
+){
+	gint ring_idx;
+
+	g_return_val_if_fail(GST_IS_SCROLLBACK_MODULE(self), NULL);
+	g_return_val_if_fail(cols_out != NULL, NULL);
+
+	if (index < 0 || index >= self->count)
+	{
+		*cols_out = 0;
+		return NULL;
+	}
+
+	/*
+	 * Index 0 = most recent line = head - 1 in ring.
+	 * Index N = N lines back from most recent.
+	 */
+	ring_idx = (self->head - 1 - index + self->capacity) % self->capacity;
+
+	if (self->lines[ring_idx].glyphs == NULL)
+	{
+		*cols_out = 0;
+		return NULL;
+	}
+
+	*cols_out = self->lines[ring_idx].cols;
+	return self->lines[ring_idx].glyphs;
+}
+
 G_MODULE_EXPORT GType
 gst_module_register(void)
 {

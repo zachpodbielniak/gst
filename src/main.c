@@ -552,6 +552,31 @@ zoom(GstAction action)
 	}
 #endif
 
+	/*
+	 * Reload spare fonts: zoom clears the ring cache when unloading
+	 * fonts, so spare fonts from the font2 module need reloading.
+	 */
+	{
+		GstConfig *zoom_cfg;
+		const gchar **fallbacks;
+
+		zoom_cfg = gst_config_get_default();
+		fallbacks = gst_config_get_font_fallbacks(zoom_cfg);
+		if (fallbacks != NULL && fallbacks[0] != NULL)
+		{
+			if (backend == GST_BACKEND_X11) {
+				gst_font_cache_load_spare_fonts(font_cache,
+					fallbacks);
+			}
+#ifdef GST_HAVE_WAYLAND
+			else if (backend == GST_BACKEND_WAYLAND) {
+				gst_cairo_font_cache_load_spare_fonts(
+					cairo_font_cache, fallbacks);
+			}
+#endif
+		}
+	}
+
 	/* Resize window to maintain same cols/rows */
 	cols = gst_terminal_get_cols(terminal);
 	rows = gst_terminal_get_rows(terminal);
@@ -619,6 +644,27 @@ on_terminal_bell(
 
 	/* Default bell behavior */
 	gst_window_bell(window);
+}
+
+/*
+ * Terminal escape string: dispatch to modules for APC/DCS/PM handling.
+ * Modules like kittygfx intercept APC sequences here.
+ */
+static void
+on_terminal_escape_string(
+	GstTerminal *term,
+	gchar        str_type,
+	const gchar *buf,
+	gulong       len,
+	gpointer     user_data
+){
+	GstModuleManager *mgr;
+
+	(void)user_data;
+
+	mgr = gst_module_manager_get_default();
+	gst_module_manager_dispatch_escape_string(mgr, str_type, buf,
+		(gsize)len, (gpointer)term);
 }
 
 /*
@@ -1495,6 +1541,8 @@ main(
 		G_CALLBACK(on_terminal_title_changed), NULL);
 	g_signal_connect(terminal, "bell",
 		G_CALLBACK(on_terminal_bell), NULL);
+	g_signal_connect(terminal, "escape-string",
+		G_CALLBACK(on_terminal_escape_string), NULL);
 
 	/* Window signals */
 	g_signal_connect(window, "key-press",
@@ -1528,6 +1576,18 @@ main(
 		mod_mgr = gst_module_manager_get_default();
 		gst_module_manager_set_terminal(mod_mgr, terminal);
 		gst_module_manager_set_window(mod_mgr, window);
+		gst_module_manager_set_backend_type(mod_mgr, (gint)backend);
+
+		/* Provide the appropriate font cache for modules (e.g. font2) */
+		if (backend == GST_BACKEND_X11) {
+			gst_module_manager_set_font_cache(mod_mgr, font_cache);
+		}
+#ifdef GST_HAVE_WAYLAND
+		else if (backend == GST_BACKEND_WAYLAND) {
+			gst_module_manager_set_font_cache(mod_mgr, cairo_font_cache);
+		}
+#endif
+
 		gst_module_manager_activate_all(mod_mgr);
 	}
 

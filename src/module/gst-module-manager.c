@@ -18,6 +18,7 @@
 #include "../interfaces/gst-url-handler.h"
 #include "../interfaces/gst-color-provider.h"
 #include "../interfaces/gst-font-provider.h"
+#include "../interfaces/gst-escape-handler.h"
 
 /**
  * SECTION:gst-module-manager
@@ -64,6 +65,8 @@ struct _GstModuleManager
 	gpointer     config;           /* weak ref to GstConfig */
 	gpointer     terminal;         /* weak ref to GstTerminal */
 	gpointer     window;           /* weak ref to GstWindow */
+	gpointer     font_cache;       /* weak ref to font cache (X11 or Cairo) */
+	gint         backend_type;     /* GstBackendType value */
 };
 
 G_DEFINE_TYPE(GstModuleManager, gst_module_manager, G_TYPE_OBJECT)
@@ -189,6 +192,12 @@ auto_register_hooks(
 		gst_module_manager_register_hook(self, module,
 			GST_HOOK_FONT_LOAD, priority);
 	}
+
+	if (g_type_is_a(module_type, GST_TYPE_ESCAPE_HANDLER))
+	{
+		gst_module_manager_register_hook(self, module,
+			GST_HOOK_ESCAPE_APC, priority);
+	}
 }
 
 /* ===== GObject lifecycle ===== */
@@ -228,6 +237,7 @@ gst_module_manager_dispose(GObject *object)
 	self->config = NULL;
 	self->terminal = NULL;
 	self->window = NULL;
+	self->font_cache = NULL;
 
 	G_OBJECT_CLASS(gst_module_manager_parent_class)->dispose(object);
 }
@@ -270,6 +280,8 @@ gst_module_manager_init(GstModuleManager *self)
 	self->config = NULL;
 	self->terminal = NULL;
 	self->window = NULL;
+	self->font_cache = NULL;
+	self->backend_type = 0;
 }
 
 /* ===== Public API: construction ===== */
@@ -936,6 +948,74 @@ gst_module_manager_get_window(GstModuleManager *self)
 	return self->window;
 }
 
+/* ===== Public API: font cache and backend type accessors ===== */
+
+/**
+ * gst_module_manager_set_font_cache:
+ * @self: A #GstModuleManager
+ * @font_cache: (type gpointer): The font cache instance (weak ref)
+ *
+ * Stores a weak reference to the font cache for module access.
+ */
+void
+gst_module_manager_set_font_cache(
+	GstModuleManager *self,
+	gpointer          font_cache
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->font_cache = font_cache;
+}
+
+/**
+ * gst_module_manager_get_font_cache:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored font cache reference.
+ *
+ * Returns: (transfer none) (nullable): The font cache, or %NULL
+ */
+gpointer
+gst_module_manager_get_font_cache(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
+
+	return self->font_cache;
+}
+
+/**
+ * gst_module_manager_set_backend_type:
+ * @self: A #GstModuleManager
+ * @backend_type: The active rendering backend type
+ *
+ * Stores the active backend type for module access.
+ */
+void
+gst_module_manager_set_backend_type(
+	GstModuleManager *self,
+	gint              backend_type
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->backend_type = backend_type;
+}
+
+/**
+ * gst_module_manager_get_backend_type:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored backend type.
+ *
+ * Returns: The #GstBackendType value
+ */
+gint
+gst_module_manager_get_backend_type(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), 0);
+
+	return self->backend_type;
+}
+
 /* ===== Public API: glyph transform dispatch ===== */
 
 /**
@@ -985,6 +1065,59 @@ gst_module_manager_dispatch_glyph_transform(
 				GST_GLYPH_TRANSFORMER(entry->module),
 				codepoint, render_context,
 				x, y, width, height))
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+/* ===== Public API: escape handler dispatch ===== */
+
+/**
+ * gst_module_manager_dispatch_escape_string:
+ * @self: A #GstModuleManager
+ * @str_type: The escape string type character ('_' for APC, 'P' for DCS)
+ * @buf: The raw string buffer
+ * @len: Length of the buffer in bytes
+ * @terminal: (type gpointer): The #GstTerminal that received the sequence
+ *
+ * Dispatches a string-type escape sequence to all #GstEscapeHandler
+ * modules registered at %GST_HOOK_ESCAPE_APC. Walks in priority order
+ * and stops at the first handler that returns %TRUE (consumed).
+ *
+ * Returns: %TRUE if a module consumed the escape sequence
+ */
+gboolean
+gst_module_manager_dispatch_escape_string(
+	GstModuleManager *self,
+	gchar             str_type,
+	const gchar      *buf,
+	gsize             len,
+	gpointer          terminal
+){
+	GList *l;
+
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
+
+	for (l = self->hooks[GST_HOOK_ESCAPE_APC]; l != NULL; l = l->next)
+	{
+		GstHookEntry *entry;
+
+		entry = (GstHookEntry *)l->data;
+
+		if (!gst_module_is_active(entry->module))
+		{
+			continue;
+		}
+
+		if (GST_IS_ESCAPE_HANDLER(entry->module))
+		{
+			if (gst_escape_handler_handle_escape_string(
+				GST_ESCAPE_HANDLER(entry->module),
+				str_type, buf, len, terminal))
 			{
 				return TRUE;
 			}

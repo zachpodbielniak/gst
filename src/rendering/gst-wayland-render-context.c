@@ -209,6 +209,97 @@ wl_draw_glyph(
 	cairo_show_glyphs(wctx->cr, &glyph, 1);
 }
 
+/*
+ * wl_draw_image:
+ *
+ * Draws an RGBA image using Cairo.
+ * Creates a temporary cairo image surface from the RGBA pixel data,
+ * applying RGBA->ARGB32 pre-multiplied conversion (Cairo requires
+ * pre-multiplied alpha in native byte order ARGB32 format).
+ * Uses cairo_scale for resizing if src and dst sizes differ.
+ */
+static void
+wl_draw_image(
+	GstRenderContext *ctx,
+	const guint8     *data,
+	gint              src_w,
+	gint              src_h,
+	gint              src_stride,
+	gint              dst_x,
+	gint              dst_y,
+	gint              dst_w,
+	gint              dst_h
+){
+	GstWaylandRenderContext *wctx;
+	cairo_surface_t *img_surface;
+	guint8 *argb_data;
+	gint cairo_stride;
+	gint row;
+	gint col;
+
+	wctx = (GstWaylandRenderContext *)ctx;
+
+	if (wctx->cr == NULL || data == NULL || src_w <= 0 || src_h <= 0) {
+		return;
+	}
+
+	/*
+	 * Create an ARGB32 surface. Cairo ARGB32 is pre-multiplied alpha
+	 * in native byte order: on little-endian that's BGRA in memory.
+	 */
+	cairo_stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, src_w);
+	argb_data = (guint8 *)g_malloc0((gsize)cairo_stride * (gsize)src_h);
+
+	for (row = 0; row < src_h; row++) {
+		for (col = 0; col < src_w; col++) {
+			guint8 r, g, b, a;
+			guint16 pr, pg, pb;
+			gint src_off;
+			gint dst_off;
+
+			src_off = row * src_stride + col * 4;
+			dst_off = row * cairo_stride + col * 4;
+
+			r = data[src_off + 0];
+			g = data[src_off + 1];
+			b = data[src_off + 2];
+			a = data[src_off + 3];
+
+			/* Pre-multiply */
+			pr = (guint16)((guint16)r * a + 127) / 255;
+			pg = (guint16)((guint16)g * a + 127) / 255;
+			pb = (guint16)((guint16)b * a + 127) / 255;
+
+			/* ARGB32 native byte order (little-endian: BGRA) */
+			argb_data[dst_off + 0] = (guint8)pb;
+			argb_data[dst_off + 1] = (guint8)pg;
+			argb_data[dst_off + 2] = (guint8)pr;
+			argb_data[dst_off + 3] = a;
+		}
+	}
+
+	img_surface = cairo_image_surface_create_for_data(
+		argb_data, CAIRO_FORMAT_ARGB32, src_w, src_h, cairo_stride);
+
+	cairo_save(wctx->cr);
+
+	/* Position and optionally scale */
+	cairo_translate(wctx->cr, (gdouble)dst_x, (gdouble)dst_y);
+	if (dst_w != src_w || dst_h != src_h) {
+		cairo_scale(wctx->cr,
+			(gdouble)dst_w / (gdouble)src_w,
+			(gdouble)dst_h / (gdouble)src_h);
+	}
+
+	cairo_set_source_surface(wctx->cr, img_surface, 0, 0);
+	cairo_paint(wctx->cr);
+
+	cairo_restore(wctx->cr);
+
+	cairo_surface_destroy(img_surface);
+	g_free(argb_data);
+}
+
 /* ===== Static vtable ===== */
 
 static const GstRenderContextOps wayland_ops = {
@@ -216,7 +307,8 @@ static const GstRenderContextOps wayland_ops = {
 	wl_fill_rect_rgba,
 	wl_fill_rect_fg,
 	wl_fill_rect_bg,
-	wl_draw_glyph
+	wl_draw_glyph,
+	wl_draw_image
 };
 
 /**

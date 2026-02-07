@@ -206,6 +206,24 @@ gst_font_cache_get_font_size(GstFontCache *self);
 gdouble
 gst_font_cache_get_default_font_size(GstFontCache *self);
 
+/**
+ * gst_font_cache_load_spare_fonts:
+ * @self: A #GstFontCache
+ * @fonts: (array zero-terminated=1): NULL-terminated array of font spec strings
+ *
+ * Pre-loads fallback fonts into the ring cache. For each font spec,
+ * loads 4 variants (normal, italic, bold, bold+italic) so they're
+ * tried before fontconfig's slow system-wide search. Ports st's
+ * xloadsparefonts().
+ *
+ * Returns: The number of fonts successfully loaded
+ */
+guint
+gst_font_cache_load_spare_fonts(
+	GstFontCache    *self,
+	const gchar    **fonts
+);
+
 G_END_DECLS
 
 #endif /* GST_FONT_CACHE_H */

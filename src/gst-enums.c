@@ -38,6 +38,7 @@ gst_hook_point_get_type(void)
             { GST_HOOK_ESCAPE_CSI, "GST_HOOK_ESCAPE_CSI", "escape-csi" },
             { GST_HOOK_ESCAPE_OSC, "GST_HOOK_ESCAPE_OSC", "escape-osc" },
             { GST_HOOK_ESCAPE_DCS, "GST_HOOK_ESCAPE_DCS", "escape-dcs" },
+            { GST_HOOK_ESCAPE_APC, "GST_HOOK_ESCAPE_APC", "escape-apc" },
             { GST_HOOK_EXTERNAL_PIPE, "GST_HOOK_EXTERNAL_PIPE", "external-pipe" },
             { GST_HOOK_PRE_RENDER, "GST_HOOK_PRE_RENDER", "pre-render" },
             { GST_HOOK_POST_RENDER, "GST_HOOK_POST_RENDER", "post-render" },

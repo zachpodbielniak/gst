@@ -634,3 +634,143 @@ gst_font_cache_get_default_font_size(GstFontCache *self)
 
 	return self->default_fontsize;
 }
+
+/**
+ * gst_font_cache_load_spare_fonts:
+ * @self: A #GstFontCache
+ * @fonts: (array zero-terminated=1): NULL-terminated array of font spec strings
+ *
+ * Pre-loads fallback fonts into the ring cache so they are searched
+ * before fontconfig's slow system-wide lookup. For each font spec,
+ * loads 4 style variants (normal, italic, bold, bold+italic) adjusted
+ * to the current primary font's pixel size. Ports st's xloadsparefonts().
+ *
+ * Returns: The number of font specs successfully loaded (up to 4 entries each)
+ */
+guint
+gst_font_cache_load_spare_fonts(
+	GstFontCache    *self,
+	const gchar    **fonts
+){
+	guint loaded;
+	guint fi;
+	gdouble fontsize;
+
+	g_return_val_if_fail(GST_IS_FONT_CACHE(self), 0);
+	g_return_val_if_fail(fonts != NULL, 0);
+
+	if (!self->fonts_loaded || self->display == NULL)
+	{
+		return 0;
+	}
+
+	loaded = 0;
+	fontsize = self->used_fontsize;
+
+	for (fi = 0; fonts[fi] != NULL; fi++)
+	{
+		FcPattern *pattern;
+		gint style;
+
+		/* Parse the spare font specification */
+		pattern = FcNameParse((const FcChar8 *)fonts[fi]);
+		if (pattern == NULL)
+		{
+			g_debug("font2: can't parse spare font '%s'", fonts[fi]);
+			continue;
+		}
+
+		/* Override pixel size to match primary font */
+		FcPatternDel(pattern, FC_PIXEL_SIZE);
+		FcPatternDel(pattern, FC_SIZE);
+		FcPatternAddDouble(pattern, FC_PIXEL_SIZE, fontsize);
+
+		/*
+		 * Load 4 variants: normal(0), italic(1), bold(2), bold+italic(3).
+		 * Each variant is added as a ring cache entry so lookup_glyph()
+		 * finds it before falling through to system-wide fontconfig search.
+		 */
+		for (style = 0; style < 4; style++)
+		{
+			FcPattern *variant_pat;
+			FcPattern *configured;
+			FcPattern *match;
+			FcResult result;
+			XftFont *xfont;
+
+			variant_pat = FcPatternDuplicate(pattern);
+			if (variant_pat == NULL)
+			{
+				continue;
+			}
+
+			/* Set slant */
+			FcPatternDel(variant_pat, FC_SLANT);
+			if (style == GST_FONT_STYLE_ITALIC ||
+			    style == GST_FONT_STYLE_BOLD_ITALIC)
+			{
+				FcPatternAddInteger(variant_pat, FC_SLANT,
+					FC_SLANT_ITALIC);
+			}
+			else
+			{
+				FcPatternAddInteger(variant_pat, FC_SLANT,
+					FC_SLANT_ROMAN);
+			}
+
+			/* Set weight */
+			FcPatternDel(variant_pat, FC_WEIGHT);
+			if (style == GST_FONT_STYLE_BOLD ||
+			    style == GST_FONT_STYLE_BOLD_ITALIC)
+			{
+				FcPatternAddInteger(variant_pat, FC_WEIGHT,
+					FC_WEIGHT_BOLD);
+			}
+
+			/* Configure and match */
+			configured = FcPatternDuplicate(variant_pat);
+			FcConfigSubstitute(NULL, configured, FcMatchPattern);
+			XftDefaultSubstitute(self->display, self->screen,
+				configured);
+
+			match = FcFontMatch(NULL, configured, &result);
+			FcPatternDestroy(configured);
+			FcPatternDestroy(variant_pat);
+
+			if (match == NULL)
+			{
+				continue;
+			}
+
+			/* Open the font and add to ring cache */
+			xfont = XftFontOpenPattern(self->display, match);
+			if (xfont == NULL)
+			{
+				FcPatternDestroy(match);
+				continue;
+			}
+
+			/* Grow ring cache if needed */
+			if (self->frc_len >= self->frc_cap)
+			{
+				self->frc_cap += 16;
+				self->frc = g_realloc(self->frc,
+					(gsize)self->frc_cap *
+					sizeof(GstFontRingEntry));
+			}
+
+			self->frc[self->frc_len].font = xfont;
+			self->frc[self->frc_len].flags = style;
+			self->frc[self->frc_len].unicodep = 0;
+			self->frc_len++;
+		}
+
+		FcPatternDestroy(pattern);
+		loaded++;
+	}
+
+	g_debug("font2: loaded %u spare font specs (%d ring cache entries)",
+		loaded, self->frc_len);
+
+	return loaded;
+}

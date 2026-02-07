@@ -127,6 +127,7 @@ enum {
 	SIGNAL_CONTENTS_CHANGED,
 	SIGNAL_RESPONSE,
 	SIGNAL_LINE_SCROLLED_OUT,
+	SIGNAL_ESCAPE_STRING,
 	N_SIGNALS
 };
 
@@ -254,6 +255,18 @@ gst_terminal_class_init(GstTerminalClass *klass)
 	    "line-scrolled-out", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
 	    0, NULL, NULL, NULL,
 	    G_TYPE_NONE, 2, G_TYPE_POINTER, G_TYPE_INT);
+
+	/*
+	 * escape-string signal: emitted when a string-type escape sequence
+	 * (APC, DCS, PM) is fully received and parsed.
+	 * Parameters: (gchar str_type, gchar *buf, gulong len)
+	 * Modules that handle escape strings (e.g. kitty graphics) connect
+	 * via module manager dispatch.
+	 */
+	signals[SIGNAL_ESCAPE_STRING] = g_signal_new(
+	    "escape-string", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	    0, NULL, NULL, NULL,
+	    G_TYPE_NONE, 3, G_TYPE_CHAR, G_TYPE_STRING, G_TYPE_ULONG);
 }
 
 static void
@@ -2069,9 +2082,13 @@ term_strhandle(GstTerminal *term)
 		break;
 
 	case 'P': /* DCS */
-	case '_': /* APC */
 	case '^': /* PM */
 		/* Ignored for now */
+		break;
+
+	case '_': /* APC - dispatch to modules (e.g. kitty graphics) */
+		g_signal_emit(term, signals[SIGNAL_ESCAPE_STRING], 0,
+			(gchar)'_', priv->str_buf, (gulong)priv->str_len);
 		break;
 
 	default:

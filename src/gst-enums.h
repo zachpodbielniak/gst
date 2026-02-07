@@ -41,6 +41,7 @@ typedef enum {
     GST_HOOK_ESCAPE_CSI,
     GST_HOOK_ESCAPE_OSC,
     GST_HOOK_ESCAPE_DCS,
+    GST_HOOK_ESCAPE_APC,
     GST_HOOK_EXTERNAL_PIPE,
 
     /* Rendering Hooks */

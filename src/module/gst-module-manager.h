@@ -205,6 +205,28 @@ gst_module_manager_dispatch_render_overlay(
 	gint              height
 );
 
+/**
+ * gst_module_manager_dispatch_escape_string:
+ * @self: A #GstModuleManager
+ * @str_type: The escape string type character ('_' for APC, 'P' for DCS)
+ * @buf: The raw string buffer
+ * @len: Length of the buffer in bytes
+ * @terminal: (type gpointer): The #GstTerminal that received the sequence
+ *
+ * Dispatches a string-type escape sequence to #GstEscapeHandler modules.
+ * Stops at the first handler that returns %TRUE (consumed).
+ *
+ * Returns: %TRUE if a module consumed the escape sequence
+ */
+gboolean
+gst_module_manager_dispatch_escape_string(
+	GstModuleManager *self,
+	gchar             str_type,
+	const gchar      *buf,
+	gsize             len,
+	gpointer          terminal
+);
+
 /* ===== Module Loading ===== */
 
 /**
@@ -294,6 +316,56 @@ gst_module_manager_set_window(
  */
 gpointer
 gst_module_manager_get_window(GstModuleManager *self);
+
+/**
+ * gst_module_manager_set_font_cache:
+ * @self: A #GstModuleManager
+ * @font_cache: (type gpointer): The font cache instance (weak ref)
+ *
+ * Stores a weak reference to the font cache (GstFontCache or
+ * GstCairoFontCache) so modules can access it.
+ */
+void
+gst_module_manager_set_font_cache(
+	GstModuleManager *self,
+	gpointer          font_cache
+);
+
+/**
+ * gst_module_manager_get_font_cache:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored font cache reference.
+ *
+ * Returns: (transfer none) (nullable): The font cache, or %NULL
+ */
+gpointer
+gst_module_manager_get_font_cache(GstModuleManager *self);
+
+/**
+ * gst_module_manager_set_backend_type:
+ * @self: A #GstModuleManager
+ * @backend_type: The active rendering backend type
+ *
+ * Stores the active backend type so modules can determine
+ * which font cache API to use.
+ */
+void
+gst_module_manager_set_backend_type(
+	GstModuleManager *self,
+	gint              backend_type
+);
+
+/**
+ * gst_module_manager_get_backend_type:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored backend type.
+ *
+ * Returns: The #GstBackendType value
+ */
+gint
+gst_module_manager_get_backend_type(GstModuleManager *self);
 
 /* ===== Glyph Transform Dispatch ===== */
 

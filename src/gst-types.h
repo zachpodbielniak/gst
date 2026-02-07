@@ -92,7 +92,7 @@ typedef guint32 GstColor;
 #define GST_MAX_COLS        (32767)
 #define GST_MAX_ROWS        (32767)
 #define GST_MAX_ESC_LEN     (128)
-#define GST_MAX_STR_LEN     (4096)
+#define GST_MAX_STR_LEN     (131072)
 #define GST_MAX_ARGS        (16)
 
 /*

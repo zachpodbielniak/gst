@@ -164,6 +164,25 @@ gst_cairo_font_cache_get_font_size(GstCairoFontCache *self);
 gdouble
 gst_cairo_font_cache_get_default_font_size(GstCairoFontCache *self);
 
+/**
+ * gst_cairo_font_cache_load_spare_fonts:
+ * @self: A #GstCairoFontCache
+ * @fonts: (array zero-terminated=1): NULL-terminated array of font spec strings
+ *
+ * Pre-loads fallback fonts into the ring cache so they are searched
+ * before fontconfig's slow system-wide lookup. For each font spec,
+ * loads 4 style variants (normal, italic, bold, bold+italic) adjusted
+ * to the current primary font's pixel size. Cairo counterpart of
+ * gst_font_cache_load_spare_fonts().
+ *
+ * Returns: The number of font specs successfully loaded
+ */
+guint
+gst_cairo_font_cache_load_spare_fonts(
+	GstCairoFontCache   *self,
+	const gchar        **fonts
+);
+
 G_END_DECLS
 
 #endif /* GST_CAIRO_FONT_CACHE_H */

@@ -11,6 +11,7 @@
 
 #include "gst-x11-render-context.h"
 #include <string.h>
+#include <X11/extensions/Xrender.h>
 
 /**
  * SECTION:gst-x11-render-context
@@ -177,6 +178,137 @@ x11_draw_glyph(
 	XftDrawGlyphFontSpec(ctx->xft_draw, fg_color, &spec, 1);
 }
 
+/*
+ * x11_draw_image:
+ *
+ * Draws an RGBA image using XRender compositing.
+ * Converts RGBA row data to an XImage (BGRA byte order for
+ * XRender's 32-bit visual), creates a temporary Pixmap + Picture,
+ * then composites onto the drawable with PictOpOver for alpha blending.
+ */
+static void
+x11_draw_image(
+	GstRenderContext *base,
+	const guint8     *data,
+	gint              src_w,
+	gint              src_h,
+	gint              src_stride,
+	gint              dst_x,
+	gint              dst_y,
+	gint              dst_w,
+	gint              dst_h
+){
+	GstX11RenderContext *ctx;
+	XImage *ximg;
+	Pixmap pix;
+	Picture pic_src;
+	Picture pic_dst;
+	XRenderPictFormat *fmt;
+	XRenderPictureAttributes pa;
+	XTransform xform;
+	guint8 *bgra;
+	gint row;
+	gint col;
+	gint idx_src;
+	gint idx_dst;
+
+	ctx = (GstX11RenderContext *)base;
+
+	if (data == NULL || src_w <= 0 || src_h <= 0) {
+		return;
+	}
+
+	/* Find a 32-bit ARGB format for XRender */
+	fmt = XRenderFindStandardFormat(ctx->display, PictStandardARGB32);
+	if (fmt == NULL) {
+		return;
+	}
+
+	/*
+	 * Convert RGBA to pre-multiplied BGRA (XRender expects pre-multiplied alpha
+	 * in ARGB32 format, which is BGRA byte order on little-endian).
+	 */
+	bgra = (guint8 *)g_malloc((gsize)src_w * (gsize)src_h * 4);
+	for (row = 0; row < src_h; row++) {
+		for (col = 0; col < src_w; col++) {
+			guint8 r, g, b, a;
+			guint16 pr, pg, pb;
+
+			idx_src = row * src_stride + col * 4;
+			idx_dst = (row * src_w + col) * 4;
+
+			r = data[idx_src + 0];
+			g = data[idx_src + 1];
+			b = data[idx_src + 2];
+			a = data[idx_src + 3];
+
+			/* Pre-multiply RGB by alpha */
+			pr = (guint16)((guint16)r * a + 127) / 255;
+			pg = (guint16)((guint16)g * a + 127) / 255;
+			pb = (guint16)((guint16)b * a + 127) / 255;
+
+			bgra[idx_dst + 0] = (guint8)pb;   /* B */
+			bgra[idx_dst + 1] = (guint8)pg;   /* G */
+			bgra[idx_dst + 2] = (guint8)pr;   /* R */
+			bgra[idx_dst + 3] = a;             /* A */
+		}
+	}
+
+	/* Create an XImage from the BGRA data */
+	ximg = XCreateImage(ctx->display, ctx->visual, 32, ZPixmap, 0,
+		(char *)bgra, (guint)src_w, (guint)src_h, 32, src_w * 4);
+	if (ximg == NULL) {
+		g_free(bgra);
+		return;
+	}
+
+	/* Create a temporary pixmap and put the image into it */
+	pix = XCreatePixmap(ctx->display, ctx->window,
+		(guint)src_w, (guint)src_h, 32);
+
+	XPutImage(ctx->display, pix, ctx->gc, ximg,
+		0, 0, 0, 0, (guint)src_w, (guint)src_h);
+
+	/* Create XRender pictures */
+	memset(&pa, 0, sizeof(pa));
+	pic_src = XRenderCreatePicture(ctx->display, pix, fmt, 0, &pa);
+
+	/* Apply scaling transform if src and dst sizes differ */
+	if (dst_w != src_w || dst_h != src_h) {
+		memset(&xform, 0, sizeof(xform));
+		xform.matrix[0][0] = XDoubleToFixed((double)src_w / (double)dst_w);
+		xform.matrix[1][1] = XDoubleToFixed((double)src_h / (double)dst_h);
+		xform.matrix[2][2] = XDoubleToFixed(1.0);
+		XRenderSetPictureTransform(ctx->display, pic_src, &xform);
+		XRenderSetPictureFilter(ctx->display, pic_src, "bilinear", NULL, 0);
+	}
+
+	/* Get the picture for the drawable */
+	fmt = XRenderFindVisualFormat(ctx->display, ctx->visual);
+	if (fmt != NULL) {
+		pic_dst = XRenderCreatePicture(ctx->display, ctx->drawable,
+			fmt, 0, &pa);
+
+		/* Composite with alpha blending */
+		XRenderComposite(ctx->display, PictOpOver,
+			pic_src, None, pic_dst,
+			0, 0,   /* src origin */
+			0, 0,   /* mask origin */
+			dst_x, dst_y,
+			(guint)dst_w, (guint)dst_h);
+
+		XRenderFreePicture(ctx->display, pic_dst);
+	}
+
+	XRenderFreePicture(ctx->display, pic_src);
+	XFreePixmap(ctx->display, pix);
+
+	/* XDestroyImage frees both the XImage struct and the data pointer */
+	ximg->data = NULL; /* prevent double-free, we free bgra ourselves */
+	XDestroyImage(ximg);
+	g_free(bgra);
+}
+
 /* ===== Static vtable ===== */
 
 static const GstRenderContextOps x11_ops = {
@@ -184,7 +316,8 @@ static const GstRenderContextOps x11_ops = {
 	x11_fill_rect_rgba,
 	x11_fill_rect_fg,
 	x11_fill_rect_bg,
-	x11_draw_glyph
+	x11_draw_glyph,
+	x11_draw_image
 };
 
 /* ===== Public API ===== */
