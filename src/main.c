@@ -159,6 +159,10 @@ static guint cfg_max_latency = 33;
 static gint cell_w = 0;
 static gint cell_h = 0;
 
+/* Mouse reporting deduplication: last reported cell coordinates */
+static gint last_mouse_col = -1;
+static gint last_mouse_row = -1;
+
 /* ===== Helper functions ===== */
 
 static gboolean
@@ -263,6 +267,73 @@ pixel_to_row(gint py)
 	if (y < 0) y = 0;
 	if (y >= rows) y = rows - 1;
 	return y;
+}
+
+/*
+ * mouse_report:
+ * @button: button code (0=left, 1=mid, 2=right, 3=release, 64=scrollup, 65=scrolldown)
+ * @col: terminal column (0-based)
+ * @row: terminal row (0-based)
+ * @release: TRUE if this is a button release event
+ * @motion: TRUE if this is a motion event
+ * @state: keyboard modifier mask
+ *
+ * Encodes a mouse event as an escape sequence and writes
+ * it to the PTY. Supports X10 classic encoding and SGR
+ * extended encoding formats.
+ */
+static void
+mouse_report(
+	gint        button,
+	gint        col,
+	gint        row,
+	gboolean    release,
+	gboolean    motion,
+	guint       state
+){
+	gchar buf[64];
+	gint len;
+	gint cb;
+
+	/* Build the button code with modifier bits */
+	cb = button;
+
+	/* Motion events add 32 to the button code */
+	if (motion) {
+		cb += 32;
+	}
+
+	/* Encode modifier keys into the button code */
+	if (state & ShiftMask)   cb += 4;
+	if (state & Mod1Mask)    cb += 8;
+	if (state & ControlMask) cb += 16;
+
+	if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_SGR)) {
+		/*
+		 * SGR extended mode: ESC [ < Cb ; Cx ; Cy M/m
+		 * Coordinates are 1-based decimal, no offset.
+		 * 'M' for press/motion, 'm' for release.
+		 */
+		len = g_snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c",
+			cb, col + 1, row + 1, release ? 'm' : 'M');
+	} else {
+		/*
+		 * Classic X10/normal mode: ESC [ M Cb Cx Cy
+		 * Cb has +32 offset, coordinates have +33 offset.
+		 * Coordinates are clamped to 223 (255 - 32) max.
+		 */
+		if (col > 222) col = 222;
+		if (row > 222) row = 222;
+		buf[0] = '\033';
+		buf[1] = '[';
+		buf[2] = 'M';
+		buf[3] = (gchar)(32 + cb);
+		buf[4] = (gchar)(33 + col);
+		buf[5] = (gchar)(33 + row);
+		len = 6;
+	}
+
+	gst_pty_write(pty, buf, (gssize)len);
 }
 
 /*
@@ -380,6 +451,116 @@ schedule_draw(void)
 	if (draw_timeout_id == 0) {
 		draw_timeout_id = g_timeout_add(delay, do_draw, NULL);
 	}
+}
+
+/*
+ * zoom:
+ * @action: GST_ACTION_ZOOM_IN, GST_ACTION_ZOOM_OUT, or GST_ACTION_ZOOM_RESET
+ *
+ * Adjusts the font size by +/- 1px (or resets to default),
+ * reloads the font cache, updates cell dimensions, and
+ * triggers a window resize to maintain the same terminal
+ * columns and rows at the new cell size.
+ */
+static void
+zoom(GstAction action)
+{
+	gdouble cur_size;
+	gdouble def_size;
+	gdouble new_size;
+	const gchar *fontstr;
+	gint cols;
+	gint rows;
+	gint new_w;
+	gint new_h;
+
+	/* Get current and default font sizes from the active font cache */
+	if (backend == GST_BACKEND_X11) {
+		cur_size = gst_font_cache_get_font_size(font_cache);
+		def_size = gst_font_cache_get_default_font_size(font_cache);
+		fontstr = gst_font_cache_get_used_font(font_cache);
+	}
+#ifdef GST_HAVE_WAYLAND
+	else if (backend == GST_BACKEND_WAYLAND) {
+		cur_size = gst_cairo_font_cache_get_font_size(cairo_font_cache);
+		def_size = gst_cairo_font_cache_get_default_font_size(cairo_font_cache);
+		fontstr = gst_cairo_font_cache_get_used_font(cairo_font_cache);
+	}
+#endif
+	else {
+		return;
+	}
+
+	/* Calculate the new font size */
+	switch (action) {
+	case GST_ACTION_ZOOM_IN:
+		new_size = cur_size + 1.0;
+		break;
+	case GST_ACTION_ZOOM_OUT:
+		new_size = cur_size - 1.0;
+		if (new_size < 1.0) new_size = 1.0;
+		break;
+	case GST_ACTION_ZOOM_RESET:
+		new_size = def_size;
+		break;
+	default:
+		return;
+	}
+
+	/* No change needed */
+	if (new_size == cur_size) {
+		return;
+	}
+
+	/* Reload fonts at the new size */
+	if (backend == GST_BACKEND_X11) {
+		GstX11Window *x11_win;
+		Display *display;
+		gint screen;
+
+		x11_win = GST_X11_WINDOW(window);
+		display = gst_x11_window_get_display(x11_win);
+		screen = gst_x11_window_get_screen(x11_win);
+
+		gst_font_cache_unload_fonts(font_cache);
+		if (!gst_font_cache_load_fonts(font_cache, display, screen,
+			fontstr, new_size))
+		{
+			/* Reload at old size as fallback */
+			gst_font_cache_load_fonts(font_cache, display, screen,
+				fontstr, cur_size);
+			return;
+		}
+
+		cell_w = gst_font_cache_get_char_width(font_cache);
+		cell_h = gst_font_cache_get_char_height(font_cache);
+	}
+#ifdef GST_HAVE_WAYLAND
+	else if (backend == GST_BACKEND_WAYLAND) {
+		gst_cairo_font_cache_unload_fonts(cairo_font_cache);
+		if (!gst_cairo_font_cache_load_fonts(cairo_font_cache,
+			fontstr, new_size))
+		{
+			/* Reload at old size as fallback */
+			gst_cairo_font_cache_load_fonts(cairo_font_cache,
+				fontstr, cur_size);
+			return;
+		}
+
+		cell_w = gst_cairo_font_cache_get_char_width(cairo_font_cache);
+		cell_h = gst_cairo_font_cache_get_char_height(cairo_font_cache);
+	}
+#endif
+
+	/* Resize window to maintain same cols/rows */
+	cols = gst_terminal_get_cols(terminal);
+	rows = gst_terminal_get_rows(terminal);
+	new_w = cols * cell_w + 2 * (gint)cfg_border_px;
+	new_h = rows * cell_h + 2 * (gint)cfg_border_px;
+
+	/* Update WM size hints and request resize */
+	gst_window_set_wm_hints(window, cell_w, cell_h, (gint)cfg_border_px);
+	gst_window_resize(window, (guint)new_w, (guint)new_h);
 }
 
 /* ===== Signal handlers ===== */
@@ -505,7 +686,7 @@ on_key_press(
 	case GST_ACTION_ZOOM_IN:
 	case GST_ACTION_ZOOM_OUT:
 	case GST_ACTION_ZOOM_RESET:
-		/* TODO: implement zoom (requires font cache resize) */
+		zoom(action);
 		return;
 	default:
 		break;
@@ -548,7 +729,23 @@ on_button_press(
 
 	/* If mouse reporting is enabled, send to app */
 	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
-		/* TODO: mouse reporting protocol (SGR, X10, etc.) */
+		gint btn;
+
+		/* Map X11 button numbers to protocol button codes */
+		switch (button) {
+		case Button1: btn = 0;  break;
+		case Button2: btn = 1;  break;
+		case Button3: btn = 2;  break;
+		case Button4: btn = 64; break; /* scroll up */
+		case Button5: btn = 65; break; /* scroll down */
+		default:      return;
+		}
+
+		/* Reset motion dedup on press */
+		last_mouse_col = -1;
+		last_mouse_row = -1;
+
+		mouse_report(btn, col, row, FALSE, FALSE, state);
 		return;
 	}
 
@@ -582,6 +779,37 @@ on_button_release(
 	gchar *sel_text;
 
 	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
+		gint btn;
+
+		col = pixel_to_col(px);
+		row = pixel_to_row(py);
+
+		/* X10 mode does not report release events */
+		if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_X10)) {
+			return;
+		}
+
+		/* Map X11 button numbers to protocol button codes */
+		switch (button) {
+		case Button1: btn = 0; break;
+		case Button2: btn = 1; break;
+		case Button3: btn = 2; break;
+		default:      return;
+		}
+
+		/* Reset motion dedup on release */
+		last_mouse_col = -1;
+		last_mouse_row = -1;
+
+		/*
+		 * SGR mode preserves the actual button in release.
+		 * Classic mode sends button=3 (generic release).
+		 */
+		if (!gst_terminal_has_mode(terminal, GST_MODE_MOUSE_SGR)) {
+			btn = 3;
+		}
+
+		mouse_report(btn, col, row, TRUE, FALSE, state);
 		return;
 	}
 
@@ -617,6 +845,36 @@ on_motion_notify(
 	gint row;
 
 	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
+		gint btn;
+
+		col = pixel_to_col(px);
+		row = pixel_to_row(py);
+
+		/* Deduplicate: skip if same cell as last report */
+		if (col == last_mouse_col && row == last_mouse_row) {
+			return;
+		}
+		last_mouse_col = col;
+		last_mouse_row = row;
+
+		/*
+		 * GST_MODE_MOUSE_MANY (1003): report all motion.
+		 * GST_MODE_MOUSE_BTN (1002) / GST_MODE_MOUSE_MOTION:
+		 *   only report motion while a button is held.
+		 */
+		if (!gst_terminal_has_mode(terminal, GST_MODE_MOUSE_MANY)) {
+			if (!(state & (Button1Mask | Button2Mask | Button3Mask))) {
+				return;
+			}
+		}
+
+		/* Determine held button for the motion report */
+		if (state & Button1Mask)      btn = 0;
+		else if (state & Button2Mask) btn = 1;
+		else if (state & Button3Mask) btn = 2;
+		else                          btn = 0;
+
+		mouse_report(btn, col, row, FALSE, TRUE, state);
 		return;
 	}
 

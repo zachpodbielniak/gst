@@ -1030,6 +1030,12 @@ wl_renderer_resize_impl(
 	self->win_w = (gint)width;
 	self->win_h = (gint)height;
 
+	/* Refresh cell dimensions from font cache (picks up zoom changes) */
+	if (self->font_cache != NULL) {
+		self->cw = gst_cairo_font_cache_get_char_width(self->font_cache);
+		self->ch = gst_cairo_font_cache_get_char_height(self->font_cache);
+	}
+
 	term = gst_renderer_get_terminal(renderer);
 	if (term != NULL) {
 		gst_terminal_get_size(term, &cols, &rows);
