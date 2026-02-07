@@ -93,7 +93,7 @@ DEPS_REQUIRED += yaml-0.1 json-glib-1.0
 
 # Optional Wayland dependencies
 ifeq ($(BUILD_WAYLAND),1)
-DEPS_WAYLAND := wayland-client wayland-cursor xkbcommon cairo cairo-ft
+DEPS_WAYLAND := wayland-client wayland-cursor xkbcommon cairo cairo-ft libdecor-0
 WAYLAND_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_WAYLAND) 2>/dev/null && echo 1 || echo 0)
 else
 WAYLAND_AVAILABLE := 0
@@ -111,8 +111,8 @@ LDFLAGS_DEPS := $(shell $(PKG_CONFIG) --libs $(DEPS_REQUIRED) 2>/dev/null)
 # Add Wayland flags if available
 ifeq ($(WAYLAND_AVAILABLE),1)
     CFLAGS_BASE += -DGST_HAVE_WAYLAND=1
-    CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags wayland-client wayland-cursor xkbcommon cairo cairo-ft 2>/dev/null)
-    LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs wayland-client wayland-cursor xkbcommon cairo cairo-ft 2>/dev/null)
+    CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags wayland-client wayland-cursor xkbcommon cairo cairo-ft libdecor-0 2>/dev/null)
+    LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs wayland-client wayland-cursor xkbcommon cairo cairo-ft libdecor-0 2>/dev/null)
     LDFLAGS_DEPS += -lrt
 endif
 
@@ -167,3 +167,17 @@ show-config:
 	@echo "BUILD_MODULES:$(BUILD_MODULES)"
 	@echo "BUILD_WAYLAND:$(BUILD_WAYLAND)"
 	@echo "WAYLAND_AVAILABLE:$(WAYLAND_AVAILABLE)"
+
+# Fedora package names for dependencies
+FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
+FEDORA_DEPS_REQUIRED := glib2-devel libX11-devel libXft-devel \
+    fontconfig-devel libyaml-devel json-glib-devel
+FEDORA_DEPS_GIR := gobject-introspection-devel
+FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-devel
+
+# Install build dependencies (Fedora/dnf)
+.PHONY: install-deps
+install-deps:
+	sudo dnf install -y $(FEDORA_DEPS_TOOLS) $(FEDORA_DEPS_REQUIRED) \
+		$(if $(filter 1,$(BUILD_GIR)),$(FEDORA_DEPS_GIR)) \
+		$(if $(filter 1,$(BUILD_WAYLAND)),$(FEDORA_DEPS_WAYLAND))

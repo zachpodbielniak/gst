@@ -4,7 +4,8 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Wayland-based terminal window using xdg-shell, wl_keyboard + xkbcommon
+ * Wayland-based terminal window using libdecor for universal window
+ * decorations (CSD on GNOME, SSD on wlroots), wl_keyboard + xkbcommon
  * for input, wl_data_device for clipboard, and GLib main loop integration.
  * Implements all GstWindow virtual methods for the Wayland backend.
  */
@@ -22,10 +23,10 @@
 #include <xkbcommon/xkbcommon.h>
 
 /* Generated Wayland protocol implementations */
-#include "../wayland-protocols/xdg-shell-client-protocol.h"
-#include "../wayland-protocols/xdg-shell-protocol.c"
 #include "../wayland-protocols/primary-selection-unstable-v1-client-protocol.h"
 #include "../wayland-protocols/primary-selection-unstable-v1-protocol.c"
+
+#include <libdecor.h>
 
 /*
  * X11 modifier mask compatibility.
@@ -47,12 +48,13 @@
 /**
  * SECTION:gst-wayland-window
  * @title: GstWaylandWindow
- * @short_description: Wayland window with xdg-shell and xkbcommon
+ * @short_description: Wayland window with libdecor and xkbcommon
  *
  * #GstWaylandWindow implements #GstWindow for the Wayland display
- * protocol. Uses xdg-shell for window management, xkbcommon for
- * keyboard input processing, wl_data_device for clipboard, and
- * zwp_primary_selection for primary selection.
+ * protocol. Uses libdecor for window management and universal
+ * decorations, xkbcommon for keyboard input processing,
+ * wl_data_device for clipboard, and zwp_primary_selection for
+ * primary selection.
  */
 
 struct _GstWaylandWindow
@@ -67,11 +69,10 @@ struct _GstWaylandWindow
 	struct wl_seat       *seat;
 	struct wl_output     *output;
 
-	/* xdg-shell objects */
-	struct xdg_wm_base   *xdg_wm_base;
-	struct wl_surface     *surface;
-	struct xdg_surface    *xdg_surface;
-	struct xdg_toplevel   *xdg_toplevel;
+	/* Window surface and libdecor */
+	struct wl_surface      *surface;
+	struct libdecor        *libdecor_ctx;
+	struct libdecor_frame  *libdecor_frame;
 
 	/* Keyboard input */
 	struct wl_keyboard   *keyboard;
@@ -140,53 +141,68 @@ static const struct wl_registry_listener registry_listener = {
 	registry_global_remove
 };
 
-/* ===== xdg_wm_base callbacks ===== */
+/* ===== libdecor callbacks ===== */
 
+/*
+ * libdecor_error_cb:
+ * @context: the libdecor context
+ * @error: the error code
+ * @message: human-readable error message
+ *
+ * Called when libdecor encounters a fatal error. Logs the
+ * error message as a warning.
+ */
 static void
-xdg_wm_base_ping(
-	void                *data,
-	struct xdg_wm_base  *wm_base,
-	uint32_t            serial
+libdecor_error_cb(
+	struct libdecor *context,
+	enum libdecor_error error,
+	const char *message
 ){
-	xdg_wm_base_pong(wm_base, serial);
+	(void)context;
+	(void)error;
+	g_warning("wayland: libdecor error: %s", message);
 }
 
-static const struct xdg_wm_base_listener xdg_wm_base_listener = {
-	xdg_wm_base_ping
+static struct libdecor_interface libdecor_iface = {
+	libdecor_error_cb
 };
 
-/* ===== xdg_surface callbacks ===== */
-
+/*
+ * frame_configure_cb:
+ * @frame: the libdecor frame
+ * @configuration: the new configuration from the compositor
+ * @user_data: the GstWaylandWindow
+ *
+ * Called when the compositor configures the window (resize, state change).
+ * Extracts content size, commits the decoration state, and emits
+ * the "configure" signal so the renderer can reallocate buffers.
+ */
 static void
-xdg_surface_configure(
-	void               *data,
-	struct xdg_surface *xdg_surf,
-	uint32_t           serial
+frame_configure_cb(
+	struct libdecor_frame         *frame,
+	struct libdecor_configuration *configuration,
+	void                          *user_data
 ){
 	GstWaylandWindow *self;
+	struct libdecor_state *state;
+	int width;
+	int height;
 
-	self = (GstWaylandWindow *)data;
-	xdg_surface_ack_configure(xdg_surf, serial);
-	self->configured = TRUE;
-}
+	self = (GstWaylandWindow *)user_data;
+	width = 0;
+	height = 0;
 
-static const struct xdg_surface_listener xdg_surface_listener = {
-	xdg_surface_configure
-};
+	/* Extract content size; returns false if compositor didn't specify */
+	if (!libdecor_configuration_get_content_size(configuration,
+	    frame, &width, &height)) {
+		/* Use our stored size for initial configure */
+		width = self->win_w;
+		height = self->win_h;
+	}
 
-/* ===== xdg_toplevel callbacks ===== */
-
-static void
-xdg_toplevel_configure(
-	void                  *data,
-	struct xdg_toplevel   *toplevel,
-	int32_t               width,
-	int32_t               height,
-	struct wl_array       *states
-){
-	GstWaylandWindow *self;
-
-	self = (GstWaylandWindow *)data;
+	state = libdecor_state_new(width, height);
+	libdecor_frame_commit(frame, state, configuration);
+	libdecor_state_free(state);
 
 	if (width > 0 && height > 0) {
 		if (width != self->win_w || height != self->win_h) {
@@ -196,44 +212,76 @@ xdg_toplevel_configure(
 				(guint)width, (guint)height);
 		}
 	}
+
+	self->configured = TRUE;
 }
 
+/*
+ * frame_close_cb:
+ * @frame: the libdecor frame
+ * @user_data: the GstWaylandWindow
+ *
+ * Called when the user clicks the close button. Marks the
+ * window closed and emits "close-request".
+ */
 static void
-xdg_toplevel_close(
-	void                *data,
-	struct xdg_toplevel *toplevel
+frame_close_cb(
+	struct libdecor_frame *frame,
+	void                  *user_data
 ){
 	GstWaylandWindow *self;
 
-	self = (GstWaylandWindow *)data;
+	(void)frame;
+	self = (GstWaylandWindow *)user_data;
 	self->closed = TRUE;
 	g_signal_emit_by_name(self, "close-request");
 }
 
+/*
+ * frame_commit_cb:
+ * @frame: the libdecor frame
+ * @user_data: the GstWaylandWindow
+ *
+ * Called by libdecor when it needs the application to commit
+ * the wl_surface, so decoration subsurfaces stay in sync.
+ */
 static void
-xdg_toplevel_configure_bounds(
-	void                *data,
-	struct xdg_toplevel *toplevel,
-	int32_t              width,
-	int32_t              height
+frame_commit_cb(
+	struct libdecor_frame *frame,
+	void                  *user_data
 ){
-	(void)data; (void)toplevel; (void)width; (void)height;
+	GstWaylandWindow *self;
+
+	(void)frame;
+	self = (GstWaylandWindow *)user_data;
+	wl_surface_commit(self->surface);
 }
 
+/*
+ * frame_dismiss_popup_cb:
+ * @frame: the libdecor frame
+ * @seat_name: the seat that triggered the popup
+ * @user_data: the GstWaylandWindow
+ *
+ * Called when a decoration popup should be dismissed. No-op
+ * since GST has no popups.
+ */
 static void
-xdg_toplevel_wm_capabilities(
-	void                *data,
-	struct xdg_toplevel *toplevel,
-	struct wl_array     *capabilities
+frame_dismiss_popup_cb(
+	struct libdecor_frame *frame,
+	const char            *seat_name,
+	void                  *user_data
 ){
-	(void)data; (void)toplevel; (void)capabilities;
+	(void)frame;
+	(void)seat_name;
+	(void)user_data;
 }
 
-static const struct xdg_toplevel_listener xdg_toplevel_listener = {
-	xdg_toplevel_configure,
-	xdg_toplevel_close,
-	xdg_toplevel_configure_bounds,
-	xdg_toplevel_wm_capabilities
+static struct libdecor_frame_interface frame_iface = {
+	frame_configure_cb,
+	frame_close_cb,
+	frame_commit_cb,
+	frame_dismiss_popup_cb
 };
 
 /* ===== Keyboard callbacks ===== */
@@ -977,12 +1025,6 @@ registry_global(
 			reg, id, &wl_seat_interface,
 			MIN(version, 5));
 		wl_seat_add_listener(self->seat, &seat_listener, self);
-	} else if (g_strcmp0(interface, xdg_wm_base_interface.name) == 0) {
-		self->xdg_wm_base = (struct xdg_wm_base *)wl_registry_bind(
-			reg, id, &xdg_wm_base_interface,
-			MIN(version, 2));
-		xdg_wm_base_add_listener(self->xdg_wm_base,
-			&xdg_wm_base_listener, self);
 	} else if (g_strcmp0(interface,
 	    wl_data_device_manager_interface.name) == 0) {
 		self->data_device_manager =
@@ -1238,8 +1280,8 @@ gst_wayland_window_set_title_impl(
 	GstWaylandWindow *self;
 
 	self = GST_WAYLAND_WINDOW(window);
-	if (self->xdg_toplevel != NULL && title != NULL) {
-		xdg_toplevel_set_title(self->xdg_toplevel, title);
+	if (self->libdecor_frame != NULL && title != NULL) {
+		libdecor_frame_set_title(self->libdecor_frame, title);
 	}
 }
 
@@ -1425,9 +1467,9 @@ gst_wayland_window_set_wm_hints_impl(
 	self->ch = ch;
 	self->borderpx = borderpx;
 
-	/* Set minimum size in xdg_toplevel */
-	if (self->xdg_toplevel != NULL) {
-		xdg_toplevel_set_min_size(self->xdg_toplevel,
+	/* Set minimum content size in libdecor frame */
+	if (self->libdecor_frame != NULL) {
+		libdecor_frame_set_min_content_size(self->libdecor_frame,
 			cw + 2 * borderpx, ch + 2 * borderpx);
 	}
 }
@@ -1455,6 +1497,10 @@ wayland_event_cb(
 			g_warning("wayland: dispatch error");
 			g_signal_emit_by_name(self, "close-request");
 			return G_SOURCE_REMOVE;
+		}
+		/* Process libdecor plugin events (decoration redraws, etc.) */
+		if (self->libdecor_ctx != NULL) {
+			libdecor_dispatch(self->libdecor_ctx, 0);
 		}
 	}
 
@@ -1576,22 +1622,18 @@ gst_wayland_window_dispose(GObject *object)
 		self->xkb_ctx = NULL;
 	}
 
-	if (self->xdg_toplevel != NULL) {
-		xdg_toplevel_destroy(self->xdg_toplevel);
-		self->xdg_toplevel = NULL;
+	if (self->libdecor_frame != NULL) {
+		libdecor_frame_unref(self->libdecor_frame);
+		self->libdecor_frame = NULL;
 	}
-	if (self->xdg_surface != NULL) {
-		xdg_surface_destroy(self->xdg_surface);
-		self->xdg_surface = NULL;
+	if (self->libdecor_ctx != NULL) {
+		libdecor_unref(self->libdecor_ctx);
+		self->libdecor_ctx = NULL;
 	}
+
 	if (self->surface != NULL) {
 		wl_surface_destroy(self->surface);
 		self->surface = NULL;
-	}
-
-	if (self->xdg_wm_base != NULL) {
-		xdg_wm_base_destroy(self->xdg_wm_base);
-		self->xdg_wm_base = NULL;
 	}
 	if (self->seat != NULL) {
 		wl_seat_destroy(self->seat);
@@ -1655,10 +1697,9 @@ gst_wayland_window_init(GstWaylandWindow *self)
 	self->shm = NULL;
 	self->seat = NULL;
 	self->output = NULL;
-	self->xdg_wm_base = NULL;
 	self->surface = NULL;
-	self->xdg_surface = NULL;
-	self->xdg_toplevel = NULL;
+	self->libdecor_ctx = NULL;
+	self->libdecor_frame = NULL;
 	self->keyboard = NULL;
 	self->xkb_ctx = NULL;
 	self->xkb_keymap = NULL;
@@ -1709,8 +1750,8 @@ gst_wayland_window_init(GstWaylandWindow *self)
  * @borderpx: border padding
  *
  * Creates a new Wayland window. Connects to the compositor,
- * binds globals, creates an xdg_toplevel surface, and sets
- * up input devices.
+ * binds globals, creates a libdecor-managed surface with
+ * universal decorations, and sets up input devices.
  *
  * Returns: (transfer full) (nullable): new window, or NULL
  */
@@ -1763,18 +1804,21 @@ gst_wayland_window_new(
 		g_object_unref(self);
 		return NULL;
 	}
-	if (self->xdg_wm_base == NULL) {
-		g_warning("wayland: no xdg_wm_base");
-		g_object_unref(self);
-		return NULL;
-	}
 	if (self->shm == NULL) {
 		g_warning("wayland: no wl_shm");
 		g_object_unref(self);
 		return NULL;
 	}
 
-	/* Create surface and xdg objects */
+	/* Initialize libdecor (handles xdg-shell + decorations internally) */
+	self->libdecor_ctx = libdecor_new(self->display, &libdecor_iface);
+	if (self->libdecor_ctx == NULL) {
+		g_warning("wayland: failed to initialize libdecor");
+		g_object_unref(self);
+		return NULL;
+	}
+
+	/* Create wl_surface */
 	self->surface = wl_compositor_create_surface(self->compositor);
 	if (self->surface == NULL) {
 		g_warning("wayland: failed to create surface");
@@ -1782,18 +1826,21 @@ gst_wayland_window_new(
 		return NULL;
 	}
 
-	self->xdg_surface = xdg_wm_base_get_xdg_surface(
-		self->xdg_wm_base, self->surface);
-	xdg_surface_add_listener(self->xdg_surface,
-		&xdg_surface_listener, self);
+	/* Decorate the surface with libdecor */
+	self->libdecor_frame = libdecor_decorate(
+		self->libdecor_ctx, self->surface,
+		&frame_iface, self);
+	if (self->libdecor_frame == NULL) {
+		g_warning("wayland: failed to create libdecor frame");
+		g_object_unref(self);
+		return NULL;
+	}
 
-	self->xdg_toplevel = xdg_surface_get_toplevel(self->xdg_surface);
-	xdg_toplevel_add_listener(self->xdg_toplevel,
-		&xdg_toplevel_listener, self);
-	xdg_toplevel_set_title(self->xdg_toplevel, "GST Terminal");
-	xdg_toplevel_set_app_id(self->xdg_toplevel, "gst");
-	xdg_toplevel_set_min_size(self->xdg_toplevel,
+	libdecor_frame_set_title(self->libdecor_frame, "GST Terminal");
+	libdecor_frame_set_app_id(self->libdecor_frame, "gst");
+	libdecor_frame_set_min_content_size(self->libdecor_frame,
 		cw + 2 * borderpx, ch + 2 * borderpx);
+	libdecor_frame_map(self->libdecor_frame);
 
 	/* Set up data device for clipboard */
 	if (self->data_device_manager != NULL && self->seat != NULL) {

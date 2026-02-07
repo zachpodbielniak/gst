@@ -4,9 +4,10 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Wayland-based terminal window using xdg-shell for window management,
- * wl_keyboard + xkbcommon for input, and wl_data_device for clipboard.
- * Integrates with GLib main loop via g_io_add_watch() on the Wayland fd.
+ * Wayland-based terminal window using libdecor for universal window
+ * decorations (CSD on GNOME, SSD on wlroots), wl_keyboard + xkbcommon
+ * for input, and wl_data_device for clipboard. Integrates with GLib
+ * main loop via g_io_add_watch() on the Wayland fd.
  */
 
 #ifndef GST_WAYLAND_WINDOW_H
@@ -33,7 +34,7 @@ G_DECLARE_FINAL_TYPE(GstWaylandWindow, gst_wayland_window,
  *
  * Creates a new Wayland window sized to fit the given terminal
  * dimensions plus border padding. Connects to the Wayland
- * compositor and creates an xdg_toplevel surface.
+ * compositor and creates a libdecor-managed decorated surface.
  *
  * Returns: (transfer full) (nullable): A new #GstWaylandWindow,
  *   or NULL on failure
