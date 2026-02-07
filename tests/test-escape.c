@@ -1245,6 +1245,122 @@ test_response_dsr(void)
 	g_object_unref(term);
 }
 
+/* ===== Stale CSI Args Tests ===== */
+
+/*
+ * Test that CSI args are zeroed between parses.
+ * After DECSTBM sets args[1]=24, a bare CUP (CSI H) should
+ * move to (0,0), not (0,23) from a stale arg.
+ */
+static void
+test_csi_stale_args_cleared(void)
+{
+	GstTerminal *term;
+	GstCursor *cursor;
+
+	term = gst_terminal_new(80, 24);
+
+	/* Set scroll region: CSI 1;24 r -> args[0]=1, args[1]=24 */
+	term_write(term, "\033[1;24r");
+
+	/* Move cursor somewhere visible */
+	gst_terminal_set_cursor_pos(term, 10, 10);
+
+	/* CSI H with no args = cursor home (0,0) */
+	term_write(term, "\033[H");
+
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->x, ==, 0);
+	g_assert_cmpint(cursor->y, ==, 0);
+
+	g_object_unref(term);
+}
+
+/*
+ * Test stale args after multi-arg SGR then CUP.
+ * A long SGR like CSI 1;31;42m fills multiple arg slots.
+ * A subsequent CSI H should still move to (0,0).
+ */
+static void
+test_csi_stale_args_cup_after_sgr(void)
+{
+	GstTerminal *term;
+	GstCursor *cursor;
+
+	term = gst_terminal_new(80, 24);
+
+	/* SGR with 3 args: bold, red fg, green bg */
+	term_write(term, "\033[1;31;42m");
+
+	/* Move cursor somewhere */
+	gst_terminal_set_cursor_pos(term, 20, 15);
+
+	/* CUP with no args = home */
+	term_write(term, "\033[H");
+
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->x, ==, 0);
+	g_assert_cmpint(cursor->y, ==, 0);
+
+	g_object_unref(term);
+}
+
+/*
+ * Test DECSTBM with no args resets scroll region.
+ * CSI 5;20 r sets region, then CSI r should reset to full screen.
+ */
+static void
+test_decstbm_no_args_reset(void)
+{
+	GstTerminal *term;
+	gint top;
+	gint bot;
+
+	term = gst_terminal_new(80, 24);
+
+	/* Set a restricted scroll region */
+	term_write(term, "\033[5;20r");
+
+	gst_terminal_get_scroll_region(term, &top, &bot);
+	g_assert_cmpint(top, ==, 4);
+	g_assert_cmpint(bot, ==, 19);
+
+	/* Reset scroll region with bare CSI r */
+	term_write(term, "\033[r");
+
+	gst_terminal_get_scroll_region(term, &top, &bot);
+	g_assert_cmpint(top, ==, 0);
+	g_assert_cmpint(bot, ==, 23);
+
+	g_object_unref(term);
+}
+
+/*
+ * Test UTF-8 sequence split across two write() calls.
+ * The 2-byte UTF-8 character U+00E9 (e-acute, 0xC3 0xA9) is
+ * split: first byte in one write, second byte in the next.
+ */
+static void
+test_utf8_split_boundary(void)
+{
+	GstTerminal *term;
+	GstRune rune;
+
+	term = gst_terminal_new(80, 24);
+
+	/* Write first byte of U+00E9 (0xC3) */
+	gst_terminal_write(term, "\xC3", 1);
+
+	/* Write second byte (0xA9) */
+	gst_terminal_write(term, "\xA9", 1);
+
+	/* The combined bytes should produce U+00E9 at (0,0) */
+	rune = glyph_at(term, 0, 0);
+	g_assert_cmpuint(rune, ==, 0x00E9);
+
+	g_object_unref(term);
+}
+
 int
 main(
 	int     argc,
@@ -1319,6 +1435,16 @@ main(
 	/* Response */
 	g_test_add_func("/escape/response/da", test_response_da);
 	g_test_add_func("/escape/response/dsr", test_response_dsr);
+
+	/* Stale CSI Args */
+	g_test_add_func("/escape/csi/stale-args-cleared", test_csi_stale_args_cleared);
+	g_test_add_func("/escape/csi/stale-args-cup-after-sgr", test_csi_stale_args_cup_after_sgr);
+
+	/* DECSTBM Reset */
+	g_test_add_func("/escape/csi/decstbm-no-args-reset", test_decstbm_no_args_reset);
+
+	/* UTF-8 Split Boundary */
+	g_test_add_func("/escape/utf8/split-boundary", test_utf8_split_boundary);
 
 	return g_test_run();
 }

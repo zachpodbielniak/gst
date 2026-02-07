@@ -101,6 +101,10 @@ struct _GstTerminalPrivate {
 	/* Last printed character (for REP) */
 	GstRune lastc;
 
+	/* Partial UTF-8 sequence saved across write() boundaries */
+	guchar utf8_partial[4];
+	gint utf8_partial_len;
+
 	/* Dirty tracking */
 	gboolean dirty;
 };
@@ -626,6 +630,9 @@ gst_terminal_move_to(
 	priv->cursor.state &= ~GST_CURSOR_STATE_WRAPNEXT;
 	priv->cursor.x = CLAMP(x, 0, priv->cols - 1);
 	priv->cursor.y = CLAMP(y, miny, maxy);
+
+	g_debug("MOVE_TO: req=(%d,%d) actual=(%d,%d) bounds=[%d..%d]",
+	    x, y, priv->cursor.x, priv->cursor.y, miny, maxy);
 }
 
 /**
@@ -643,6 +650,9 @@ gst_terminal_move_to_abs(
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
+
+	g_debug("MOVE_TO_ABS: x=%d y=%d origin=%d",
+	    x, y, (priv->cursor.state & GST_CURSOR_STATE_ORIGIN) ? 1 : 0);
 
 	gst_terminal_move_to(term, x,
 	    y + ((priv->cursor.state & GST_CURSOR_STATE_ORIGIN) ? priv->scroll_top : 0));
@@ -1156,6 +1166,8 @@ gst_terminal_set_scroll_region(
 
 	priv->scroll_top = top;
 	priv->scroll_bot = bottom;
+
+	g_debug("SCROLL_REGION: top=%d bot=%d", top, bottom);
 }
 
 void
@@ -1698,6 +1710,7 @@ term_csiparse(GstTerminal *term)
 
 	priv->csi_nargs = 0;
 	priv->csi_priv = 0;
+	memset(priv->csi_args, 0, sizeof(priv->csi_args));
 
 	if (*p == '?') {
 		priv->csi_priv = 1;
@@ -1732,9 +1745,17 @@ term_csihandle(GstTerminal *term)
 {
 	GstTerminalPrivate *priv = term->priv;
 	gchar cmd;
+	gint i;
 
 	term_csiparse(term);
 	cmd = priv->csi_mode[0];
+
+	g_debug("CSI: buf='%.*s' cmd='%c' priv=%d nargs=%d",
+	    (gint)priv->csi_len, priv->csi_buf,
+	    cmd, priv->csi_priv, priv->csi_nargs);
+	for (i = 0; i < priv->csi_nargs; i++) {
+		g_debug("  CSI arg[%d]=%d", i, priv->csi_args[i]);
+	}
 
 	switch (cmd) {
 	case '@': /* ICH - Insert Character */
@@ -1938,7 +1959,12 @@ term_csihandle(GstTerminal *term)
 	case 'r': /* DECSTBM - Set Scrolling Region */
 		{
 			gint top, bot;
-			if (priv->csi_nargs == 0) {
+			/*
+			 * CSI r with no numeric args resets scroll region.
+			 * strtol always produces nargs >= 1 (parsing the
+			 * final byte yields 0), so check args[0] == 0 too.
+			 */
+			if (priv->csi_nargs <= 1 && priv->csi_args[0] == 0) {
 				top = 0;
 				bot = priv->rows - 1;
 			} else {
@@ -2224,6 +2250,8 @@ term_eschandle(
 ){
 	GstTerminalPrivate *priv = term->priv;
 
+	g_debug("ESC: char=0x%02x '%c'", c, (c >= 0x20 && c < 0x7f) ? c : '.');
+
 	switch (c) {
 	case '[': /* CSI */
 		priv->esc |= GST_ESC_CSI;
@@ -2340,6 +2368,8 @@ term_controlcode(
     guchar      c
 ){
 	GstTerminalPrivate *priv = term->priv;
+
+	g_debug("CTRL: 0x%02x", c);
 
 	switch (c) {
 	case '\t': /* TAB (HT) */
@@ -2614,6 +2644,8 @@ gst_terminal_write(
 	const gchar *p;
 	const gchar *end;
 	GstTerminalPrivate *priv;
+	gchar combined[4 + 1];  /* max partial (4) + at least 1 new byte */
+	gssize combined_len;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	g_return_if_fail(data != NULL);
@@ -2628,6 +2660,65 @@ gst_terminal_write(
 	p = data;
 	end = data + len;
 
+	/*
+	 * If we have a partial UTF-8 sequence from the previous write(),
+	 * try to complete it with bytes from the new data.
+	 */
+	if (priv->utf8_partial_len > 0 && (priv->mode & GST_MODE_UTF8) && len > 0) {
+		gint need;
+		gunichar rune;
+
+		/* Copy saved partial bytes into combined buffer */
+		memcpy(combined, priv->utf8_partial, (gsize)priv->utf8_partial_len);
+		combined_len = priv->utf8_partial_len;
+
+		/*
+		 * Append new bytes one at a time until we get a valid char
+		 * or hit an error. Max UTF-8 sequence is 4 bytes total.
+		 */
+		need = 4 - priv->utf8_partial_len;
+		if (need > (end - p)) {
+			need = (gint)(end - p);
+		}
+		memcpy(combined + combined_len, p, (gsize)need);
+		combined_len += need;
+
+		rune = g_utf8_get_char_validated(combined, combined_len);
+		if (rune == (gunichar)-2) {
+			/*
+			 * Still incomplete - save everything and wait for
+			 * more data. This handles the rare case of a 4-byte
+			 * sequence split across 3+ writes.
+			 */
+			memcpy(priv->utf8_partial, combined, (gsize)combined_len);
+			priv->utf8_partial_len = (gint)combined_len;
+			g_signal_emit(term, signals[SIGNAL_CONTENTS_CHANGED], 0);
+			return;
+		}
+
+		priv->utf8_partial_len = 0;
+
+		if (rune != (gunichar)-1) {
+			/* Successfully decoded the combined sequence */
+			gint char_len = (gint)(g_utf8_next_char(combined) - combined);
+			gint new_consumed = char_len - (gint)(combined_len - need);
+
+			gst_terminal_put_char(term, (GstRune)rune);
+
+			/*
+			 * Advance p past the new bytes that were consumed
+			 * to complete this character.
+			 */
+			if (new_consumed < 0) {
+				new_consumed = 0;
+			}
+			p += new_consumed;
+		} else {
+			/* Invalid sequence, discard the partial bytes */
+			/* p stays where it was, process normally */
+		}
+	}
+
 	while (p < end) {
 		gunichar rune;
 
@@ -2635,7 +2726,15 @@ gst_terminal_write(
 			/* Decode UTF-8 */
 			rune = g_utf8_get_char_validated(p, end - p);
 			if (rune == (gunichar)-2) {
-				/* Incomplete sequence at end of buffer */
+				/*
+				 * Incomplete sequence at end of buffer.
+				 * Save the partial bytes for the next write().
+				 */
+				gint remaining = (gint)(end - p);
+				if (remaining > 0 && remaining <= 4) {
+					memcpy(priv->utf8_partial, p, (gsize)remaining);
+					priv->utf8_partial_len = remaining;
+				}
 				break;
 			}
 			if (rune == (gunichar)-1) {
