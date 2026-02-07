@@ -1361,6 +1361,161 @@ test_utf8_split_boundary(void)
 	g_object_unref(term);
 }
 
+/* ===== Stale CSI Mode Tests ===== */
+
+/*
+ * Test that csi_mode is not stale across sequences.
+ * After CSI ?25h (DECSET with '?' prefix), a subsequent CSI 5;1H
+ * (CUP) should move to row 4, col 0 -- not be misinterpreted
+ * due to leftover '?' in csi_mode from the prior sequence.
+ */
+static void
+test_csi_mode_not_stale(void)
+{
+	GstTerminal *term;
+	GstCursor *cursor;
+
+	term = gst_terminal_new(80, 24);
+
+	/* DECSET: show cursor (CSI ? 25 h) - uses '?' prefix */
+	term_write(term, "\033[?25h");
+
+	/* CUP: move to row 5, col 1 (1-based) => (0, 4) 0-based */
+	term_write(term, "\033[5;1H");
+
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->y, ==, 4);
+	g_assert_cmpint(cursor->x, ==, 0);
+
+	g_object_unref(term);
+}
+
+/* ===== Cursor Restore WRAPNEXT Tests ===== */
+
+/*
+ * Test that cursor restore preserves WRAPNEXT state.
+ * When a character is written at the last column, WRAPNEXT is set.
+ * Saving and restoring the cursor should preserve this flag, so
+ * the next character triggers a wrap-newline instead of overwriting.
+ */
+static void
+test_cursor_restore_preserves_wrapnext(void)
+{
+	GstTerminal *term;
+	GstCursor *cursor;
+
+	term = gst_terminal_new(10, 5);
+
+	/* Move to last column (col 9 on 10-col terminal) */
+	gst_terminal_set_cursor_pos(term, 9, 0);
+
+	/* Write a character to trigger WRAPNEXT */
+	term_write(term, "X");
+
+	/* Verify WRAPNEXT is set */
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_true(cursor->state & GST_CURSOR_STATE_WRAPNEXT);
+
+	/* Save cursor (ESC 7 = DECSC) */
+	term_write(term, "\0337");
+
+	/* Move somewhere else to disturb cursor */
+	gst_terminal_set_cursor_pos(term, 0, 2);
+
+	/* Restore cursor (ESC 8 = DECRC) */
+	term_write(term, "\0338");
+
+	/* WRAPNEXT should still be set after restore */
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_true(cursor->state & GST_CURSOR_STATE_WRAPNEXT);
+
+	/*
+	 * Writing another character should wrap to the next line,
+	 * not overwrite the last column.
+	 */
+	term_write(term, "Y");
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->y, ==, 1);
+	g_assert_cmpuint(glyph_at(term, 0, 1), ==, 'Y');
+
+	g_object_unref(term);
+}
+
+/* ===== REP (CSI b) Tests ===== */
+
+/*
+ * Test that REP wraps at line end.
+ * Position cursor near end of line and repeat a character past the
+ * last column. Characters should wrap to the next line instead of
+ * being dropped or silently clamped.
+ */
+static void
+test_rep_wraps_at_line_end(void)
+{
+	GstTerminal *term;
+	GstCursor *cursor;
+
+	term = gst_terminal_new(10, 5);
+
+	/* Move to col 7 (3 columns before end on 10-col terminal) */
+	gst_terminal_set_cursor_pos(term, 7, 0);
+
+	/* Write 'A' to set lastc */
+	term_write(term, "A");
+
+	/* REP 5 times: cursor at col 8, need to place 5 more 'A's */
+	/* cols 8,9 fill row 0, then wrap: cols 0,1,2 on row 1 */
+	term_write(term, "\033[5b");
+
+	/* Row 0 should have 'A' at cols 8 and 9 */
+	g_assert_cmpuint(glyph_at(term, 8, 0), ==, 'A');
+	g_assert_cmpuint(glyph_at(term, 9, 0), ==, 'A');
+
+	/* Row 1 should have 'A' at cols 0, 1, 2 (3 remaining) */
+	g_assert_cmpuint(glyph_at(term, 0, 1), ==, 'A');
+	g_assert_cmpuint(glyph_at(term, 1, 1), ==, 'A');
+	g_assert_cmpuint(glyph_at(term, 2, 1), ==, 'A');
+
+	/* Cursor should be on row 1 */
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->y, ==, 1);
+
+	g_object_unref(term);
+}
+
+/*
+ * Test that REP sets WRAPNEXT when filling the last column.
+ * This verifies REP uses put_char behavior rather than raw
+ * setchar + manual cursor advance.
+ */
+static void
+test_rep_uses_put_char_behavior(void)
+{
+	GstTerminal *term;
+	GstCursor *cursor;
+
+	term = gst_terminal_new(10, 5);
+
+	/* Move to col 8 (second to last on 10-col terminal) */
+	gst_terminal_set_cursor_pos(term, 8, 0);
+
+	/* Write 'B' to set lastc, cursor now at col 9 */
+	term_write(term, "B");
+
+	/* REP 1 time: writes 'B' at col 9 (last column) */
+	term_write(term, "\033[1b");
+
+	/* WRAPNEXT should be set since we filled the last column */
+	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->x, ==, 9);
+	g_assert_true(cursor->state & GST_CURSOR_STATE_WRAPNEXT);
+
+	/* The character at col 9 should be 'B' */
+	g_assert_cmpuint(glyph_at(term, 9, 0), ==, 'B');
+
+	g_object_unref(term);
+}
+
 int
 main(
 	int     argc,
@@ -1445,6 +1600,19 @@ main(
 
 	/* UTF-8 Split Boundary */
 	g_test_add_func("/escape/utf8/split-boundary", test_utf8_split_boundary);
+
+	/* Stale CSI Mode */
+	g_test_add_func("/escape/csi/mode-not-stale", test_csi_mode_not_stale);
+
+	/* Cursor Restore WRAPNEXT */
+	g_test_add_func("/escape/cursor/restore-preserves-wrapnext",
+	    test_cursor_restore_preserves_wrapnext);
+
+	/* REP (CSI b) */
+	g_test_add_func("/escape/csi/rep-wraps-at-line-end",
+	    test_rep_wraps_at_line_end);
+	g_test_add_func("/escape/csi/rep-uses-put-char-behavior",
+	    test_rep_uses_put_char_behavior);
 
 	return g_test_run();
 }

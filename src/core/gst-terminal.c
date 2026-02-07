@@ -698,6 +698,7 @@ void
 gst_terminal_cursor_restore(GstTerminal *term)
 {
 	GstTerminalPrivate *priv;
+	GstCursorState saved_state;
 	gint idx;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
@@ -706,7 +707,9 @@ gst_terminal_cursor_restore(GstTerminal *term)
 	idx = (priv->mode & GST_MODE_ALTSCREEN) ? 1 : 0;
 	if (priv->saved_cursor_valid[idx]) {
 		priv->cursor = priv->saved_cursors[idx];
+		saved_state = priv->cursor.state;
 		gst_terminal_move_to(term, priv->cursor.x, priv->cursor.y);
+		priv->cursor.state = saved_state;
 	}
 }
 
@@ -1896,13 +1899,7 @@ term_csihandle(GstTerminal *term)
 		if (priv->lastc != 0) {
 			gint count = DEFAULT(priv->csi_args[0], 1);
 			while (count-- > 0) {
-				term_setchar(term, priv->lastc,
-				    &priv->cursor.glyph,
-				    priv->cursor.x, priv->cursor.y);
-				/* Advance cursor */
-				if (priv->cursor.x + 1 < priv->cols) {
-					priv->cursor.x++;
-				}
+				gst_terminal_put_char(term, priv->lastc);
 			}
 		}
 		break;
@@ -2404,6 +2401,8 @@ term_controlcode(
 
 	case '\x1b': /* ESC */
 		priv->csi_len = 0;
+		priv->csi_mode[0] = 0;
+		priv->csi_mode[1] = 0;
 		priv->esc &= ~(GST_ESC_CSI | GST_ESC_ALTCHARSET | GST_ESC_TEST);
 		priv->esc |= GST_ESC_START;
 		return;
