@@ -210,11 +210,30 @@ xdg_toplevel_close(
 	g_signal_emit_by_name(self, "close-request");
 }
 
+static void
+xdg_toplevel_configure_bounds(
+	void                *data,
+	struct xdg_toplevel *toplevel,
+	int32_t              width,
+	int32_t              height
+){
+	(void)data; (void)toplevel; (void)width; (void)height;
+}
+
+static void
+xdg_toplevel_wm_capabilities(
+	void                *data,
+	struct xdg_toplevel *toplevel,
+	struct wl_array     *capabilities
+){
+	(void)data; (void)toplevel; (void)capabilities;
+}
+
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
 	xdg_toplevel_configure,
 	xdg_toplevel_close,
-	NULL, /* configure_bounds */
-	NULL  /* wm_capabilities */
+	xdg_toplevel_configure_bounds,
+	xdg_toplevel_wm_capabilities
 };
 
 /* ===== Keyboard callbacks ===== */
@@ -670,18 +689,58 @@ pointer_axis(
 		(gulong)time);
 }
 
+static void
+pointer_frame(void *data, struct wl_pointer *pointer)
+{
+	(void)data; (void)pointer;
+}
+
+static void
+pointer_axis_source(void *data, struct wl_pointer *pointer, uint32_t source)
+{
+	(void)data; (void)pointer; (void)source;
+}
+
+static void
+pointer_axis_stop(void *data, struct wl_pointer *pointer,
+	uint32_t time, uint32_t axis)
+{
+	(void)data; (void)pointer; (void)time; (void)axis;
+}
+
+static void
+pointer_axis_discrete(void *data, struct wl_pointer *pointer,
+	uint32_t axis, int32_t discrete)
+{
+	(void)data; (void)pointer; (void)axis; (void)discrete;
+}
+
+static void
+pointer_axis_value120(void *data, struct wl_pointer *pointer,
+	uint32_t axis, int32_t value120)
+{
+	(void)data; (void)pointer; (void)axis; (void)value120;
+}
+
+static void
+pointer_axis_relative_direction(void *data, struct wl_pointer *pointer,
+	uint32_t axis, uint32_t direction)
+{
+	(void)data; (void)pointer; (void)axis; (void)direction;
+}
+
 static const struct wl_pointer_listener pointer_listener = {
 	pointer_enter,
 	pointer_leave,
 	pointer_motion,
 	pointer_button,
 	pointer_axis,
-	NULL, /* frame */
-	NULL, /* axis_source */
-	NULL, /* axis_stop */
-	NULL, /* axis_discrete */
-	NULL, /* axis_value120 */
-	NULL  /* axis_relative_direction */
+	pointer_frame,
+	pointer_axis_source,
+	pointer_axis_stop,
+	pointer_axis_discrete,
+	pointer_axis_value120,
+	pointer_axis_relative_direction
 };
 
 /* ===== Clipboard (wl_data_device) callbacks ===== */
@@ -699,10 +758,23 @@ data_offer_offer(
 	}
 }
 
+static void
+data_offer_source_actions(void *data, struct wl_data_offer *offer,
+	uint32_t source_actions)
+{
+	(void)data; (void)offer; (void)source_actions;
+}
+
+static void
+data_offer_action(void *data, struct wl_data_offer *offer, uint32_t action)
+{
+	(void)data; (void)offer; (void)action;
+}
+
 static const struct wl_data_offer_listener data_offer_listener = {
 	data_offer_offer,
-	NULL, /* source_actions */
-	NULL  /* action */
+	data_offer_source_actions,
+	data_offer_action
 };
 
 static void
@@ -1031,13 +1103,38 @@ data_source_cancelled(
 	}
 }
 
+static void
+data_source_target(void *data, struct wl_data_source *source,
+	const char *mime_type)
+{
+	(void)data; (void)source; (void)mime_type;
+}
+
+static void
+data_source_dnd_drop_performed(void *data, struct wl_data_source *source)
+{
+	(void)data; (void)source;
+}
+
+static void
+data_source_dnd_finished(void *data, struct wl_data_source *source)
+{
+	(void)data; (void)source;
+}
+
+static void
+data_source_action(void *data, struct wl_data_source *source, uint32_t action)
+{
+	(void)data; (void)source; (void)action;
+}
+
 static const struct wl_data_source_listener data_source_listener = {
-	NULL, /* target */
+	data_source_target,
 	data_source_send,
 	data_source_cancelled,
-	NULL, /* dnd_drop_performed */
-	NULL, /* dnd_finished */
-	NULL  /* action */
+	data_source_dnd_drop_performed,
+	data_source_dnd_finished,
+	data_source_action
 };
 
 /* ===== Primary selection source callbacks ===== */
