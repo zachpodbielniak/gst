@@ -1187,9 +1187,6 @@ init_wayland_backend(
 ){
 	GstWaylandWindow *wl_win;
 	GstWaylandRenderer *wl_renderer;
-	struct wl_display *wl_display;
-	struct wl_surface *wl_surface;
-	struct wl_shm *wl_shm;
 	GstColorScheme *scheme;
 
 	/* Initialize fontconfig */
@@ -1226,13 +1223,9 @@ init_wayland_backend(
 	gst_window_set_wm_hints(window, cell_w, cell_h, (gint)cfg_border_px);
 	gst_window_show(window);
 
-	/* Create Wayland renderer */
-	wl_display = gst_wayland_window_get_display(wl_win);
-	wl_surface = gst_wayland_window_get_surface(wl_win);
-	wl_shm = gst_wayland_window_get_shm(wl_win);
-
+	/* Create Wayland renderer (extracts display/surface/shm internally) */
 	wl_renderer = gst_wayland_renderer_new(
-		terminal, wl_display, wl_surface, wl_shm,
+		terminal, wl_win,
 		cairo_font_cache, (gint)cfg_border_px);
 	renderer = GST_RENDERER(wl_renderer);
 

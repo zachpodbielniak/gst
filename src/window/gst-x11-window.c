@@ -819,6 +819,20 @@ gst_x11_window_new(
 	XChangeProperty(dpy, self->xwindow, self->netwmpid, XA_CARDINAL, 32,
 		PropModeReplace, (guchar *)&thispid, 1);
 
+	/* Set _NET_WM_WINDOW_TYPE to NORMAL (EWMH best practice) */
+	{
+		Atom wm_window_type;
+		Atom wm_window_type_normal;
+
+		wm_window_type = XInternAtom(dpy,
+			"_NET_WM_WINDOW_TYPE", False);
+		wm_window_type_normal = XInternAtom(dpy,
+			"_NET_WM_WINDOW_TYPE_NORMAL", False);
+		XChangeProperty(dpy, self->xwindow, wm_window_type,
+			XA_ATOM, 32, PropModeReplace,
+			(guchar *)&wm_window_type_normal, 1);
+	}
+
 	/* Set clipboard target preference */
 	self->xtarget = XInternAtom(dpy, "UTF8_STRING", 0);
 	if (self->xtarget == None) {

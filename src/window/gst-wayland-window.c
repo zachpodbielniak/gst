@@ -123,6 +123,9 @@ struct _GstWaylandWindow
 	gint32 repeat_delay;
 	gint32 repeat_rate;
 
+	/* Rendering-level opacity (0.0 = transparent, 1.0 = opaque) */
+	gdouble opacity;
+
 	/* GLib main loop integration */
 	GIOChannel *wl_channel;
 	guint       wl_watch_id;
@@ -1433,13 +1436,17 @@ gst_wayland_window_set_opacity_impl(
 	GstWindow *window,
 	gdouble    opacity
 ){
+	GstWaylandWindow *self;
+
 	/*
-	 * Wayland doesn't have a standard opacity protocol.
-	 * Compositors like KDE have their own extensions.
-	 * For now this is a no-op with a debug message.
+	 * Wayland has no compositor-level opacity protocol like X11's
+	 * _NET_WM_WINDOW_OPACITY. Instead, the renderer reads this
+	 * value and paints backgrounds with alpha directly into
+	 * the ARGB8888 shm buffer.
 	 */
-	g_debug("wayland: set_opacity(%.2f) - not supported", opacity);
-	(void)window;
+	self = GST_WAYLAND_WINDOW(window);
+	self->opacity = CLAMP(opacity, 0.0, 1.0);
+	g_debug("wayland: set_opacity(%.2f)", self->opacity);
 }
 
 static void
@@ -1735,6 +1742,7 @@ gst_wayland_window_init(GstWaylandWindow *self)
 	self->repeat_key = 0;
 	self->repeat_delay = 400;
 	self->repeat_rate = 25;
+	self->opacity = 1.0;
 	self->wl_channel = NULL;
 	self->wl_watch_id = 0;
 }
@@ -1925,4 +1933,21 @@ gst_wayland_window_get_shm(GstWaylandWindow *self)
 	g_return_val_if_fail(GST_IS_WAYLAND_WINDOW(self), NULL);
 
 	return self->shm;
+}
+
+/**
+ * gst_wayland_window_get_opacity:
+ * @self: A #GstWaylandWindow
+ *
+ * Gets the current opacity value. The Wayland renderer uses
+ * this to paint backgrounds with alpha transparency.
+ *
+ * Returns: opacity between 0.0 (fully transparent) and 1.0 (opaque)
+ */
+gdouble
+gst_wayland_window_get_opacity(GstWaylandWindow *self)
+{
+	g_return_val_if_fail(GST_IS_WAYLAND_WINDOW(self), 1.0);
+
+	return self->opacity;
 }

@@ -81,6 +81,19 @@ gst_wayland_window_get_surface(GstWaylandWindow *self);
 struct wl_shm *
 gst_wayland_window_get_shm(GstWaylandWindow *self);
 
+/**
+ * gst_wayland_window_get_opacity:
+ * @self: A #GstWaylandWindow
+ *
+ * Gets the current rendering opacity. The Wayland renderer
+ * uses this to paint backgrounds with alpha transparency,
+ * since Wayland has no compositor-level opacity protocol.
+ *
+ * Returns: opacity between 0.0 (fully transparent) and 1.0 (opaque)
+ */
+gdouble
+gst_wayland_window_get_opacity(GstWaylandWindow *self);
+
 G_END_DECLS
 
 #endif /* GST_WAYLAND_WINDOW_H */

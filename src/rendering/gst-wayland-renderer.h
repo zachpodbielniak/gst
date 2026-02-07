@@ -17,6 +17,7 @@
 #include <wayland-client.h>
 #include "gst-renderer.h"
 #include "gst-cairo-font-cache.h"
+#include "../window/gst-wayland-window.h"
 #include "../gst-enums.h"
 #include "../gst-types.h"
 
@@ -30,23 +31,20 @@ G_DECLARE_FINAL_TYPE(GstWaylandRenderer, gst_wayland_renderer,
 /**
  * gst_wayland_renderer_new:
  * @terminal: the terminal to render
- * @display: Wayland display connection
- * @surface: Wayland surface to render to
- * @shm: Wayland shared memory interface
+ * @wl_window: Wayland window (display/surface/shm extracted internally)
  * @font_cache: Cairo font cache
  * @borderpx: border padding in pixels
  *
  * Creates a new Wayland renderer with Cairo drawing and
- * wl_shm double-buffered rendering.
+ * wl_shm double-buffered rendering. The renderer reads the
+ * window's opacity value to paint backgrounds with alpha.
  *
  * Returns: (transfer full): A new #GstWaylandRenderer
  */
 GstWaylandRenderer *
 gst_wayland_renderer_new(
 	GstTerminal         *terminal,
-	struct wl_display   *display,
-	struct wl_surface   *surface,
-	struct wl_shm       *shm,
+	GstWaylandWindow    *wl_window,
 	GstCairoFontCache   *font_cache,
 	gint                borderpx
 );

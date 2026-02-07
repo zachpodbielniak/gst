@@ -75,6 +75,7 @@ struct _GstWaylandRenderer
 	GstRenderer parent_instance;
 
 	/* Wayland resources */
+	GstWaylandWindow    *wl_window;
 	struct wl_display   *wl_display;
 	struct wl_surface   *wl_surface;
 	struct wl_shm       *wl_shm;
@@ -127,6 +128,9 @@ struct _GstWaylandRenderer
 
 	/* Selection (for checking selected cells) */
 	GstSelection *selection;
+
+	/* Last applied opacity (used to detect changes and trigger full repaint) */
+	gdouble last_opacity;
 };
 
 G_DEFINE_TYPE(GstWaylandRenderer, gst_wayland_renderer, GST_TYPE_RENDERER)
@@ -379,6 +383,31 @@ wl_set_source_color(cairo_t *cr, GstColor color)
 }
 
 /*
+ * wl_set_bg_color:
+ * @self: the renderer
+ * @cr: cairo context
+ * @color: GstColor RGBA value
+ *
+ * Sets the cairo source color for background painting.
+ * Applies the window opacity as alpha, so backgrounds
+ * become semi-transparent while text stays fully opaque.
+ */
+static void
+wl_set_bg_color(GstWaylandRenderer *self, cairo_t *cr, GstColor color)
+{
+	gdouble alpha;
+
+	alpha = (self->wl_window != NULL)
+		? gst_wayland_window_get_opacity(self->wl_window) : 1.0;
+
+	cairo_set_source_rgba(cr,
+		(gdouble)GST_COLOR_R(color) / 255.0,
+		(gdouble)GST_COLOR_G(color) / 255.0,
+		(gdouble)GST_COLOR_B(color) / 255.0,
+		alpha);
+}
+
+/*
  * wl_clear_rect:
  * @self: the renderer
  * @x1: left edge
@@ -400,10 +429,14 @@ wl_clear_rect(
 		return;
 	}
 
-	wl_set_source_color(self->cr, self->colors[self->default_bg]);
+	/* Use OPERATOR_SOURCE to write alpha directly into the buffer,
+	 * rather than blending over existing content */
+	wl_set_bg_color(self, self->cr, self->colors[self->default_bg]);
+	cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
 	cairo_rectangle(self->cr, (gdouble)x1, (gdouble)y1,
 		(gdouble)(x2 - x1), (gdouble)(y2 - y1));
 	cairo_fill(self->cr);
+	cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
 }
 
 /*
@@ -596,11 +629,13 @@ wl_draw_glyph_run(
 		wl_clear_rect(self, winx, winy + self->ch, winx + width, self->win_h);
 	}
 
-	/* Fill background */
-	wl_set_source_color(self->cr, bg);
+	/* Fill background with opacity-aware alpha */
+	wl_set_bg_color(self, self->cr, bg);
+	cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
 	cairo_rectangle(self->cr, (gdouble)winx, (gdouble)winy,
 		(gdouble)width, (gdouble)self->ch);
 	cairo_fill(self->cr);
+	cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
 
 	/* Set clipping for glyph rendering */
 	cairo_save(self->cr);
@@ -965,6 +1000,36 @@ wl_renderer_render_impl(GstRenderer *renderer)
 	cx = cursor->x;
 	cy = cursor->y;
 
+	/*
+	 * Detect opacity changes (set by the transparency module via
+	 * the render overlay callback on the previous frame). When
+	 * opacity changes, repaint the entire surface background and
+	 * mark all lines dirty so every cell gets redrawn with the
+	 * new alpha value.
+	 */
+	if (self->wl_window != NULL) {
+		gdouble cur_opacity;
+
+		cur_opacity = gst_wayland_window_get_opacity(self->wl_window);
+		if (cur_opacity != self->last_opacity) {
+			self->last_opacity = cur_opacity;
+
+			/* Repaint full surface background at new opacity */
+			if (self->colors != NULL) {
+				wl_set_bg_color(self, self->cr,
+					self->colors[self->default_bg]);
+				cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
+				cairo_paint(self->cr);
+				cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
+			}
+
+			/* Mark all lines dirty for full redraw */
+			for (y = 0; y < rows; y++) {
+				gst_terminal_mark_dirty(term, y);
+			}
+		}
+	}
+
 	/* Draw dirty lines */
 	for (y = 0; y < rows; y++) {
 		GstLine *line;
@@ -1046,10 +1111,12 @@ wl_renderer_resize_impl(
 	/* Recreate shm buffer and cairo surface */
 	wl_create_buffer(self, self->win_w, self->win_h);
 
-	/* Fill with background color */
+	/* Fill with background color (alpha-aware) */
 	if (self->cr != NULL && self->colors != NULL) {
-		wl_set_source_color(self->cr, self->colors[self->default_bg]);
+		wl_set_bg_color(self, self->cr, self->colors[self->default_bg]);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
 		cairo_paint(self->cr);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
 	}
 }
 
@@ -1067,8 +1134,10 @@ wl_renderer_clear_impl(GstRenderer *renderer)
 	self = GST_WAYLAND_RENDERER(renderer);
 
 	if (self->cr != NULL && self->colors != NULL) {
-		wl_set_source_color(self->cr, self->colors[self->default_bg]);
+		wl_set_bg_color(self, self->cr, self->colors[self->default_bg]);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
 		cairo_paint(self->cr);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
 	}
 }
 
@@ -1193,6 +1262,7 @@ gst_wayland_renderer_class_init(GstWaylandRendererClass *klass)
 static void
 gst_wayland_renderer_init(GstWaylandRenderer *self)
 {
+	self->wl_window = NULL;
 	self->wl_display = NULL;
 	self->wl_surface = NULL;
 	self->wl_shm = NULL;
@@ -1221,6 +1291,7 @@ gst_wayland_renderer_init(GstWaylandRenderer *self)
 	self->default_cs = GST_COLOR_CURSOR_BG;
 	self->default_rcs = GST_COLOR_REVERSE_BG;
 	self->selection = NULL;
+	self->last_opacity = 1.0;
 }
 
 /* ===== Public API ===== */
@@ -1228,23 +1299,20 @@ gst_wayland_renderer_init(GstWaylandRenderer *self)
 /**
  * gst_wayland_renderer_new:
  * @terminal: the terminal to render
- * @display: Wayland display connection
- * @surface: Wayland surface to render to
- * @shm: Wayland shared memory interface
+ * @wl_window: Wayland window (display/surface/shm extracted internally)
  * @font_cache: Cairo font cache
  * @borderpx: border padding in pixels
  *
  * Creates a new Wayland renderer with Cairo drawing and
- * wl_shm double-buffered rendering.
+ * wl_shm double-buffered rendering. Stores a reference to the
+ * window so the opacity can be read for background alpha painting.
  *
  * Returns: (transfer full): A new #GstWaylandRenderer
  */
 GstWaylandRenderer *
 gst_wayland_renderer_new(
 	GstTerminal         *terminal,
-	struct wl_display   *display,
-	struct wl_surface   *surface,
-	struct wl_shm       *shm,
+	GstWaylandWindow    *wl_window,
 	GstCairoFontCache   *font_cache,
 	gint                borderpx
 ){
@@ -1256,9 +1324,10 @@ gst_wayland_renderer_new(
 		"terminal", terminal,
 		NULL);
 
-	self->wl_display = display;
-	self->wl_surface = surface;
-	self->wl_shm = shm;
+	self->wl_window = wl_window;
+	self->wl_display = gst_wayland_window_get_display(wl_window);
+	self->wl_surface = gst_wayland_window_get_surface(wl_window);
+	self->wl_shm = gst_wayland_window_get_shm(wl_window);
 	self->font_cache = font_cache;
 	self->borderpx = borderpx;
 
@@ -1346,10 +1415,12 @@ gst_wayland_renderer_load_colors(GstWaylandRenderer *self)
 		}
 	}
 
-	/* Fill with background color */
+	/* Fill with background color (alpha-aware) */
 	if (self->cr != NULL) {
-		wl_set_source_color(self->cr, self->colors[self->default_bg]);
+		wl_set_bg_color(self, self->cr, self->colors[self->default_bg]);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
 		cairo_paint(self->cr);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
 	}
 
 	return TRUE;
