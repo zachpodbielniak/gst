@@ -11,6 +11,7 @@
 
 #include "gst-terminal.h"
 #include "gst-escape-parser.h"
+#include "../util/gst-utf8.h"
 #include <string.h>
 
 /* ===== Macros and constants ===== */
@@ -630,9 +631,6 @@ gst_terminal_move_to(
 	priv->cursor.state &= ~GST_CURSOR_STATE_WRAPNEXT;
 	priv->cursor.x = CLAMP(x, 0, priv->cols - 1);
 	priv->cursor.y = CLAMP(y, miny, maxy);
-
-	g_debug("MOVE_TO: req=(%d,%d) actual=(%d,%d) bounds=[%d..%d]",
-	    x, y, priv->cursor.x, priv->cursor.y, miny, maxy);
 }
 
 /**
@@ -650,9 +648,6 @@ gst_terminal_move_to_abs(
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
-
-	g_debug("MOVE_TO_ABS: x=%d y=%d origin=%d",
-	    x, y, (priv->cursor.state & GST_CURSOR_STATE_ORIGIN) ? 1 : 0);
 
 	gst_terminal_move_to(term, x,
 	    y + ((priv->cursor.state & GST_CURSOR_STATE_ORIGIN) ? priv->scroll_top : 0));
@@ -698,7 +693,6 @@ void
 gst_terminal_cursor_restore(GstTerminal *term)
 {
 	GstTerminalPrivate *priv;
-	GstCursorState saved_state;
 	gint idx;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
@@ -707,9 +701,12 @@ gst_terminal_cursor_restore(GstTerminal *term)
 	idx = (priv->mode & GST_MODE_ALTSCREEN) ? 1 : 0;
 	if (priv->saved_cursor_valid[idx]) {
 		priv->cursor = priv->saved_cursors[idx];
-		saved_state = priv->cursor.state;
+		/*
+		 * move_to clamps position and clears WRAPNEXT.
+		 * This matches st: tmoveto() is the final call in
+		 * tcursor(CURSOR_LOAD), so WRAPNEXT is always cleared.
+		 */
 		gst_terminal_move_to(term, priv->cursor.x, priv->cursor.y);
-		priv->cursor.state = saved_state;
 	}
 }
 
@@ -1169,8 +1166,6 @@ gst_terminal_set_scroll_region(
 
 	priv->scroll_top = top;
 	priv->scroll_bot = bottom;
-
-	g_debug("SCROLL_REGION: top=%d bot=%d", top, bottom);
 }
 
 void
@@ -1645,19 +1640,28 @@ term_setmode(
 			case 1047:
 				{
 					gboolean is_alt = (priv->mode & GST_MODE_ALTSCREEN) != 0;
-					if (!set) {
-						if (is_alt) {
-							gst_terminal_clear(term);
-						}
-					}
-					if (is_alt != (gboolean)set) {
-						gst_terminal_swap_screen(term);
-					}
+					/*
+					 * 1049: save/restore cursor BEFORE swap.
+					 * Matches st: tcursor() runs before tswapscreen().
+					 * On set: save to primary slot (idx=0).
+					 * On reset: restore from alt slot (idx=1).
+					 */
 					if (args[i] == 1049) {
 						if (set) {
 							gst_terminal_cursor_save(term);
 						} else {
 							gst_terminal_cursor_restore(term);
+						}
+					}
+					if (is_alt != (gboolean)set) {
+						if (set) {
+							/* Entering alt: swap, then clear */
+							gst_terminal_swap_screen(term);
+							gst_terminal_clear(term);
+						} else {
+							/* Leaving alt: clear, then swap */
+							gst_terminal_clear(term);
+							gst_terminal_swap_screen(term);
 						}
 					}
 				}
@@ -1752,13 +1756,6 @@ term_csihandle(GstTerminal *term)
 
 	term_csiparse(term);
 	cmd = priv->csi_mode[0];
-
-	g_debug("CSI: buf='%.*s' cmd='%c' priv=%d nargs=%d",
-	    (gint)priv->csi_len, priv->csi_buf,
-	    cmd, priv->csi_priv, priv->csi_nargs);
-	for (i = 0; i < priv->csi_nargs; i++) {
-		g_debug("  CSI arg[%d]=%d", i, priv->csi_args[i]);
-	}
 
 	switch (cmd) {
 	case '@': /* ICH - Insert Character */
@@ -2247,8 +2244,6 @@ term_eschandle(
 ){
 	GstTerminalPrivate *priv = term->priv;
 
-	g_debug("ESC: char=0x%02x '%c'", c, (c >= 0x20 && c < 0x7f) ? c : '.');
-
 	switch (c) {
 	case '[': /* CSI */
 		priv->esc |= GST_ESC_CSI;
@@ -2365,8 +2360,6 @@ term_controlcode(
     guchar      c
 ){
 	GstTerminalPrivate *priv = term->priv;
-
-	g_debug("CTRL: 0x%02x", c);
 
 	switch (c) {
 	case '\t': /* TAB (HT) */
@@ -2562,11 +2555,36 @@ gst_terminal_put_char(
 	 * Normal character output
 	 */
 
-	/* Get Unicode width */
-	if (g_unichar_iswide(rune) || g_unichar_iswide_cjk(rune)) {
-		width = 2;
-	} else {
+	/*
+	 * Get Unicode width via wcwidth (through gst_wcwidth).
+	 * This matches st's behavior: ambiguous-width characters
+	 * (including PUA / Powerline / Nerd Font symbols) are width 1
+	 * in non-CJK locales. Using g_unichar_iswide_cjk() treated
+	 * these as width 2, causing cursor desync with tmux.
+	 */
+	width = gst_wcwidth(rune);
+	if (width < 0) {
 		width = 1;
+	}
+
+	/*
+	 * Combining character: overlay on previous cell without
+	 * advancing the cursor. Matches st's tputc behavior where
+	 * wcwidth()==0 chars are composed onto the preceding glyph.
+	 */
+	if (width == 0) {
+		if (priv->cursor.x > 0) {
+			GstGlyph *prev = gst_terminal_get_glyph(term,
+			    priv->cursor.x - 1, priv->cursor.y);
+			if (prev != NULL) {
+				prev->rune = rune;
+			}
+			line = priv->screen[priv->cursor.y];
+			if (line != NULL) {
+				gst_line_set_dirty(line, TRUE);
+			}
+		}
+		return;
 	}
 
 	/* Handle WRAPNEXT state */

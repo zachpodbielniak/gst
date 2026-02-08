@@ -7,6 +7,7 @@
 
 #include "gst-utf8.h"
 #include <string.h>
+#include <wchar.h>
 
 gint
 gst_utf8_encode(
@@ -36,17 +37,50 @@ gst_utf8_decode(
     return (GstRune)c;
 }
 
+/*
+ * gst_wcwidth:
+ * @rune: a Unicode codepoint
+ *
+ * Returns the display width of a Unicode character.
+ * Uses libc wcwidth() when locale is set (matching st/tmux behavior).
+ * Falls back to GLib Unicode properties when wcwidth() returns -1
+ * for printable chars (e.g., in C locale). This ensures correct
+ * behavior regardless of locale.
+ *
+ * Key: uses g_unichar_iswide() (NOT g_unichar_iswide_cjk()) so
+ * ambiguous-width chars like PUA/Powerline symbols are width 1.
+ *
+ * Returns: 0 for combining/zero-width, 1 for normal, 2 for wide,
+ *          -1 for non-printable control characters
+ */
 gint
 gst_wcwidth(GstRune rune)
 {
+    gint w;
+
+    w = wcwidth((wchar_t)rune);
+    if (w >= 0) {
+        return w;
+    }
+
+    /*
+     * wcwidth returned -1. This happens for control chars or
+     * when the locale doesn't support the character (e.g., C locale).
+     * Fall back to GLib's locale-independent Unicode properties.
+     */
     if (rune == 0) {
         return 0;
     }
-
     if (rune < 32 || (rune >= 0x7f && rune < 0xa0)) {
         return -1;
     }
 
+    /* Combining marks: zero width */
+    if (gst_is_combining(rune)) {
+        return 0;
+    }
+
+    /* Wide chars (CJK ideographs, etc.) */
     if (g_unichar_iswide((gunichar)rune)) {
         return 2;
     }
