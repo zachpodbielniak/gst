@@ -43,7 +43,6 @@
 #include "selection/gst-selection.h"
 #include "config/gst-config.h"
 #include "config/gst-keybind.h"
-#include "config/gst-color-scheme.h"
 #include "module/gst-module-manager.h"
 
 #ifdef GST_HAVE_WAYLAND
@@ -212,14 +211,10 @@ find_default_config(void)
 {
 	const gchar *xdg_config;
 	g_autofree gchar *user_path = NULL;
-	const gchar *system_paths[] = {
-		"/etc/gst/config.yaml",
-		"/usr/share/gst/config.yaml",
-		NULL
-	};
-	guint i;
+	g_autofree gchar *sysconfdir_path = NULL;
+	g_autofree gchar *datadir_path = NULL;
 
-	/* XDG user config */
+	/* XDG user config (~/.config/gst/config.yaml) */
 	xdg_config = g_get_user_config_dir();
 	if (xdg_config != NULL) {
 		user_path = g_build_filename(xdg_config, "gst",
@@ -229,11 +224,23 @@ find_default_config(void)
 		}
 	}
 
-	/* System config paths */
-	for (i = 0; system_paths[i] != NULL; i++) {
-		if (g_file_test(system_paths[i], G_FILE_TEST_IS_REGULAR)) {
-			return g_strdup(system_paths[i]);
-		}
+	/* System config (compile-time SYSCONFDIR, e.g. /etc) */
+	sysconfdir_path = g_build_filename(
+		GST_SYSCONFDIR, "gst", "config.yaml", NULL);
+	if (g_file_test(sysconfdir_path, G_FILE_TEST_IS_REGULAR)) {
+		return g_steal_pointer(&sysconfdir_path);
+	}
+
+	/* Data directory (compile-time DATADIR, e.g. /usr/local/share) */
+	datadir_path = g_build_filename(
+		GST_DATADIR, "gst", "config.yaml", NULL);
+	if (g_file_test(datadir_path, G_FILE_TEST_IS_REGULAR)) {
+		return g_steal_pointer(&datadir_path);
+	}
+
+	/* Development fallback: data/ in source tree (cwd) */
+	if (g_file_test("data/config.yaml", G_FILE_TEST_IS_REGULAR)) {
+		return g_strdup("data/config.yaml");
 	}
 
 	return NULL;
@@ -1108,7 +1115,6 @@ init_x11_backend(
 	gint screen;
 	GstX11Window *x11_win;
 	GstX11Renderer *x11_renderer;
-	GstColorScheme *scheme;
 
 	/* Initialize fontconfig */
 	if (!FcInit()) {
@@ -1195,14 +1201,10 @@ init_x11_backend(
 		screen, font_cache, (gint)cfg_border_px);
 	renderer = GST_RENDERER(x11_renderer);
 
-	/* Load colors */
-	scheme = gst_color_scheme_new("config");
-	gst_color_scheme_load_from_config(scheme, config);
-
-	if (!gst_x11_renderer_load_colors(x11_renderer)) {
+	/* Load colors from config */
+	if (!gst_x11_renderer_load_colors(x11_renderer, config)) {
 		g_printerr("Cannot load colors\n");
 	}
-	g_object_unref(scheme);
 
 	/* Set initial win_mode */
 	set_win_mode(GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED
@@ -1233,7 +1235,6 @@ init_wayland_backend(
 ){
 	GstWaylandWindow *wl_win;
 	GstWaylandRenderer *wl_renderer;
-	GstColorScheme *scheme;
 
 	/* Initialize fontconfig */
 	if (!FcInit()) {
@@ -1275,14 +1276,10 @@ init_wayland_backend(
 		cairo_font_cache, (gint)cfg_border_px);
 	renderer = GST_RENDERER(wl_renderer);
 
-	/* Load colors */
-	scheme = gst_color_scheme_new("config");
-	gst_color_scheme_load_from_config(scheme, config);
-
-	if (!gst_wayland_renderer_load_colors(wl_renderer)) {
+	/* Load colors from config */
+	if (!gst_wayland_renderer_load_colors(wl_renderer, config)) {
 		g_printerr("Cannot load colors\n");
 	}
-	g_object_unref(scheme);
 
 	/* Set initial win_mode */
 	set_win_mode(GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED

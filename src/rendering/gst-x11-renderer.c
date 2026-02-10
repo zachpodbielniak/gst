@@ -1139,17 +1139,42 @@ gst_x11_renderer_new(
 	return self;
 }
 
+/*
+ * x11_override_color:
+ *
+ * Replaces a single color slot with a named color (e.g. "#RRGGBB").
+ * Frees the old XftColor and allocates a new one.
+ */
+static void
+x11_override_color(
+	GstX11Renderer  *self,
+	gsize            index,
+	const gchar     *name
+){
+	XftColorFree(self->display, self->vis, self->cmap,
+		&self->colors[index]);
+	if (!load_single_color(self, (gint)index, name,
+	    &self->colors[index])) {
+		g_warning("x11_override_color: failed for index %zu: %s",
+			index, name);
+	}
+}
+
 /**
  * gst_x11_renderer_load_colors:
  * @self: A #GstX11Renderer
+ * @config: (nullable): A #GstConfig for palette and color overrides
  *
- * Loads the full color palette (262 colors).
+ * Loads the full color palette (262 colors) from defaults,
+ * then applies any overrides from @config.
  *
  * Returns: TRUE on success
  */
 gboolean
-gst_x11_renderer_load_colors(GstX11Renderer *self)
-{
+gst_x11_renderer_load_colors(
+	GstX11Renderer  *self,
+	GstConfig       *config
+){
 	gsize i;
 	gsize count;
 
@@ -1163,6 +1188,7 @@ gst_x11_renderer_load_colors(GstX11Renderer *self)
 		g_free(self->colors);
 	}
 
+	/* Step 1: Load all 262 colors from hardcoded defaults */
 	count = (gsize)GST_COLOR_COUNT;
 	self->colors = g_new0(XftColor, count);
 	self->num_colors = count;
@@ -1171,6 +1197,75 @@ gst_x11_renderer_load_colors(GstX11Renderer *self)
 		if (!load_single_color(self, (gint)i, NULL, &self->colors[i])) {
 			g_warning("gst_x11_renderer_load_colors: could not allocate color %zu", i);
 			return FALSE;
+		}
+	}
+
+	/* Step 2: Apply config color overrides */
+	if (config != NULL) {
+		const gchar *const *palette_hex;
+		guint n_palette;
+		const gchar *hex;
+
+		/* Override palette entries 0-15 */
+		palette_hex = gst_config_get_palette_hex(config);
+		n_palette = gst_config_get_n_palette(config);
+
+		for (i = 0; i < n_palette && palette_hex != NULL; i++) {
+			if (palette_hex[i] != NULL) {
+				x11_override_color(self, i, palette_hex[i]);
+			}
+		}
+
+		/* Override foreground (index 256) */
+		hex = gst_config_get_fg_hex(config);
+		if (hex != NULL) {
+			x11_override_color(self, 256, hex);
+		} else if (palette_hex != NULL) {
+			guint fg_idx;
+
+			fg_idx = gst_config_get_fg_index(config);
+			if (fg_idx < n_palette && palette_hex[fg_idx] != NULL) {
+				x11_override_color(self, 256, palette_hex[fg_idx]);
+			}
+		}
+
+		/* Override background (index 257) */
+		hex = gst_config_get_bg_hex(config);
+		if (hex != NULL) {
+			x11_override_color(self, 257, hex);
+		} else if (palette_hex != NULL) {
+			guint bg_idx;
+
+			bg_idx = gst_config_get_bg_index(config);
+			if (bg_idx < n_palette && palette_hex[bg_idx] != NULL) {
+				x11_override_color(self, 257, palette_hex[bg_idx]);
+			}
+		}
+
+		/* Override cursor foreground (index 258) */
+		hex = gst_config_get_cursor_fg_hex(config);
+		if (hex != NULL) {
+			x11_override_color(self, 258, hex);
+		} else if (palette_hex != NULL) {
+			guint idx;
+
+			idx = gst_config_get_cursor_fg_index(config);
+			if (idx < n_palette && palette_hex[idx] != NULL) {
+				x11_override_color(self, 258, palette_hex[idx]);
+			}
+		}
+
+		/* Override cursor background (index 259) */
+		hex = gst_config_get_cursor_bg_hex(config);
+		if (hex != NULL) {
+			x11_override_color(self, 259, hex);
+		} else if (palette_hex != NULL) {
+			guint idx;
+
+			idx = gst_config_get_cursor_bg_index(config);
+			if (idx < n_palette && palette_hex[idx] != NULL) {
+				x11_override_color(self, 259, palette_hex[idx]);
+			}
 		}
 	}
 

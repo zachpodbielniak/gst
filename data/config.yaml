@@ -21,28 +21,30 @@ font:
     - "Symbols Nerd Font:pixelsize=14"
 
 colors:
-  foreground: 7
-  background: 0
-  cursor_fg: 0
-  cursor_bg: 7
-  # 16-color palette (indices 0-15)
+  foreground: "#cdd6f4"  # text
+  background: "#1e1e2e"  # base
+  cursor_fg: "#1e1e2e"   # base
+  cursor_bg: "#f5e0dc"   # rosewater
+
   palette:
-    - "#000000"  # black
-    - "#cc0000"  # red
-    - "#4e9a06"  # green
-    - "#c4a000"  # yellow
-    - "#3465a4"  # blue
-    - "#75507b"  # magenta
-    - "#06989a"  # cyan
-    - "#d3d7cf"  # white
-    - "#555753"  # bright black
-    - "#ef2929"  # bright red
-    - "#8ae234"  # bright green
-    - "#fce94f"  # bright yellow
-    - "#729fcf"  # bright blue
-    - "#ad7fa8"  # bright magenta
-    - "#34e2e2"  # bright cyan
-    - "#eeeeec"  # bright white
+    # Normal colors
+    - "#45475a"  # surface1 (black)
+    - "#f38ba8"  # red
+    - "#a6e3a1"  # green
+    - "#f9e2af"  # yellow
+    - "#89b4fa"  # blue
+    - "#f5c2e7"  # pink (magenta)
+    - "#94e2d5"  # teal (cyan)
+    - "#bac2de"  # subtext1 (white)
+    # Bright colors
+    - "#585b70"  # surface2 (bright black)
+    - "#f38ba8"  # red
+    - "#a6e3a1"  # green
+    - "#f9e2af"  # yellow
+    - "#89b4fa"  # blue
+    - "#f5c2e7"  # pink
+    - "#94e2d5"  # teal
+    - "#a6adc8"  # subtext0 (bright white)
 
 cursor:
   shape: block       # block, underline, bar

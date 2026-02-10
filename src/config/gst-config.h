@@ -287,6 +287,54 @@ guint
 gst_config_get_cursor_bg_index(GstConfig *self);
 
 /**
+ * gst_config_get_fg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the foreground, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if foreground uses a palette index instead
+ */
+const gchar *
+gst_config_get_fg_hex(GstConfig *self);
+
+/**
+ * gst_config_get_bg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the background, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if background uses a palette index instead
+ */
+const gchar *
+gst_config_get_bg_hex(GstConfig *self);
+
+/**
+ * gst_config_get_cursor_fg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the cursor foreground, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if cursor foreground uses a palette index instead
+ */
+const gchar *
+gst_config_get_cursor_fg_hex(GstConfig *self);
+
+/**
+ * gst_config_get_cursor_bg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the cursor background, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if cursor background uses a palette index instead
+ */
+const gchar *
+gst_config_get_cursor_bg_hex(GstConfig *self);
+
+/**
  * gst_config_get_palette_hex:
  * @self: A #GstConfig
  *

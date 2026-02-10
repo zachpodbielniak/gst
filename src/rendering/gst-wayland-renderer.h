@@ -20,6 +20,7 @@
 #include "../window/gst-wayland-window.h"
 #include "../gst-enums.h"
 #include "../gst-types.h"
+#include "../config/gst-config.h"
 
 G_BEGIN_DECLS
 
@@ -52,13 +53,15 @@ gst_wayland_renderer_new(
 /**
  * gst_wayland_renderer_load_colors:
  * @self: A #GstWaylandRenderer
+ * @config: (nullable): A #GstConfig for palette and color overrides
  *
- * Loads the 262-entry color palette.
+ * Loads the full color palette (262 colors) from defaults,
+ * then applies any overrides from @config.
  *
  * Returns: TRUE on success
  */
 gboolean
-gst_wayland_renderer_load_colors(GstWaylandRenderer *self);
+gst_wayland_renderer_load_colors(GstWaylandRenderer *self, GstConfig *config);
 
 /**
  * gst_wayland_renderer_set_win_mode:

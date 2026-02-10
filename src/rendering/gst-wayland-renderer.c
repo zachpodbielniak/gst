@@ -1351,15 +1351,18 @@ gst_wayland_renderer_new(
 /**
  * gst_wayland_renderer_load_colors:
  * @self: A #GstWaylandRenderer
+ * @config: (nullable): A #GstConfig for palette and color overrides
  *
- * Loads the full color palette (262 colors).
- * Converts color names and indices to GstColor RGBA values.
+ * Loads the full color palette (262 colors) from defaults,
+ * then applies any overrides from @config.
  *
  * Returns: TRUE on success
  */
 gboolean
-gst_wayland_renderer_load_colors(GstWaylandRenderer *self)
-{
+gst_wayland_renderer_load_colors(
+	GstWaylandRenderer  *self,
+	GstConfig           *config
+){
 	gsize i;
 	gsize count;
 
@@ -1368,6 +1371,7 @@ gst_wayland_renderer_load_colors(GstWaylandRenderer *self)
 	/* Free old colors if any */
 	g_clear_pointer(&self->colors, g_free);
 
+	/* Step 1: Load all 262 colors from hardcoded defaults */
 	count = (gsize)GST_COLOR_COUNT;
 	self->colors = g_new0(GstColor, count);
 	self->num_colors = count;
@@ -1411,6 +1415,75 @@ gst_wayland_renderer_load_colors(GstWaylandRenderer *self)
 				}
 			} else {
 				self->colors[i] = GST_COLOR_RGB(0, 0, 0);
+			}
+		}
+	}
+
+	/* Step 2: Apply config color overrides */
+	if (config != NULL) {
+		const gchar *const *palette_hex;
+		guint n_palette;
+		const gchar *hex;
+
+		/* Override palette entries 0-15 */
+		palette_hex = gst_config_get_palette_hex(config);
+		n_palette = gst_config_get_n_palette(config);
+
+		for (i = 0; i < n_palette && palette_hex != NULL; i++) {
+			if (palette_hex[i] != NULL) {
+				parse_color_name(palette_hex[i], &self->colors[i]);
+			}
+		}
+
+		/* Override foreground (index 256) */
+		hex = gst_config_get_fg_hex(config);
+		if (hex != NULL) {
+			parse_color_name(hex, &self->colors[256]);
+		} else if (palette_hex != NULL) {
+			guint fg_idx;
+
+			fg_idx = gst_config_get_fg_index(config);
+			if (fg_idx < n_palette) {
+				self->colors[256] = self->colors[fg_idx];
+			}
+		}
+
+		/* Override background (index 257) */
+		hex = gst_config_get_bg_hex(config);
+		if (hex != NULL) {
+			parse_color_name(hex, &self->colors[257]);
+		} else if (palette_hex != NULL) {
+			guint bg_idx;
+
+			bg_idx = gst_config_get_bg_index(config);
+			if (bg_idx < n_palette) {
+				self->colors[257] = self->colors[bg_idx];
+			}
+		}
+
+		/* Override cursor foreground (index 258) */
+		hex = gst_config_get_cursor_fg_hex(config);
+		if (hex != NULL) {
+			parse_color_name(hex, &self->colors[258]);
+		} else if (palette_hex != NULL) {
+			guint idx;
+
+			idx = gst_config_get_cursor_fg_index(config);
+			if (idx < n_palette) {
+				self->colors[258] = self->colors[idx];
+			}
+		}
+
+		/* Override cursor background (index 259) */
+		hex = gst_config_get_cursor_bg_hex(config);
+		if (hex != NULL) {
+			parse_color_name(hex, &self->colors[259]);
+		} else if (palette_hex != NULL) {
+			guint idx;
+
+			idx = gst_config_get_cursor_bg_index(config);
+			if (idx < n_palette) {
+				self->colors[259] = self->colors[idx];
 			}
 		}
 	}

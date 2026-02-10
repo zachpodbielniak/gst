@@ -18,6 +18,7 @@
 #include "gst-renderer.h"
 #include "gst-font-cache.h"
 #include "../gst-enums.h"
+#include "../config/gst-config.h"
 #include "../gst-types.h"
 
 G_BEGIN_DECLS
@@ -60,14 +61,16 @@ gst_x11_renderer_new(
 /**
  * gst_x11_renderer_load_colors:
  * @self: A #GstX11Renderer
+ * @config: (nullable): A #GstConfig for palette and color overrides
  *
- * Loads the 256-color palette plus default/cursor/reverse colors.
- * Ports st's xloadcols().
+ * Loads the full color palette (262 colors) from defaults,
+ * then applies any overrides from @config (palette hex strings
+ * and direct foreground/background/cursor hex colors).
  *
  * Returns: TRUE on success
  */
 gboolean
-gst_x11_renderer_load_colors(GstX11Renderer *self);
+gst_x11_renderer_load_colors(GstX11Renderer *self, GstConfig *config);
 
 /**
  * gst_x11_renderer_set_color:

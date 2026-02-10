@@ -56,6 +56,10 @@ struct _GstConfig
 	guint bg_index;
 	guint cursor_fg_index;
 	guint cursor_bg_index;
+	gchar *fg_hex;           /* direct "#RRGGBB" override or NULL */
+	gchar *bg_hex;
+	gchar *cursor_fg_hex;
+	gchar *cursor_bg_hex;
 	gchar **palette_hex;     /* NULL-terminated strv of "#RRGGBB" */
 	guint n_palette;
 
@@ -98,6 +102,10 @@ gst_config_dispose(GObject *object)
 	g_clear_pointer(&self->title, g_free);
 	g_clear_pointer(&self->font_primary, g_free);
 	g_clear_pointer(&self->font_fallbacks, g_strfreev);
+	g_clear_pointer(&self->fg_hex, g_free);
+	g_clear_pointer(&self->bg_hex, g_free);
+	g_clear_pointer(&self->cursor_fg_hex, g_free);
+	g_clear_pointer(&self->cursor_bg_hex, g_free);
 	g_clear_pointer(&self->palette_hex, g_strfreev);
 	g_clear_pointer(&self->word_delimiters, g_free);
 	g_clear_pointer(&self->module_configs, yaml_mapping_unref);
@@ -152,6 +160,10 @@ gst_config_init(GstConfig *self)
 	self->bg_index = 0;
 	self->cursor_fg_index = 0;
 	self->cursor_bg_index = 7;
+	self->fg_hex = NULL;
+	self->bg_hex = NULL;
+	self->cursor_fg_hex = NULL;
+	self->cursor_bg_hex = NULL;
 	self->palette_hex = NULL;
 	self->n_palette = 0;
 
@@ -425,52 +437,89 @@ load_colors_section(
 		return TRUE;
 	}
 
+	/*
+	 * foreground/background/cursor colors accept either:
+	 *   - "#RRGGBB" hex string (direct color)
+	 *   - integer 0-255 (palette index lookup)
+	 */
 	if (yaml_mapping_has_member(section, "foreground")) {
-		int_val = yaml_mapping_get_int_member(section, "foreground");
-		if (int_val < 0 || int_val > 255) {
-			g_set_error(error, GST_CONFIG_ERROR,
-				GST_CONFIG_ERROR_INVALID_VALUE,
-				"foreground index must be 0-255, got %" G_GINT64_FORMAT,
-				int_val);
-			return FALSE;
+		const gchar *str_val;
+
+		str_val = yaml_mapping_get_string_member(section, "foreground");
+		if (str_val != NULL && str_val[0] == '#') {
+			g_free(self->fg_hex);
+			self->fg_hex = g_strdup(str_val);
+		} else {
+			int_val = yaml_mapping_get_int_member(section, "foreground");
+			if (int_val < 0 || int_val > 255) {
+				g_set_error(error, GST_CONFIG_ERROR,
+					GST_CONFIG_ERROR_INVALID_VALUE,
+					"foreground index must be 0-255, got %" G_GINT64_FORMAT,
+					int_val);
+				return FALSE;
+			}
+			self->fg_index = (guint)int_val;
 		}
-		self->fg_index = (guint)int_val;
 	}
 
 	if (yaml_mapping_has_member(section, "background")) {
-		int_val = yaml_mapping_get_int_member(section, "background");
-		if (int_val < 0 || int_val > 255) {
-			g_set_error(error, GST_CONFIG_ERROR,
-				GST_CONFIG_ERROR_INVALID_VALUE,
-				"background index must be 0-255, got %" G_GINT64_FORMAT,
-				int_val);
-			return FALSE;
+		const gchar *str_val;
+
+		str_val = yaml_mapping_get_string_member(section, "background");
+		if (str_val != NULL && str_val[0] == '#') {
+			g_free(self->bg_hex);
+			self->bg_hex = g_strdup(str_val);
+		} else {
+			int_val = yaml_mapping_get_int_member(section, "background");
+			if (int_val < 0 || int_val > 255) {
+				g_set_error(error, GST_CONFIG_ERROR,
+					GST_CONFIG_ERROR_INVALID_VALUE,
+					"background index must be 0-255, got %" G_GINT64_FORMAT,
+					int_val);
+				return FALSE;
+			}
+			self->bg_index = (guint)int_val;
 		}
-		self->bg_index = (guint)int_val;
 	}
 
 	if (yaml_mapping_has_member(section, "cursor_fg")) {
-		int_val = yaml_mapping_get_int_member(section, "cursor_fg");
-		if (int_val < 0 || int_val > 255) {
-			g_set_error(error, GST_CONFIG_ERROR,
-				GST_CONFIG_ERROR_INVALID_VALUE,
-				"cursor_fg index must be 0-255, got %" G_GINT64_FORMAT,
-				int_val);
-			return FALSE;
+		const gchar *str_val;
+
+		str_val = yaml_mapping_get_string_member(section, "cursor_fg");
+		if (str_val != NULL && str_val[0] == '#') {
+			g_free(self->cursor_fg_hex);
+			self->cursor_fg_hex = g_strdup(str_val);
+		} else {
+			int_val = yaml_mapping_get_int_member(section, "cursor_fg");
+			if (int_val < 0 || int_val > 255) {
+				g_set_error(error, GST_CONFIG_ERROR,
+					GST_CONFIG_ERROR_INVALID_VALUE,
+					"cursor_fg index must be 0-255, got %" G_GINT64_FORMAT,
+					int_val);
+				return FALSE;
+			}
+			self->cursor_fg_index = (guint)int_val;
 		}
-		self->cursor_fg_index = (guint)int_val;
 	}
 
 	if (yaml_mapping_has_member(section, "cursor_bg")) {
-		int_val = yaml_mapping_get_int_member(section, "cursor_bg");
-		if (int_val < 0 || int_val > 255) {
-			g_set_error(error, GST_CONFIG_ERROR,
-				GST_CONFIG_ERROR_INVALID_VALUE,
-				"cursor_bg index must be 0-255, got %" G_GINT64_FORMAT,
-				int_val);
-			return FALSE;
+		const gchar *str_val;
+
+		str_val = yaml_mapping_get_string_member(section, "cursor_bg");
+		if (str_val != NULL && str_val[0] == '#') {
+			g_free(self->cursor_bg_hex);
+			self->cursor_bg_hex = g_strdup(str_val);
+		} else {
+			int_val = yaml_mapping_get_int_member(section, "cursor_bg");
+			if (int_val < 0 || int_val > 255) {
+				g_set_error(error, GST_CONFIG_ERROR,
+					GST_CONFIG_ERROR_INVALID_VALUE,
+					"cursor_bg index must be 0-255, got %" G_GINT64_FORMAT,
+					int_val);
+				return FALSE;
+			}
+			self->cursor_bg_index = (guint)int_val;
 		}
-		self->cursor_bg_index = (guint)int_val;
 	}
 
 	/* palette: sequence of "#RRGGBB" strings */
@@ -1381,6 +1430,74 @@ gst_config_get_cursor_bg_index(GstConfig *self)
 	g_return_val_if_fail(GST_IS_CONFIG(self), 7);
 
 	return self->cursor_bg_index;
+}
+
+/**
+ * gst_config_get_fg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the foreground, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if foreground uses a palette index instead
+ */
+const gchar *
+gst_config_get_fg_hex(GstConfig *self)
+{
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+
+	return self->fg_hex;
+}
+
+/**
+ * gst_config_get_bg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the background, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if background uses a palette index instead
+ */
+const gchar *
+gst_config_get_bg_hex(GstConfig *self)
+{
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+
+	return self->bg_hex;
+}
+
+/**
+ * gst_config_get_cursor_fg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the cursor foreground, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if cursor foreground uses a palette index instead
+ */
+const gchar *
+gst_config_get_cursor_fg_hex(GstConfig *self)
+{
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+
+	return self->cursor_fg_hex;
+}
+
+/**
+ * gst_config_get_cursor_bg_hex:
+ * @self: A #GstConfig
+ *
+ * Gets the direct hex color for the cursor background, if specified.
+ *
+ * Returns: (transfer none) (nullable): "#RRGGBB" string, or %NULL
+ *          if cursor background uses a palette index instead
+ */
+const gchar *
+gst_config_get_cursor_bg_hex(GstConfig *self)
+{
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+
+	return self->cursor_bg_hex;
 }
 
 /**
