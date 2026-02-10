@@ -11,6 +11,7 @@
 #include "gst-pty.h"
 #include <gio/gio.h>
 #include <pty.h>
+#include <termios.h>
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
@@ -342,6 +343,59 @@ gst_pty_write(
 			break;
 		}
 		total += written;
+	}
+}
+
+/**
+ * gst_pty_write_no_echo:
+ * @pty: a #GstPty
+ * @data: data to write to the child
+ * @len: length of data, or -1 if NUL-terminated
+ *
+ * Writes data to the child process via the PTY master fd with
+ * ECHO temporarily disabled. This prevents the line discipline
+ * from echoing the data back to the master's read buffer, which
+ * would cause the terminal to re-parse its own responses.
+ *
+ * Use this for terminal responses (DA, kitty graphics replies, etc.)
+ * where echo loopback would create a feedback loop.
+ */
+void
+gst_pty_write_no_echo(
+    GstPty      *pty,
+    const gchar *data,
+    gssize      len
+){
+	GstPtyPrivate *priv;
+	struct termios tio;
+	struct termios saved;
+	gboolean restored;
+
+	g_return_if_fail(GST_IS_PTY(pty));
+	g_return_if_fail(data != NULL);
+
+	priv = gst_pty_get_instance_private(pty);
+
+	if (priv->master_fd < 0 || !priv->running) {
+		return;
+	}
+
+	/* Suppress echo for this write */
+	restored = FALSE;
+	if (tcgetattr(priv->master_fd, &tio) == 0) {
+		saved = tio;
+		if (tio.c_lflag & ECHO) {
+			tio.c_lflag &= ~(ECHO);
+			tcsetattr(priv->master_fd, TCSANOW, &tio);
+			restored = TRUE;
+		}
+	}
+
+	gst_pty_write(pty, data, len);
+
+	/* Restore echo */
+	if (restored) {
+		tcsetattr(priv->master_fd, TCSANOW, &saved);
 	}
 }
 

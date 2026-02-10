@@ -42,6 +42,8 @@ gboolean gst_pty_spawn(GstPty *pty, const gchar *shell, gchar **envp, GError **e
 
 void gst_pty_write(GstPty *pty, const gchar *data, gssize len);
 
+void gst_pty_write_no_echo(GstPty *pty, const gchar *data, gssize len);
+
 void gst_pty_resize(GstPty *pty, gint cols, gint rows);
 
 gint gst_pty_get_fd(GstPty *pty);

@@ -1088,6 +1088,71 @@ test_osc_title_only(void)
 	g_object_unref(term);
 }
 
+/* ===== APC Buffer Integrity Test ===== */
+
+/*
+ * Captured data from escape-string signal callback.
+ */
+typedef struct {
+	gchar    str_type;
+	gchar   *buf;
+	gulong   len;
+	gboolean called;
+} ApcCapture;
+
+/*
+ * Signal callback: capture APC buffer data.
+ */
+static void
+on_escape_string_capture(
+	GstTerminal *term,
+	gchar        str_type,
+	const gchar *buf,
+	gulong       len,
+	gpointer     user_data
+){
+	ApcCapture *cap;
+
+	(void)term;
+
+	cap = (ApcCapture *)user_data;
+	cap->str_type = str_type;
+	cap->buf = g_strndup(buf, (gsize)len);
+	cap->len = len;
+	cap->called = TRUE;
+}
+
+/*
+ * Test that APC sequences preserve semicolons in the buffer.
+ * Regression test for kitty graphics protocol support.
+ * term_strparse must NOT corrupt the APC buffer before dispatch.
+ */
+static void
+test_apc_preserves_semicolon(void)
+{
+	GstTerminal *term;
+	ApcCapture cap;
+
+	memset(&cap, 0, sizeof(cap));
+
+	term = gst_terminal_new(80, 24);
+	g_signal_connect(term, "escape-string",
+		G_CALLBACK(on_escape_string_capture), &cap);
+
+	/* APC: ESC _ G a=t,f=100 ; AAAA ESC \ */
+	term_write(term, "\033_Ga=t,f=100;AAAA\033\\");
+
+	g_assert_true(cap.called);
+	g_assert_cmpint(cap.str_type, ==, '_');
+	g_assert_cmpuint(cap.len, ==, 15);
+	/* The critical assertion: semicolon must be preserved */
+	g_assert_cmpint(cap.buf[10], ==, ';');
+	g_assert_cmpstr(cap.buf, ==, "Ga=t,f=100;AAAA");
+
+	g_free(cap.buf);
+	g_object_unref(term);
+}
+
 /* ===== CSI Erase Character Test ===== */
 
 /*
@@ -1706,6 +1771,10 @@ main(
 	/* OSC */
 	g_test_add_func("/escape/osc/title", test_osc_title);
 	g_test_add_func("/escape/osc/title-only", test_osc_title_only);
+
+	/* APC */
+	g_test_add_func("/escape/apc/preserves-semicolon",
+	    test_apc_preserves_semicolon);
 
 	/* Alternate Screen */
 	g_test_add_func("/escape/altscreen", test_altscreen);

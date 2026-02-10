@@ -2056,6 +2056,23 @@ term_strhandle(GstTerminal *term)
 	gint par;
 
 	priv->esc &= ~(GST_ESC_STR_END | GST_ESC_STR);
+
+	/*
+	 * APC sequences must be dispatched with the raw buffer intact.
+	 * term_strparse() replaces ';' with '\0' which corrupts protocols
+	 * like kitty graphics that use ';' as a payload separator.
+	 * Handle APC before parsing to preserve the raw buffer.
+	 */
+	if (priv->str_type == '_') {
+		if (priv->str_buf != NULL && priv->str_len > 0) {
+			priv->str_buf[priv->str_len] = '\0';
+			g_signal_emit(term, signals[SIGNAL_ESCAPE_STRING], 0,
+				(gchar)'_', priv->str_buf,
+				(gulong)priv->str_len);
+		}
+		return;
+	}
+
 	term_strparse(term);
 
 	if (priv->str_nargs == 0) {
@@ -2104,11 +2121,6 @@ term_strhandle(GstTerminal *term)
 	case 'P': /* DCS */
 	case '^': /* PM */
 		/* Ignored for now */
-		break;
-
-	case '_': /* APC - dispatch to modules (e.g. kitty graphics) */
-		g_signal_emit(term, signals[SIGNAL_ESCAPE_STRING], 0,
-			(gchar)'_', priv->str_buf, (gulong)priv->str_len);
 		break;
 
 	default:

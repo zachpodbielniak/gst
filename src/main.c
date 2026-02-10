@@ -614,7 +614,7 @@ on_terminal_response(
 	glong       len,
 	gpointer    user_data
 ){
-	gst_pty_write(pty, data, (gssize)len);
+	gst_pty_write_no_echo(pty, data, (gssize)len);
 }
 
 /*

@@ -203,6 +203,39 @@ kittygfx_handle_escape(
 		return FALSE;
 	}
 
+	/*
+	 * Detect and discard echoed responses to prevent echo cascade.
+	 *
+	 * When we write a response (e.g. \033_Gi=31;OK\033\\) to the PTY,
+	 * the line discipline echoes it back if ECHO is on. The echoed
+	 * data arrives here as a new APC. Without this check, it would
+	 * be parsed as a transmit command (default action='t'), fail to
+	 * decode the status text as base64, generate an error response,
+	 * which echoes again — creating an infinite cascade whose error
+	 * messages contain characters like 'd' that leak to the child
+	 * process as keypresses.
+	 *
+	 * Echoed responses match: i=<digits>;<status> (no comma before ';').
+	 * Real commands always have multiple keys (a=, f=, s=, etc.).
+	 */
+	{
+		const gchar *after_g = buf + 1;
+		gsize after_g_len = len - 1;
+		const gchar *semi;
+
+		semi = (const gchar *)memchr(after_g, ';', after_g_len);
+		if (semi != NULL && after_g_len >= 3 &&
+		    after_g[0] == 'i' && after_g[1] == '=') {
+			const gchar *comma;
+
+			comma = (const gchar *)memchr(
+				after_g, ',', (gsize)(semi - after_g));
+			if (comma == NULL) {
+				return TRUE; /* consume echoed response silently */
+			}
+		}
+	}
+
 	/* Parse the command (skip the leading 'G') */
 	if (!gst_gfx_command_parse(buf + 1, len - 1, &cmd)) {
 		return FALSE;
