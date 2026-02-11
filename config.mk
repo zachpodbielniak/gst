@@ -34,7 +34,7 @@ BINDIR_RELEASE := $(BUILDDIR)/release
 # Build options (0 or 1)
 DEBUG ?= 0
 ASAN ?= 0
-BUILD_GIR ?= 1
+BUILD_GIR ?= 0
 BUILD_TESTS ?= 1
 BUILD_MODULES ?= 1
 BUILD_WAYLAND ?= 1
