@@ -172,6 +172,10 @@ gst_transparency_module_configure(GstModule *module, gpointer config)
 		return;
 	}
 
+	/*
+	 * Read base opacity first — it becomes the default for both
+	 * focus_opacity and unfocus_opacity unless they're overridden.
+	 */
 	if (yaml_mapping_has_member(mod_cfg, "opacity"))
 	{
 		gdouble val;
@@ -180,6 +184,8 @@ gst_transparency_module_configure(GstModule *module, gpointer config)
 		if (val < 0.0) val = 0.0;
 		if (val > 1.0) val = 1.0;
 		self->opacity = val;
+		self->focus_opacity = val;
+		self->unfocus_opacity = val;
 	}
 
 	if (yaml_mapping_has_member(mod_cfg, "focus_opacity"))
