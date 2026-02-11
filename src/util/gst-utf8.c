@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#define _XOPEN_SOURCE 700
 #include "gst-utf8.h"
 #include <string.h>
 #include <wchar.h>
@@ -93,7 +94,7 @@ gst_is_combining(GstRune rune)
 {
     GUnicodeType type = g_unichar_type((gunichar)rune);
 
-    return (type == G_UNICODE_COMBINING_MARK ||
+    return (type == G_UNICODE_SPACING_MARK ||
             type == G_UNICODE_ENCLOSING_MARK ||
             type == G_UNICODE_NON_SPACING_MARK);
 }

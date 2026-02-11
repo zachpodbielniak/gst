@@ -565,7 +565,7 @@ zoom(GstAction action)
 	 */
 	{
 		GstConfig *zoom_cfg;
-		const gchar **fallbacks;
+		const gchar *const *fallbacks;
 
 		zoom_cfg = gst_config_get_default();
 		fallbacks = gst_config_get_font_fallbacks(zoom_cfg);

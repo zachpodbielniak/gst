@@ -19,21 +19,27 @@ G_BEGIN_DECLS
  *
  * The major version component of the GST library.
  */
+#ifndef GST_VERSION_MAJOR
 #define GST_VERSION_MAJOR (@GST_VERSION_MAJOR@)
+#endif
 
 /**
  * GST_VERSION_MINOR:
  *
  * The minor version component of the GST library.
  */
+#ifndef GST_VERSION_MINOR
 #define GST_VERSION_MINOR (@GST_VERSION_MINOR@)
+#endif
 
 /**
  * GST_VERSION_MICRO:
  *
  * The micro version component of the GST library.
  */
+#ifndef GST_VERSION_MICRO
 #define GST_VERSION_MICRO (@GST_VERSION_MICRO@)
+#endif
 
 /**
  * GST_VERSION_STRING:

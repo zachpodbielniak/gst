@@ -649,8 +649,8 @@ gst_font_cache_get_default_font_size(GstFontCache *self)
  */
 guint
 gst_font_cache_load_spare_fonts(
-	GstFontCache    *self,
-	const gchar    **fonts
+	GstFontCache        *self,
+	const gchar *const  *fonts
 ){
 	guint loaded;
 	guint fi;

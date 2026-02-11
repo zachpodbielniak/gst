@@ -1754,7 +1754,6 @@ term_csihandle(GstTerminal *term)
 {
 	GstTerminalPrivate *priv = term->priv;
 	gchar cmd;
-	gint i;
 
 	term_csiparse(term);
 	cmd = priv->csi_mode[0];

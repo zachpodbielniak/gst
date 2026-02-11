@@ -179,8 +179,8 @@ gst_cairo_font_cache_get_default_font_size(GstCairoFontCache *self);
  */
 guint
 gst_cairo_font_cache_load_spare_fonts(
-	GstCairoFontCache   *self,
-	const gchar        **fonts
+	GstCairoFontCache       *self,
+	const gchar *const      *fonts
 );
 
 G_END_DECLS

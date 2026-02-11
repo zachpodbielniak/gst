@@ -132,7 +132,7 @@ gst_font2_module_configure(GstModule *module, gpointer config)
 
 	/* Fall back to global font.fallback list */
 	{
-		const gchar **fallbacks;
+		const gchar *const *fallbacks;
 
 		fallbacks = gst_config_get_font_fallbacks(cfg);
 		if (fallbacks != NULL && fallbacks[0] != NULL)

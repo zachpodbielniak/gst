@@ -167,7 +167,8 @@ libdecor_error_cb(
 }
 
 static struct libdecor_interface libdecor_iface = {
-	libdecor_error_cb
+	libdecor_error_cb,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 
 /*
@@ -284,7 +285,8 @@ static struct libdecor_frame_interface frame_iface = {
 	frame_configure_cb,
 	frame_close_cb,
 	frame_commit_cb,
-	frame_dismiss_popup_cb
+	frame_dismiss_popup_cb,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 
 /* ===== Keyboard callbacks ===== */
