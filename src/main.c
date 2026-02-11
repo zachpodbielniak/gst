@@ -745,8 +745,13 @@ on_key_press(
 		break;
 	}
 
-	/* Try escape sequence mapping for function keys (arrows, F-keys, etc.) */
-	if (len == 0 || text == NULL) {
+	/*
+	 * Key mapping table takes priority over XLookupString text.
+	 * Keys like Backspace, Return, Tab, arrows, F-keys all have
+	 * canonical escape sequences that must be sent regardless of
+	 * what XLookupString returns (e.g., BS vs DEL for backspace).
+	 */
+	{
 		gint esc_len;
 
 		esc_len = gst_terminal_key_to_escape(
@@ -757,7 +762,7 @@ on_key_press(
 		}
 	}
 
-	/* Forward text to PTY */
+	/* Forward text to PTY (printable characters not in key table) */
 	if (len > 0 && text != NULL) {
 		out_len = len;
 
