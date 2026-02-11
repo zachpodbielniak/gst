@@ -745,6 +745,18 @@ on_key_press(
 		break;
 	}
 
+	/* Try escape sequence mapping for function keys (arrows, F-keys, etc.) */
+	if (len == 0 || text == NULL) {
+		gint esc_len;
+
+		esc_len = gst_terminal_key_to_escape(
+			terminal, keysym, state, buf, sizeof(buf));
+		if (esc_len > 0) {
+			gst_pty_write(pty, buf, (gssize)esc_len);
+			return;
+		}
+	}
+
 	/* Forward text to PTY */
 	if (len > 0 && text != NULL) {
 		out_len = len;

@@ -282,6 +282,27 @@ void gst_terminal_swap_screen(GstTerminal *term);
  */
 gint gst_terminal_line_len(GstTerminal *term, gint row);
 
+/* Key-to-escape-sequence translation */
+
+/**
+ * gst_terminal_key_to_escape:
+ * @term: a #GstTerminal
+ * @keysym: X11/xkb keysym value
+ * @state: modifier mask (ShiftMask, ControlMask, Mod1Mask)
+ * @buf: (out): output buffer for the escape sequence
+ * @buflen: size of @buf in bytes (must be >= 2)
+ *
+ * Translates a keysym and modifier state into the corresponding VT
+ * escape sequence, accounting for application cursor mode and
+ * application keypad mode.  For keys that support xterm-style modifier
+ * encoding (arrows, Home/End, F-keys, etc.) the modifier parameter
+ * is inserted automatically.
+ *
+ * Returns: number of bytes written to @buf, or 0 if no mapping exists
+ */
+gint gst_terminal_key_to_escape(GstTerminal *term, guint keysym,
+                                guint state, gchar *buf, gsize buflen);
+
 G_END_DECLS
 
 #endif /* GST_TERMINAL_H */

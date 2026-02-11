@@ -13,6 +13,8 @@
 #include "gst-escape-parser.h"
 #include "../util/gst-utf8.h"
 #include <string.h>
+#include <stdio.h>
+#include <X11/keysym.h>
 
 /* ===== Macros and constants ===== */
 
@@ -2781,4 +2783,295 @@ gst_terminal_write(
 	}
 
 	g_signal_emit(term, signals[SIGNAL_CONTENTS_CHANGED], 0);
+}
+
+/* ===== Key-to-escape-sequence mapping ===== */
+
+/*
+ * X11 modifier masks — also defined by the Wayland window backend,
+ * but we guard here for compilation units that include Xlib directly.
+ */
+#ifndef ShiftMask
+#define ShiftMask   (1 << 0)
+#endif
+#ifndef ControlMask
+#define ControlMask (1 << 2)
+#endif
+#ifndef Mod1Mask
+#define Mod1Mask    (1 << 3)
+#endif
+
+/*
+ * GstKeyMapping:
+ *
+ * Maps a keysym (optionally constrained by modifiers and terminal modes)
+ * to an escape sequence string.
+ *
+ * @keysym:    X11/xkb keysym value
+ * @mask:      required modifier mask (0 = no modifiers required)
+ * @string:    escape sequence to send (static string, no trailing NUL issues)
+ * @appkey:    +1 = only when APPKEYPAD active, -1 = only when inactive, 0 = either
+ * @appcursor: +1 = only when APPCURSOR active, -1 = only when inactive, 0 = either
+ */
+typedef struct {
+	guint        keysym;
+	guint        mask;
+	const gchar *string;
+	gint         appkey;
+	gint         appcursor;
+} GstKeyMapping;
+
+/*
+ * Static key mapping table, modelled after st's key[] array.
+ * Entries are matched top-to-bottom; first match wins.
+ * Modifier-specific entries come before generic ones.
+ */
+static const GstKeyMapping key_map[] = {
+	/* Backspace */
+	{ XK_BackSpace, 0,           "\177",   0,  0 },
+
+	/* Tab / Shift-Tab (backtab) */
+	{ XK_Tab,       ShiftMask,   "\033[Z", 0,  0 },
+	{ XK_Tab,       0,           "\t",     0,  0 },
+
+	/* Return */
+	{ XK_Return,    Mod1Mask,    "\033\r", 0,  0 },
+	{ XK_Return,    0,           "\r",     0,  0 },
+
+	/* Escape */
+	{ XK_Escape,    0,           "\033",   0,  0 },
+
+	/* Insert / Delete */
+	{ XK_Insert,    0,           "\033[2~", 0,  0 },
+	{ XK_Delete,    0,           "\033[3~", 0,  0 },
+
+	/* Home / End — mode-dependent */
+	{ XK_Home,      0,           "\033[H",  0, -1 },
+	{ XK_Home,      0,           "\033OH",  0, +1 },
+	{ XK_End,       0,           "\033[F",  0, -1 },
+	{ XK_End,       0,           "\033OF",  0, +1 },
+
+	/* Page Up / Page Down */
+	{ XK_Prior,     0,           "\033[5~", 0,  0 },
+	{ XK_Next,      0,           "\033[6~", 0,  0 },
+
+	/* Arrow keys — mode-dependent */
+	{ XK_Up,        0,           "\033[A",  0, -1 },
+	{ XK_Up,        0,           "\033OA",  0, +1 },
+	{ XK_Down,      0,           "\033[B",  0, -1 },
+	{ XK_Down,      0,           "\033OB",  0, +1 },
+	{ XK_Right,     0,           "\033[C",  0, -1 },
+	{ XK_Right,     0,           "\033OC",  0, +1 },
+	{ XK_Left,      0,           "\033[D",  0, -1 },
+	{ XK_Left,      0,           "\033OD",  0, +1 },
+
+	/* Function keys F1-F4 (VT style: ESC O P-S) */
+	{ XK_F1,        0,           "\033OP",   0,  0 },
+	{ XK_F2,        0,           "\033OQ",   0,  0 },
+	{ XK_F3,        0,           "\033OR",   0,  0 },
+	{ XK_F4,        0,           "\033OS",   0,  0 },
+
+	/* Function keys F5-F12 (xterm style: ESC [ nn ~) */
+	{ XK_F5,        0,           "\033[15~", 0,  0 },
+	{ XK_F6,        0,           "\033[17~", 0,  0 },
+	{ XK_F7,        0,           "\033[18~", 0,  0 },
+	{ XK_F8,        0,           "\033[19~", 0,  0 },
+	{ XK_F9,        0,           "\033[20~", 0,  0 },
+	{ XK_F10,       0,           "\033[21~", 0,  0 },
+	{ XK_F11,       0,           "\033[23~", 0,  0 },
+	{ XK_F12,       0,           "\033[24~", 0,  0 },
+
+	/* Keypad — application mode sends ESC O {letter} */
+	{ XK_KP_Enter,  0,           "\033OM", +1,  0 },
+	{ XK_KP_Enter,  0,           "\r",     -1,  0 },
+	{ XK_KP_Multiply, 0,        "\033Oj", +1,  0 },
+	{ XK_KP_Add,    0,           "\033Ok", +1,  0 },
+	{ XK_KP_Separator, 0,       "\033Ol", +1,  0 },
+	{ XK_KP_Subtract, 0,        "\033Om", +1,  0 },
+	{ XK_KP_Decimal, 0,         "\033On", +1,  0 },
+	{ XK_KP_Divide, 0,          "\033Oo", +1,  0 },
+	{ XK_KP_0,      0,          "\033Op", +1,  0 },
+	{ XK_KP_1,      0,          "\033Oq", +1,  0 },
+	{ XK_KP_2,      0,          "\033Or", +1,  0 },
+	{ XK_KP_3,      0,          "\033Os", +1,  0 },
+	{ XK_KP_4,      0,          "\033Ot", +1,  0 },
+	{ XK_KP_5,      0,          "\033Ou", +1,  0 },
+	{ XK_KP_6,      0,          "\033Ov", +1,  0 },
+	{ XK_KP_7,      0,          "\033Ow", +1,  0 },
+	{ XK_KP_8,      0,          "\033Ox", +1,  0 },
+	{ XK_KP_9,      0,          "\033Oy", +1,  0 },
+
+	/* Sentinel */
+	{ 0, 0, NULL, 0, 0 }
+};
+
+/*
+ * compute_xterm_mod_param:
+ *
+ * Computes the xterm modifier parameter value from X11 modifier bits.
+ * Returns 0 if no modifiers are held, otherwise the xterm code:
+ *   Shift=2, Alt=3, Alt+Shift=4, Ctrl=5, Ctrl+Shift=6,
+ *   Ctrl+Alt=7, Ctrl+Alt+Shift=8
+ */
+static gint
+compute_xterm_mod_param(guint state)
+{
+	gint mod;
+
+	mod = 1;
+	if (state & ShiftMask)   mod += 1;
+	if (state & Mod1Mask)    mod += 2;
+	if (state & ControlMask) mod += 4;
+
+	return (mod > 1) ? mod : 0;
+}
+
+/*
+ * gst_terminal_key_to_escape:
+ * @term: a #GstTerminal (for mode queries)
+ * @keysym: X11/xkb keysym
+ * @state: modifier mask (ShiftMask, ControlMask, Mod1Mask)
+ * @buf: (out): output buffer for escape sequence
+ * @buflen: size of @buf
+ *
+ * Translates a keysym + modifiers into the corresponding VT escape
+ * sequence, accounting for application cursor mode and keypad mode.
+ * For keys that support xterm-style modifier encoding (arrows, Home,
+ * End, Insert, Delete, PgUp, PgDn, F-keys), modifier parameters are
+ * inserted automatically.
+ *
+ * Returns: number of bytes written to @buf, or 0 if no mapping exists
+ */
+gint
+gst_terminal_key_to_escape(
+	GstTerminal *term,
+	guint        keysym,
+	guint        state,
+	gchar       *buf,
+	gsize        buflen
+){
+	GstTermMode mode;
+	gboolean appcursor;
+	gboolean appkeypad;
+	gint mod_param;
+	const GstKeyMapping *k;
+
+	g_return_val_if_fail(GST_IS_TERMINAL(term), 0);
+	g_return_val_if_fail(buf != NULL && buflen >= 2, 0);
+
+	mode = gst_terminal_get_mode(term);
+	appcursor = (mode & GST_MODE_APPCURSOR) != 0;
+	appkeypad = (mode & GST_MODE_APPKEYPAD) != 0;
+
+	/*
+	 * Strip shift/ctrl/alt from the mask used for table lookup —
+	 * these modifiers are encoded as xterm parameters instead.
+	 * The table's mask field is only for fixed modifier requirements
+	 * like Shift+Tab → backtab.
+	 */
+	mod_param = compute_xterm_mod_param(state);
+
+	for (k = key_map; k->string != NULL; k++) {
+		if (k->keysym != keysym)
+			continue;
+
+		/* Check modifier constraint (exact match for table entries with mask) */
+		if (k->mask != 0 && (state & k->mask) != k->mask)
+			continue;
+		if (k->mask == 0 && (state & (ShiftMask | ControlMask | Mod1Mask)) != 0) {
+			/*
+			 * Key has no modifier constraint but modifiers are held.
+			 * For keys that support xterm-style modifier encoding,
+			 * we'll inject the modifier param below. But we still
+			 * need to match the base keysym, so continue checking
+			 * mode constraints before deciding.
+			 */
+		}
+
+		/* Check application cursor mode constraint */
+		if (k->appcursor != 0) {
+			if (k->appcursor > 0 && !appcursor)
+				continue;
+			if (k->appcursor < 0 && appcursor)
+				continue;
+		}
+
+		/* Check application keypad mode constraint */
+		if (k->appkey != 0) {
+			if (k->appkey > 0 && !appkeypad)
+				continue;
+			if (k->appkey < 0 && appkeypad)
+				continue;
+		}
+
+		/*
+		 * Match found. If modifiers are held and the base sequence
+		 * supports xterm-style encoding, inject modifier parameter.
+		 *
+		 * CSI sequences ending with ~ : ESC[code~ → ESC[code;mod~
+		 * CSI/SS3 sequences with letter: ESC[X or ESCOX → ESC[1;modX
+		 * Fixed strings (plain \r, \t, etc.) are sent as-is from table.
+		 */
+		if (k->mask != 0) {
+			/* Entry has explicit modifier handling — use string as-is */
+			gsize slen;
+
+			slen = strlen(k->string);
+			if (slen >= buflen)
+				return 0;
+			memcpy(buf, k->string, slen);
+			return (gint)slen;
+		}
+
+		if (mod_param > 0 && k->string[0] == '\033' &&
+		    (k->string[1] == '[' || k->string[1] == 'O')) {
+			/*
+			 * Inject xterm modifier parameter into the sequence.
+			 */
+			const gchar *base;
+			gsize base_len;
+			gint written;
+
+			base = k->string;
+			base_len = strlen(base);
+
+			if (base_len >= 3 && base[base_len - 1] == '~') {
+				/*
+				 * CSI tilde-terminated: ESC[nn~ → ESC[nn;mod~
+				 * Extract numeric code between '[' and '~'.
+				 */
+				written = g_snprintf(buf, (gulong)buflen,
+					"\033[%.*s;%d~",
+					(gint)(base_len - 3), base + 2,
+					mod_param);
+				return (written > 0 && (gsize)written < buflen)
+					? written : 0;
+			} else if (base_len >= 3) {
+				/*
+				 * SS3 or CSI letter-terminated: ESCOQ → ESC[1;modQ
+				 * The final character is the command letter.
+				 */
+				gchar final_ch;
+
+				final_ch = base[base_len - 1];
+				written = g_snprintf(buf, (gulong)buflen,
+					"\033[1;%d%c", mod_param, final_ch);
+				return (written > 0 && (gsize)written < buflen)
+					? written : 0;
+			}
+		}
+
+		/* No modifier injection — copy string directly */
+		{
+			gsize slen;
+
+			slen = strlen(k->string);
+			if (slen >= buflen)
+				return 0;
+			memcpy(buf, k->string, slen);
+			return (gint)slen;
+		}
+	}
+
+	return 0;
 }
