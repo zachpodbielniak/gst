@@ -15,7 +15,11 @@ VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 # Installation directories
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-LIBDIR ?= $(PREFIX)/lib
+
+# Auto-detect lib vs lib64 for 64-bit systems (Fedora, RHEL, SUSE, etc.)
+# Override with: make LIBDIR=/usr/local/lib
+LIBDIR_SUFFIX := $(shell if [ -d /usr/lib64 ]; then echo lib64; else echo lib; fi)
+LIBDIR ?= $(PREFIX)/$(LIBDIR_SUFFIX)
 INCLUDEDIR ?= $(PREFIX)/include
 DATADIR ?= $(PREFIX)/share
 PKGCONFIGDIR ?= $(LIBDIR)/pkgconfig

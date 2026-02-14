@@ -163,16 +163,22 @@ ifeq ($(BUILD_MODULES),1)
 install: install-modules
 endif
 
-install-bin: $(OUTDIR)/gst
+install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(BINDIR)
-	$(INSTALL_PROGRAM) $(OUTDIR)/gst $(DESTDIR)$(BINDIR)/gst
+	$(CC) -o $(DESTDIR)$(BINDIR)/gst $(OBJDIR)/main.o \
+		-L$(OUTDIR) -lgst $(LDFLAGS) -Wl,-rpath,$(LIBDIR)
+	chmod 755 $(DESTDIR)$(BINDIR)/gst
 
 install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(MKDIR_P) $(DESTDIR)$(LIBDIR)
 	$(INSTALL_DATA) $(OUTDIR)/$(LIB_STATIC) $(DESTDIR)$(LIBDIR)/
-	$(INSTALL_DATA) $(OUTDIR)/$(LIB_SHARED_FULL) $(DESTDIR)$(LIBDIR)/
+	$(INSTALL_PROGRAM) $(OUTDIR)/$(LIB_SHARED_FULL) $(DESTDIR)$(LIBDIR)/
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_FULL) $(LIB_SHARED_MAJOR)
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_MAJOR) $(LIB_SHARED)
+	@if [ -z "$(DESTDIR)" ] && command -v ldconfig >/dev/null 2>&1; then \
+		echo "Updating shared library cache..."; \
+		ldconfig; \
+	fi
 
 install-headers:
 	$(MKDIR_P) $(DESTDIR)$(INCLUDEDIR)/gst
