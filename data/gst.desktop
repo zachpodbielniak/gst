@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=gst
+GenericName=Terminal Emulator
+Comment=GObject Simple Terminal - a modular terminal emulator
+Exec=gst
+Icon=gst
+Terminal=false
+Type=Application
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;prompt;console;command;
+StartupNotify=true

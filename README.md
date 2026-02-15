@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data/logo.png" alt="GST Logo" width="192">
+</p>
+
 # GST - GObject Simple Terminal
 
 A GObject-based terminal emulator with modular extensibility. GST is a reimplementation of [st (suckless terminal)](https://st.suckless.org/) using GObject for clean architecture and a plugin-based module system to replace st's patch-based customization.

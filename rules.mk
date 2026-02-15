@@ -153,9 +153,9 @@ clean-all:
 	rm -f src/gst-version.h
 
 # Installation rules
-.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules
+.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop
 
-install: install-lib install-bin install-headers install-pc
+install: install-lib install-bin install-headers install-pc install-desktop
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -223,6 +223,12 @@ install-modules:
 		fi \
 	done
 
+install-desktop:
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/applications
+	$(INSTALL_DATA) data/gst.desktop $(DESTDIR)$(DATADIR)/applications/
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps
+	$(INSTALL_DATA) data/logo-256.png $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
+
 # Uninstall
 .PHONY: uninstall
 uninstall:
@@ -236,3 +242,5 @@ uninstall:
 	rm -f $(DESTDIR)$(GIRDIR)/$(GIR_FILE)
 	rm -f $(DESTDIR)$(TYPELIBDIR)/$(TYPELIB_FILE)
 	rm -rf $(DESTDIR)$(MODULEDIR)
+	rm -f $(DESTDIR)$(DATADIR)/applications/gst.desktop
+	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
