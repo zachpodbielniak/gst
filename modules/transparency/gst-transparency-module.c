@@ -92,18 +92,23 @@ gst_transparency_module_render(
 	self = GST_TRANSPARENCY_MODULE(overlay);
 	ctx = (GstRenderContext *)render_context;
 
-	focused = (ctx->win_mode & GST_WIN_MODE_FOCUSED) != 0;
-
 	/* Set initial opacity on first render */
 	if (!self->initial_set) {
 		self->initial_set = TRUE;
-		self->was_focused = focused;
-		apply_opacity(focused ? self->focus_opacity
-			: self->unfocus_opacity);
+		apply_opacity(self->opacity);
 		return;
 	}
 
-	/* Only update when focus state changes */
+	/*
+	 * Only track focus changes when focus and unfocus opacity differ.
+	 * When they're equal, opacity stays constant regardless of focus.
+	 */
+	if (self->focus_opacity == self->unfocus_opacity) {
+		return;
+	}
+
+	focused = (ctx->win_mode & GST_WIN_MODE_FOCUSED) != 0;
+
 	if (focused != self->was_focused) {
 		gdouble target;
 
@@ -230,9 +235,9 @@ gst_transparency_module_class_init(GstTransparencyModuleClass *klass)
 static void
 gst_transparency_module_init(GstTransparencyModule *self)
 {
-	self->opacity = 0.95;
-	self->focus_opacity = 1.0;
-	self->unfocus_opacity = 0.85;
+	self->opacity = 0.9;
+	self->focus_opacity = 0.9;
+	self->unfocus_opacity = 0.9;
 	self->was_focused = TRUE;
 	self->initial_set = FALSE;
 }

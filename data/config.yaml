@@ -81,9 +81,7 @@ modules:
 
   transparency:
     enabled: true
-    opacity: 0.90
-    focus_opacity: 0.9
-    unfocus_opacity: 0.90
+    opacity: 0.9
 
   urlclick:
     enabled: true
