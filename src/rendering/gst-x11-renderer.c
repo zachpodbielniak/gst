@@ -1010,6 +1010,79 @@ gst_x11_renderer_dispose(GObject *object)
 	G_OBJECT_CLASS(gst_x11_renderer_parent_class)->dispose(object);
 }
 
+/*
+ * x11_renderer_capture_screenshot_impl:
+ *
+ * Captures the off-screen pixmap (double buffer) as RGBA pixel data.
+ * XGetImage returns pixels in the Visual's native format (typically
+ * BGRA on little-endian x86). We convert per-pixel to RGBA order.
+ */
+static GBytes *
+x11_renderer_capture_screenshot_impl(
+	GstRenderer *renderer,
+	gint        *out_width,
+	gint        *out_height,
+	gint        *out_stride
+){
+	GstX11Renderer *self;
+	XImage *img;
+	gint w, h, stride;
+	guint8 *rgba;
+	gint x, y;
+
+	self = GST_X11_RENDERER(renderer);
+
+	w = self->win_w;
+	h = self->win_h;
+
+	if (w <= 0 || h <= 0 || self->buf == 0) {
+		return NULL;
+	}
+
+	/* Capture the off-screen pixmap */
+	img = XGetImage(self->display, self->buf, 0, 0,
+		(guint)w, (guint)h, AllPlanes, ZPixmap);
+	if (img == NULL) {
+		return NULL;
+	}
+
+	/* Allocate RGBA output buffer (4 bytes per pixel) */
+	stride = w * 4;
+	rgba = (guint8 *)g_malloc((gsize)stride * (gsize)h);
+
+	/*
+	 * Convert from X11 native format to RGBA.
+	 * XImage with ZPixmap and 32-bit visual stores pixels as
+	 * 0xAARRGGBB in native byte order, which on little-endian
+	 * is byte order: BB GG RR AA. We extract via XGetPixel
+	 * for portability across visuals.
+	 */
+	for (y = 0; y < h; y++) {
+		guint8 *row;
+
+		row = rgba + y * stride;
+		for (x = 0; x < w; x++) {
+			gulong pixel;
+			guint8 *dst;
+
+			pixel = XGetPixel(img, x, y);
+			dst = row + x * 4;
+			dst[0] = (guint8)((pixel >> 16) & 0xFF); /* R */
+			dst[1] = (guint8)((pixel >>  8) & 0xFF); /* G */
+			dst[2] = (guint8)((pixel      ) & 0xFF); /* B */
+			dst[3] = 0xFF;                            /* A (opaque) */
+		}
+	}
+
+	XDestroyImage(img);
+
+	if (out_width != NULL)  *out_width  = w;
+	if (out_height != NULL) *out_height = h;
+	if (out_stride != NULL) *out_stride = stride;
+
+	return g_bytes_new_take(rgba, (gsize)stride * (gsize)h);
+}
+
 static void
 gst_x11_renderer_class_init(GstX11RendererClass *klass)
 {
@@ -1027,6 +1100,7 @@ gst_x11_renderer_class_init(GstX11RendererClass *klass)
 	renderer_class->draw_cursor = x11_renderer_draw_cursor_impl;
 	renderer_class->start_draw = x11_renderer_start_draw_impl;
 	renderer_class->finish_draw = x11_renderer_finish_draw_impl;
+	renderer_class->capture_screenshot = x11_renderer_capture_screenshot_impl;
 }
 
 static void

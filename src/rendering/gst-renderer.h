@@ -57,8 +57,14 @@ struct _GstRendererClass
 	gboolean (*start_draw) (GstRenderer *self);
 	void     (*finish_draw)(GstRenderer *self);
 
+	/* Screenshot capture: returns RGBA pixel data */
+	GBytes * (*capture_screenshot)(GstRenderer *self,
+	                               gint        *out_width,
+	                               gint        *out_height,
+	                               gint        *out_stride);
+
 	/* Padding for future expansion */
-	gpointer padding[4];
+	gpointer padding[3];
 };
 
 GType
@@ -99,6 +105,27 @@ gst_renderer_start_draw(GstRenderer *self);
 
 void
 gst_renderer_finish_draw(GstRenderer *self);
+
+/**
+ * gst_renderer_capture_screenshot:
+ * @self: A #GstRenderer
+ * @out_width: (out) (optional): location to store the image width
+ * @out_height: (out) (optional): location to store the image height
+ * @out_stride: (out) (optional): location to store the row stride in bytes
+ *
+ * Captures the current terminal display as raw RGBA pixel data.
+ * Each backend converts from its native pixel format to RGBA.
+ *
+ * Returns: (transfer full) (nullable): a #GBytes containing RGBA pixels,
+ *     or %NULL if capture is not supported
+ */
+GBytes *
+gst_renderer_capture_screenshot(
+	GstRenderer *self,
+	gint        *out_width,
+	gint        *out_height,
+	gint        *out_stride
+);
 
 /**
  * gst_renderer_get_terminal:

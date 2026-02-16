@@ -368,6 +368,31 @@ gpointer
 gst_module_manager_get_pty(GstModuleManager *self);
 
 /**
+ * gst_module_manager_set_renderer:
+ * @self: A #GstModuleManager
+ * @renderer: (type gpointer): The renderer instance (weak ref)
+ *
+ * Stores a weak reference to the renderer so modules can
+ * access it via gst_module_manager_get_renderer().
+ */
+void
+gst_module_manager_set_renderer(
+	GstModuleManager *self,
+	gpointer          renderer
+);
+
+/**
+ * gst_module_manager_get_renderer:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored renderer reference.
+ *
+ * Returns: (transfer none) (nullable): The renderer, or %NULL
+ */
+gpointer
+gst_module_manager_get_renderer(GstModuleManager *self);
+
+/**
  * gst_module_manager_set_backend_type:
  * @self: A #GstModuleManager
  * @backend_type: The active rendering backend type

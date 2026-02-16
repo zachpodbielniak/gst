@@ -170,6 +170,9 @@ gst_mcp_module_configure(
 	/* Input injection */
 	self->tool_send_text = yaml_get_bool(tools_cfg, "send_text", FALSE);
 	self->tool_send_keys = yaml_get_bool(tools_cfg, "send_keys", FALSE);
+
+	/* Screenshot capture */
+	self->tool_screenshot = yaml_get_bool(tools_cfg, "screenshot", FALSE);
 }
 
 /* ===== Server setup (shared across all transport paths) ===== */
@@ -200,6 +203,7 @@ gst_mcp_module_setup_server(
 	gst_mcp_tools_config_register(server, self);
 	gst_mcp_tools_input_register(server, self);
 	gst_mcp_tools_window_register(server, self);
+	gst_mcp_tools_screenshot_register(server, self);
 }
 
 /* ===== Unix socket session lifecycle ===== */
@@ -597,6 +601,7 @@ gst_mcp_module_init(GstMcpModule *self)
 	self->tool_set_window_title = FALSE;
 	self->tool_send_text = FALSE;
 	self->tool_send_keys = FALSE;
+	self->tool_screenshot = FALSE;
 }
 
 /* ===== Module entry point ===== */

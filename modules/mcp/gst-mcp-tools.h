@@ -79,6 +79,16 @@ gst_mcp_tools_input_register(McpServer *server, GstMcpModule *self);
 void
 gst_mcp_tools_window_register(McpServer *server, GstMcpModule *self);
 
+/*
+ * gst_mcp_tools_screenshot_register:
+ * @server: The MCP server instance
+ * @self: The MCP module
+ *
+ * Registers screenshot capture tool: screenshot.
+ */
+void
+gst_mcp_tools_screenshot_register(McpServer *server, GstMcpModule *self);
+
 G_END_DECLS
 
 #endif /* GST_MCP_TOOLS_H */

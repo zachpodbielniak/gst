@@ -11,7 +11,8 @@ MODULE_SRCS := gst-mcp-module.c \
                gst-mcp-tools-url.c \
                gst-mcp-tools-config.c \
                gst-mcp-tools-input.c \
-               gst-mcp-tools-window.c
+               gst-mcp-tools-window.c \
+               gst-mcp-tools-screenshot.c
 
 CC      ?= gcc
 override CFLAGS  += $(MCP_CFLAGS)

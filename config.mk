@@ -106,7 +106,7 @@ endif
 
 # Optional MCP dependencies (requires mcp-glib submodule at deps/mcp-glib)
 ifeq ($(MCP),1)
-DEPS_MCP := libsoup-3.0 libdex-1
+DEPS_MCP := libsoup-3.0 libdex-1 libpng
 MCP_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_MCP) 2>/dev/null && echo 1 || echo 0)
 else
 MCP_AVAILABLE := 0
@@ -195,7 +195,7 @@ FEDORA_DEPS_REQUIRED := glib2-devel libX11-devel libXft-devel \
     fontconfig-devel libyaml-devel json-glib-devel
 FEDORA_DEPS_GIR := gobject-introspection-devel
 FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-devel
-FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel
+FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel libpng-devel
 
 # Install build dependencies (Fedora/dnf)
 .PHONY: install-deps

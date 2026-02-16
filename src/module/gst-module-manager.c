@@ -68,6 +68,7 @@ struct _GstModuleManager
 	gpointer     window;           /* weak ref to GstWindow */
 	gpointer     font_cache;       /* weak ref to font cache (X11 or Cairo) */
 	gpointer     pty;              /* weak ref to GstPty */
+	gpointer     renderer;         /* weak ref to GstRenderer */
 	gint         backend_type;     /* GstBackendType value */
 };
 
@@ -289,6 +290,7 @@ gst_module_manager_init(GstModuleManager *self)
 	self->terminal = NULL;
 	self->window = NULL;
 	self->font_cache = NULL;
+	self->renderer = NULL;
 	self->backend_type = 0;
 }
 
@@ -989,6 +991,39 @@ gst_module_manager_get_pty(GstModuleManager *self)
 	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
 
 	return self->pty;
+}
+
+/**
+ * gst_module_manager_set_renderer:
+ * @self: A #GstModuleManager
+ * @renderer: (type gpointer): The renderer instance (weak ref)
+ *
+ * Stores a weak reference to the renderer for module access.
+ */
+void
+gst_module_manager_set_renderer(
+	GstModuleManager *self,
+	gpointer          renderer
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->renderer = renderer;
+}
+
+/**
+ * gst_module_manager_get_renderer:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored renderer reference.
+ *
+ * Returns: (transfer none) (nullable): The renderer, or %NULL
+ */
+gpointer
+gst_module_manager_get_renderer(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
+
+	return self->renderer;
 }
 
 /* ===== Public API: font cache and backend type accessors ===== */

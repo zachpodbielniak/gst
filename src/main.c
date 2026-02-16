@@ -281,6 +281,7 @@ static const GstBuiltinModule builtin_modules[] = {
 		"      set_window_title: true\n"
 		"      send_text: true\n"
 		"      send_keys: true\n"
+		"      screenshot: true\n"
 		"\n"
 	},
 	{ NULL, NULL, NULL }
@@ -1954,6 +1955,7 @@ main(
 		gst_module_manager_set_window(mod_mgr, window);
 		gst_module_manager_set_pty(mod_mgr, pty);
 		gst_module_manager_set_backend_type(mod_mgr, (gint)backend);
+		gst_module_manager_set_renderer(mod_mgr, renderer);
 
 		/* Provide the appropriate font cache for modules (e.g. font2) */
 		if (backend == GST_BACKEND_X11) {

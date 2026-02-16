@@ -87,6 +87,9 @@ struct _GstMcpModule
 	gboolean     tool_set_window_title;
 	gboolean     tool_send_text;
 	gboolean     tool_send_keys;
+
+	/* Screenshot capture */
+	gboolean     tool_screenshot;
 };
 
 /**

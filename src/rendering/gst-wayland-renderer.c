@@ -1240,6 +1240,80 @@ gst_wayland_renderer_dispose(GObject *object)
 	G_OBJECT_CLASS(gst_wayland_renderer_parent_class)->dispose(object);
 }
 
+/*
+ * wl_renderer_capture_screenshot_impl:
+ *
+ * Captures the Cairo image surface as RGBA pixel data.
+ * Cairo ARGB32 stores pixels as 0xAARRGGBB in native byte order,
+ * which on little-endian is byte order: BB GG RR AA. We convert
+ * per-pixel to RGBA order.
+ */
+static GBytes *
+wl_renderer_capture_screenshot_impl(
+	GstRenderer *renderer,
+	gint        *out_width,
+	gint        *out_height,
+	gint        *out_stride
+){
+	GstWaylandRenderer *self;
+	guint8 *src_data;
+	gint w, h, src_stride, dst_stride;
+	guint8 *rgba;
+	gint x, y;
+
+	self = GST_WAYLAND_RENDERER(renderer);
+
+	w = self->win_w;
+	h = self->win_h;
+
+	if (w <= 0 || h <= 0 || self->cairo_surface == NULL) {
+		return NULL;
+	}
+
+	/* Flush pending drawing operations to the surface */
+	cairo_surface_flush(self->cairo_surface);
+
+	src_data = cairo_image_surface_get_data(self->cairo_surface);
+	if (src_data == NULL) {
+		return NULL;
+	}
+
+	src_stride = cairo_image_surface_get_stride(self->cairo_surface);
+
+	/* Allocate RGBA output buffer (4 bytes per pixel) */
+	dst_stride = w * 4;
+	rgba = (guint8 *)g_malloc((gsize)dst_stride * (gsize)h);
+
+	/*
+	 * Convert from Cairo ARGB32 to RGBA.
+	 * Cairo ARGB32 on little-endian: byte order is B, G, R, A.
+	 */
+	for (y = 0; y < h; y++) {
+		guint8 *src_row;
+		guint8 *dst_row;
+
+		src_row = src_data + y * src_stride;
+		dst_row = rgba + y * dst_stride;
+		for (x = 0; x < w; x++) {
+			guint8 *src;
+			guint8 *dst;
+
+			src = src_row + x * BYTES_PER_PIXEL;
+			dst = dst_row + x * 4;
+			dst[0] = src[2]; /* R (from Cairo B,G,R,A layout) */
+			dst[1] = src[1]; /* G */
+			dst[2] = src[0]; /* B */
+			dst[3] = src[3]; /* A */
+		}
+	}
+
+	if (out_width != NULL)  *out_width  = w;
+	if (out_height != NULL) *out_height = h;
+	if (out_stride != NULL) *out_stride = dst_stride;
+
+	return g_bytes_new_take(rgba, (gsize)dst_stride * (gsize)h);
+}
+
 static void
 gst_wayland_renderer_class_init(GstWaylandRendererClass *klass)
 {
@@ -1257,6 +1331,7 @@ gst_wayland_renderer_class_init(GstWaylandRendererClass *klass)
 	renderer_class->draw_cursor = wl_renderer_draw_cursor_impl;
 	renderer_class->start_draw = wl_renderer_start_draw_impl;
 	renderer_class->finish_draw = wl_renderer_finish_draw_impl;
+	renderer_class->capture_screenshot = wl_renderer_capture_screenshot_impl;
 }
 
 static void

@@ -8,7 +8,7 @@ The MCP module requires additional dependencies beyond the base GST build:
 
 ```bash
 # Fedora 43+
-sudo dnf install libsoup3-devel libdex-devel json-glib-devel
+sudo dnf install libsoup3-devel libdex-devel json-glib-devel libpng-devel
 ```
 
 The module also requires the `mcp-glib` submodule at `deps/mcp-glib`.
@@ -77,6 +77,9 @@ modules:
       # Input injection (use with caution)
       send_text: false           # writes text to the PTY
       send_keys: false           # sends key sequences to the PTY
+
+      # Screenshot capture
+      screenshot: false          # captures terminal as base64 PNG image
 ```
 
 ### Safety Model
@@ -374,6 +377,26 @@ Returns: `success`, `keys_sent`
 
 Example: `"Ctrl+c Enter"` sends Ctrl-C followed by Enter.
 
+### Screenshot Capture
+
+#### `screenshot`
+
+Captures the current terminal display as a PNG image. Returns the image as base64-encoded data using the MCP image content type. Works with both X11 and Wayland backends.
+
+No parameters.
+
+Returns: Base64-encoded PNG image (`image/png` content type)
+
+#### `save_screenshot`
+
+Captures the current terminal display and writes it as a PNG file to the specified path.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | string | File path to write the PNG to |
+
+Returns: `success`, `path`, `bytes`
+
 ## Architecture
 
 ```
@@ -392,6 +415,7 @@ The MCP module is implemented as a standard GST module (`modules/mcp/`) with:
 - `gst-mcp-tools-config.c` -- 4 config/module management tools
 - `gst-mcp-tools-input.c` -- 2 input injection tools
 - `gst-mcp-tools-window.c` -- 2 window management tools
+- `gst-mcp-tools-screenshot.c` -- 2 screenshot capture tools (libpng)
 
 The `gst-mcp` relay binary (`tools/gst-mcp/gst-mcp.c`) bridges stdin/stdout to the Unix socket using NDJSON line forwarding.
 

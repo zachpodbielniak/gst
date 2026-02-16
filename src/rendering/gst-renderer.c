@@ -115,6 +115,7 @@ gst_renderer_class_init(GstRendererClass *klass)
 	klass->draw_cursor = NULL;
 	klass->start_draw = NULL;
 	klass->finish_draw = NULL;
+	klass->capture_screenshot = NULL;
 
 	/**
 	 * GstRenderer:terminal:
@@ -300,6 +301,39 @@ gst_renderer_finish_draw(GstRenderer *self)
 	if (klass->finish_draw != NULL) {
 		klass->finish_draw(self);
 	}
+}
+
+/**
+ * gst_renderer_capture_screenshot:
+ * @self: A #GstRenderer
+ * @out_width: (out) (optional): location to store the image width
+ * @out_height: (out) (optional): location to store the image height
+ * @out_stride: (out) (optional): location to store the row stride in bytes
+ *
+ * Captures the current terminal display as raw RGBA pixel data.
+ * Each backend converts from its native pixel format to RGBA.
+ *
+ * Returns: (transfer full) (nullable): a #GBytes containing RGBA pixels,
+ *     or %NULL if capture is not supported
+ */
+GBytes *
+gst_renderer_capture_screenshot(
+	GstRenderer *self,
+	gint        *out_width,
+	gint        *out_height,
+	gint        *out_stride
+){
+	GstRendererClass *klass;
+
+	g_return_val_if_fail(GST_IS_RENDERER(self), NULL);
+
+	klass = GST_RENDERER_GET_CLASS(self);
+	if (klass->capture_screenshot != NULL) {
+		return klass->capture_screenshot(self, out_width, out_height,
+			out_stride);
+	}
+
+	return NULL;
 }
 
 /**

@@ -164,3 +164,6 @@ modules:
       # Input injection (use with caution)
       send_text: false            # writes text directly to the PTY
       send_keys: false            # sends key sequences to the PTY
+
+      # Screenshot capture
+      screenshot: false           # captures terminal as base64 PNG image

@@ -134,6 +134,7 @@ test_mcp_module_defaults(void)
 	g_assert_false(mod->tool_set_window_title);
 	g_assert_false(mod->tool_send_text);
 	g_assert_false(mod->tool_send_keys);
+	g_assert_false(mod->tool_screenshot);
 
 	/* Server should be NULL before activation */
 	g_assert_null(mod->server);
