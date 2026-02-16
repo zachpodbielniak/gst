@@ -130,7 +130,7 @@ ifeq ($(WAYLAND_AVAILABLE),1)
 endif
 
 # Include paths
-CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src
+CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -I$(OUTDIR)
 
 # Combine all CFLAGS
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS)

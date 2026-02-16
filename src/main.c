@@ -33,6 +33,7 @@
 #include <X11/Xlib.h>
 
 #include "gst.h"
+#include "gst-default-config.h"
 #include "gst-enums.h"
 #include "core/gst-terminal.h"
 #include "core/gst-pty.h"
@@ -77,6 +78,9 @@ static gboolean opt_line = FALSE;
 static gboolean opt_version = FALSE;
 static gboolean opt_license = FALSE;
 static gchar *opt_mcp_socket = NULL;
+static gboolean opt_generate_yaml = FALSE;
+static gboolean opt_list_modules = FALSE;
+static gchar *opt_modules_csv = NULL;
 static gboolean opt_x11 = FALSE;
 static gboolean opt_wayland = FALSE;
 
@@ -107,6 +111,12 @@ static GOptionEntry entries[] = {
 	  "Force Wayland backend", NULL },
 	{ "mcp-socket", 0, 0, G_OPTION_ARG_STRING, &opt_mcp_socket,
 	  "MCP socket name (creates gst-mcp-NAME.sock)", "NAME" },
+	{ "generate-yaml-config", 0, 0, G_OPTION_ARG_NONE, &opt_generate_yaml,
+	  "Print default YAML config to stdout", NULL },
+	{ "list-modules", 0, 0, G_OPTION_ARG_NONE, &opt_list_modules,
+	  "List available modules with descriptions", NULL },
+	{ "modules", 0, 0, G_OPTION_ARG_STRING, &opt_modules_csv,
+	  "Comma/colon-separated modules for config generation", "MOD1,MOD2" },
 	{ NULL }
 };
 
@@ -126,6 +136,155 @@ static const gchar *license_text =
 	"\n"
 	"You should have received a copy of the GNU Affero General Public License\n"
 	"along with this program.  If not, see <https://www.gnu.org/licenses/>.\n";
+
+/* ===== Built-in module registry ===== */
+
+/*
+ * GstBuiltinModule:
+ *
+ * Static registry of all built-in modules with their name,
+ * description, and YAML config snippet (used for --list-modules
+ * and --generate-yaml-config --modules).
+ */
+typedef struct {
+	const gchar *name;
+	const gchar *description;
+	const gchar *yaml_snippet;
+} GstBuiltinModule;
+
+static const GstBuiltinModule builtin_modules[] = {
+	{
+		"scrollback",
+		"Scrollback history buffer with keyboard navigation",
+		"  scrollback:\n"
+		"    enabled: true\n"
+		"    lines: 10000\n"
+		"    mouse_scroll_lines: 3\n"
+		"\n"
+	},
+	{
+		"transparency",
+		"Window transparency via compositor opacity",
+		"  transparency:\n"
+		"    enabled: true\n"
+		"    opacity: 0.9\n"
+		"\n"
+	},
+	{
+		"urlclick",
+		"Click URLs to open in browser",
+		"  urlclick:\n"
+		"    enabled: true\n"
+		"    opener: xdg-open\n"
+		"    regex: \"(https?|ftp|file)://[\\\\w\\\\-_.~:/?#\\\\[\\\\]@!$&'()*+,;=%]+\"\n"
+		"    modifiers: Ctrl\n"
+		"\n"
+	},
+	{
+		"externalpipe",
+		"Pipe terminal content to external commands",
+		"  externalpipe:\n"
+		"    enabled: true\n"
+		"    command: \"\"\n"
+		"    key: \"Ctrl+Shift+e\"\n"
+		"\n"
+	},
+	{
+		"boxdraw",
+		"Pixel-perfect box-drawing character rendering",
+		"  boxdraw:\n"
+		"    enabled: true\n"
+		"    bold_offset: 1\n"
+		"\n"
+	},
+	{
+		"visualbell",
+		"Visual flash notification on terminal bell",
+		"  visualbell:\n"
+		"    enabled: true\n"
+		"    duration: 100\n"
+		"\n"
+	},
+	{
+		"undercurl",
+		"Undercurl/curly underline rendering",
+		"  undercurl:\n"
+		"    enabled: true\n"
+		"\n"
+	},
+	{
+		"clipboard",
+		"System clipboard integration",
+		"  clipboard:\n"
+		"    enabled: true\n"
+		"\n"
+	},
+	{
+		"font2",
+		"Secondary font support for fallback glyphs",
+		"  font2:\n"
+		"    enabled: true\n"
+		"    fonts: []\n"
+		"\n"
+	},
+	{
+		"keyboard_select",
+		"Keyboard-driven text selection mode",
+		"  keyboard_select:\n"
+		"    enabled: true\n"
+		"    key: Ctrl+Shift+Escape\n"
+		"    show_crosshair: true\n"
+		"    highlight_color: \"#ff8800\"\n"
+		"    highlight_alpha: 100\n"
+		"    search_color: \"#ffff00\"\n"
+		"    search_alpha: 150\n"
+		"\n"
+	},
+	{
+		"kittygfx",
+		"Kitty graphics protocol for inline images",
+		"  kittygfx:\n"
+		"    enabled: true\n"
+		"    max_total_ram_mb: 256\n"
+		"    max_single_image_mb: 64\n"
+		"    max_placements: 4096\n"
+		"    allow_file_transfer: false\n"
+		"    allow_shm_transfer: false\n"
+		"\n"
+	},
+	{
+		"mcp",
+		"MCP server for AI assistant integration",
+		"  mcp:\n"
+		"    enabled: true\n"
+		"    transport: unix-socket\n"
+		"    # socket_name: myproject\n"
+		"    # port: 8808\n"
+		"    # host: \"127.0.0.1\"\n"
+		"\n"
+		"    tools:\n"
+		"      read_screen: true\n"
+		"      read_scrollback: true\n"
+		"      search_scrollback: true\n"
+		"      get_cursor_position: true\n"
+		"      get_cell_attributes: true\n"
+		"      get_foreground_process: true\n"
+		"      get_working_directory: true\n"
+		"      is_shell_idle: true\n"
+		"      get_pty_info: true\n"
+		"      list_detected_urls: true\n"
+		"      get_config: true\n"
+		"      list_modules: true\n"
+		"      set_config: true\n"
+		"      toggle_module: true\n"
+		"      get_window_info: true\n"
+		"      set_window_title: true\n"
+		"      send_text: true\n"
+		"      send_keys: true\n"
+		"\n"
+	},
+	{ NULL, NULL, NULL }
+};
 
 /* ===== Application state ===== */
 
@@ -249,6 +408,144 @@ find_default_config(void)
 
 	return NULL;
 }
+
+/* ===== Config generation helpers ===== */
+
+/**
+ * find_builtin_module:
+ * @name: module name to look up
+ *
+ * Searches the builtin_modules registry for a module by name.
+ *
+ * Returns: pointer to the entry, or %NULL if not found
+ */
+static const GstBuiltinModule *
+find_builtin_module(const gchar *name)
+{
+	gint i;
+
+	for (i = 0; builtin_modules[i].name != NULL; i++) {
+		if (strcmp(builtin_modules[i].name, name) == 0)
+			return &builtin_modules[i];
+	}
+
+	return NULL;
+}
+
+/**
+ * parse_modules_list:
+ * @input: comma or colon-separated module names
+ * @out_count: (out) (nullable): number of non-empty entries
+ *
+ * Splits a module list string on both ',' and ':' separators,
+ * trims whitespace from each entry.
+ * Caller must free the returned array with g_strfreev().
+ *
+ * Returns: %NULL-terminated array of module name strings
+ */
+static gchar **
+parse_modules_list(const gchar *input, gint *out_count)
+{
+	g_autofree gchar *normalized = NULL;
+	gchar **parts;
+	gint i;
+	gint count;
+
+	/* Normalize: replace colons with commas so we can split once */
+	normalized = g_strdup(input);
+	for (i = 0; normalized[i] != '\0'; i++) {
+		if (normalized[i] == ':')
+			normalized[i] = ',';
+	}
+
+	parts = g_strsplit(normalized, ",", -1);
+	count = 0;
+
+	/* Trim whitespace from each entry */
+	for (i = 0; parts[i] != NULL; i++) {
+		g_strstrip(parts[i]);
+		if (parts[i][0] != '\0')
+			count++;
+	}
+
+	if (out_count != NULL)
+		*out_count = count;
+
+	return parts;
+}
+
+/**
+ * print_module_list:
+ *
+ * Prints all known built-in modules with a short description.
+ * Used by the --list-modules CLI option.
+ */
+static void
+print_module_list(void)
+{
+	gint i;
+
+	g_print("Available gst modules:\n\n");
+	g_print("  %-20s %s\n", "MODULE", "DESCRIPTION");
+	g_print("  %-20s %s\n", "------", "-----------");
+
+	for (i = 0; builtin_modules[i].name != NULL; i++) {
+		g_print("  %-20s %s\n",
+			builtin_modules[i].name,
+			builtin_modules[i].description);
+	}
+
+	g_print("\nUse --modules MODULE1,MODULE2 with --generate-yaml-config\n"
+		"to include specific modules in generated config.\n");
+}
+
+/**
+ * generate_yaml_with_modules:
+ * @modules_input: comma or colon-separated module names
+ *
+ * Prints the default YAML config with the modules: section
+ * replaced by entries for only the specified modules (all enabled
+ * with all options).
+ */
+static void
+generate_yaml_with_modules(const gchar *modules_input)
+{
+	g_autofree gchar *base = NULL;
+	gchar **mod_names;
+	gchar *modules_pos;
+	gint i;
+
+	mod_names = parse_modules_list(modules_input, NULL);
+
+	/* Print the base config up to the modules: section */
+	base = g_strdup(default_yaml_config);
+	modules_pos = strstr(base, "modules:\n");
+	if (modules_pos != NULL)
+		*modules_pos = '\0';
+
+	g_print("%s", base);
+	g_print("modules:\n");
+
+	/* Emit each requested module's YAML snippet */
+	for (i = 0; mod_names[i] != NULL; i++) {
+		const GstBuiltinModule *bmod;
+
+		if (mod_names[i][0] == '\0')
+			continue;
+
+		bmod = find_builtin_module(mod_names[i]);
+		if (bmod != NULL) {
+			g_print("%s", bmod->yaml_snippet);
+		} else {
+			g_printerr("warning: unknown module '%s'\n",
+				mod_names[i]);
+		}
+	}
+
+	g_strfreev(mod_names);
+}
+
+/* ===== Coordinate conversion ===== */
 
 /*
  * Convert pixel coordinates to terminal column/row,
@@ -1383,6 +1680,21 @@ main(
 		return EXIT_SUCCESS;
 	}
 
+	/* Handle --list-modules */
+	if (opt_list_modules) {
+		print_module_list();
+		return EXIT_SUCCESS;
+	}
+
+	/* Handle --generate-yaml-config */
+	if (opt_generate_yaml) {
+		if (opt_modules_csv != NULL)
+			generate_yaml_with_modules(opt_modules_csv);
+		else
+			g_print("%s", default_yaml_config);
+		return EXIT_SUCCESS;
+	}
+
 	/* Validate mutually exclusive flags */
 	if (opt_x11 && opt_wayland) {
 		g_printerr("Cannot specify both --x11 and --wayland\n");
@@ -1697,6 +2009,7 @@ main(
 	g_free(opt_name);
 	g_free(opt_windowid);
 	g_free(opt_execute);
+	g_free(opt_modules_csv);
 
 	return EXIT_SUCCESS;
 }

@@ -125,7 +125,7 @@ modules:
     allow_shm_transfer: false
 
   mcp:
-    enabled: true
+    enabled: false
     transport: unix-socket   # "unix-socket", "http", or "stdio"
     # socket_name: myproject # custom socket name (gst-mcp-NAME.sock)
                              # default: PID-based (gst-mcp-PID.sock)
@@ -136,31 +136,31 @@ modules:
     # Per-tool enable/disable (all default to false for safety)
     tools:
       # Screen reading
-      read_screen: true
-      read_scrollback: true
-      search_scrollback: true
-      get_cursor_position: true
-      get_cell_attributes: true
+      read_screen: false
+      read_scrollback: false
+      search_scrollback: false
+      get_cursor_position: false
+      get_cell_attributes: false
 
       # Process awareness
-      get_foreground_process: true
-      get_working_directory: true
-      is_shell_idle: true
-      get_pty_info: true
+      get_foreground_process: false
+      get_working_directory: false
+      is_shell_idle: false
+      get_pty_info: false
 
       # URL detection
-      list_detected_urls: true
+      list_detected_urls: false
 
       # Config / module management
-      get_config: true
-      list_modules: true
-      set_config: true           # allows runtime config changes
-      toggle_module: true        # allows enabling/disabling other modules
+      get_config: false
+      list_modules: false
+      set_config: false           # allows runtime config changes
+      toggle_module: false        # allows enabling/disabling other modules
 
       # Window management
-      get_window_info: true
-      set_window_title: true
+      get_window_info: false
+      set_window_title: false
 
       # Input injection (use with caution)
-      send_text: true            # writes text directly to the PTY
-      send_keys: true            # sends key sequences to the PTY
+      send_text: false            # writes text directly to the PTY
+      send_keys: false            # sends key sequences to the PTY

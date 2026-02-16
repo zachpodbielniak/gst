@@ -4,6 +4,9 @@
 # All source objects depend on the generated version header
 $(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h
 
+# main.o depends on the generated default config header
+$(OBJDIR)/main.o: $(OUTDIR)/gst-default-config.h
+
 # Object file compilation
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
@@ -136,6 +139,13 @@ src/gst-version.h: src/gst-version.h.in
 		-e 's|@GST_VERSION_MICRO@|$(VERSION_MICRO)|g' \
 		-e 's|@GST_VERSION@|$(VERSION)|g' \
 		$< > $@
+
+# Default config header generation (embeds YAML as C string constant)
+$(OUTDIR)/gst-default-config.h: data/default-config.yaml | $(OUTDIR)
+	@echo "  GEN     $@"
+	@echo "static const gchar *default_yaml_config =" > $@
+	@sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$$/\\n"/' $< >> $@
+	@echo ";" >> $@
 
 # Header dependency generation
 $(OBJDIR)/%.d: src/%.c | $(OBJDIR)
