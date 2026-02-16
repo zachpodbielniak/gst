@@ -1633,6 +1633,7 @@ main(
 		mod_mgr = gst_module_manager_get_default();
 		gst_module_manager_set_terminal(mod_mgr, terminal);
 		gst_module_manager_set_window(mod_mgr, window);
+		gst_module_manager_set_pty(mod_mgr, pty);
 		gst_module_manager_set_backend_type(mod_mgr, (gint)backend);
 
 		/* Provide the appropriate font cache for modules (e.g. font2) */

@@ -123,3 +123,41 @@ modules:
     max_placements: 4096
     allow_file_transfer: false
     allow_shm_transfer: false
+
+  mcp:
+    enabled: true
+    transport: http          # "http" or "stdio"
+    port: 8808
+    host: "127.0.0.1"
+
+    # Per-tool enable/disable (all default to false for safety)
+    tools:
+      # Screen reading
+      read_screen: true
+      read_scrollback: true
+      search_scrollback: true
+      get_cursor_position: true
+      get_cell_attributes: true
+
+      # Process awareness
+      get_foreground_process: true
+      get_working_directory: true
+      is_shell_idle: true
+      get_pty_info: true
+
+      # URL detection
+      list_detected_urls: true
+
+      # Config / module management
+      get_config: true
+      list_modules: true
+      set_config: true           # allows runtime config changes
+      toggle_module: true        # allows enabling/disabling other modules
+
+      # Window management
+      get_window_info: true
+      set_window_title: true
+
+      # Input injection (use with caution)
+      send_text: true            # writes text directly to the PTY
+      send_keys: true            # sends key sequences to the PTY

@@ -67,6 +67,7 @@ struct _GstModuleManager
 	gpointer     terminal;         /* weak ref to GstTerminal */
 	gpointer     window;           /* weak ref to GstWindow */
 	gpointer     font_cache;       /* weak ref to font cache (X11 or Cairo) */
+	gpointer     pty;              /* weak ref to GstPty */
 	gint         backend_type;     /* GstBackendType value */
 };
 
@@ -760,7 +761,7 @@ gst_module_manager_load_module(
 	g_return_val_if_fail(path != NULL, NULL);
 
 	/* Open the shared library */
-	gmod = g_module_open(path, G_MODULE_BIND_LOCAL);
+	gmod = g_module_open(path, G_MODULE_BIND_LAZY);
 	if (gmod == NULL)
 	{
 		g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED,
@@ -953,6 +954,41 @@ gst_module_manager_get_window(GstModuleManager *self)
 	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
 
 	return self->window;
+}
+
+/* ===== Public API: PTY accessor ===== */
+
+/**
+ * gst_module_manager_set_pty:
+ * @self: A #GstModuleManager
+ * @pty: (type gpointer): The PTY instance (weak ref)
+ *
+ * Stores a weak reference to the PTY for module access.
+ */
+void
+gst_module_manager_set_pty(
+	GstModuleManager *self,
+	gpointer          pty
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->pty = pty;
+}
+
+/**
+ * gst_module_manager_get_pty:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored PTY reference.
+ *
+ * Returns: (transfer none) (nullable): The PTY, or %NULL
+ */
+gpointer
+gst_module_manager_get_pty(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
+
+	return self->pty;
 }
 
 /* ===== Public API: font cache and backend type accessors ===== */

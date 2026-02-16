@@ -42,6 +42,7 @@ BUILD_GIR ?= 0
 BUILD_TESTS ?= 1
 BUILD_MODULES ?= 1
 BUILD_WAYLAND ?= 1
+MCP ?= 0
 
 # Select build directories based on DEBUG
 ifeq ($(DEBUG),1)
@@ -103,6 +104,14 @@ else
 WAYLAND_AVAILABLE := 0
 endif
 
+# Optional MCP dependencies (requires mcp-glib submodule at deps/mcp-glib)
+ifeq ($(MCP),1)
+DEPS_MCP := libsoup-3.0 libdex-1
+MCP_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_MCP) 2>/dev/null && echo 1 || echo 0)
+else
+MCP_AVAILABLE := 0
+endif
+
 # Check for required dependencies
 define check_dep
 $(if $(shell $(PKG_CONFIG) --exists $(1) && echo yes),,$(error Missing dependency: $(1)))
@@ -152,6 +161,12 @@ MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src
 MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DEPS)
 MODULE_LDFLAGS := -shared -fPIC
 
+# MCP module flags (extra includes/libs for mcp-glib)
+ifeq ($(MCP_AVAILABLE),1)
+MCP_CFLAGS := -I$(CURDIR)/deps/mcp-glib/src $(shell $(PKG_CONFIG) --cflags $(DEPS_MCP) json-glib-1.0 2>/dev/null)
+MCP_LDFLAGS := -L$(CURDIR)/deps/mcp-glib/build -lmcp-glib-1.0 $(shell $(PKG_CONFIG) --libs $(DEPS_MCP) json-glib-1.0 2>/dev/null)
+endif
+
 # Print configuration (for debugging)
 .PHONY: show-config
 show-config:
@@ -171,6 +186,8 @@ show-config:
 	@echo "BUILD_MODULES:$(BUILD_MODULES)"
 	@echo "BUILD_WAYLAND:$(BUILD_WAYLAND)"
 	@echo "WAYLAND_AVAILABLE:$(WAYLAND_AVAILABLE)"
+	@echo "MCP:    $(MCP)"
+	@echo "MCP_AVAILABLE:$(MCP_AVAILABLE)"
 
 # Fedora package names for dependencies
 FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
@@ -178,10 +195,12 @@ FEDORA_DEPS_REQUIRED := glib2-devel libX11-devel libXft-devel \
     fontconfig-devel libyaml-devel json-glib-devel
 FEDORA_DEPS_GIR := gobject-introspection-devel
 FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-devel
+FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel
 
 # Install build dependencies (Fedora/dnf)
 .PHONY: install-deps
 install-deps:
 	sudo dnf install -y $(FEDORA_DEPS_TOOLS) $(FEDORA_DEPS_REQUIRED) \
 		$(if $(filter 1,$(BUILD_GIR)),$(FEDORA_DEPS_GIR)) \
-		$(if $(filter 1,$(BUILD_WAYLAND)),$(FEDORA_DEPS_WAYLAND))
+		$(if $(filter 1,$(BUILD_WAYLAND)),$(FEDORA_DEPS_WAYLAND)) \
+		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP))

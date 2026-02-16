@@ -51,3 +51,5 @@ coverage/
 # Misc
 .DS_Store
 Thumbs.db
+
+.mcp.json

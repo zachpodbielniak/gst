@@ -137,9 +137,15 @@ YAMLGLIB_SRCS := \
 
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)
+ifneq ($(MCP_AVAILABLE),1)
+TEST_SRCS := $(filter-out tests/test-mcp-module.c,$(TEST_SRCS))
+endif
 
 # Module directories
 MODULE_DIRS := $(wildcard modules/*)
+ifneq ($(MCP_AVAILABLE),1)
+MODULE_DIRS := $(filter-out modules/mcp,$(MODULE_DIRS))
+endif
 
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
@@ -172,7 +178,17 @@ gst: lib $(OUTDIR)/gst
 # Build GIR/typelib
 gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
 
+# Build mcp-glib dependency (only if MCP=1 and deps available)
+ifeq ($(MCP_AVAILABLE),1)
+.PHONY: mcp-glib
+mcp-glib:
+	$(MAKE) -C deps/mcp-glib
+endif
+
 # Build all modules
+ifeq ($(MCP_AVAILABLE),1)
+modules: mcp-glib
+endif
 modules: lib $(OUTDIR)/modules
 	@for dir in $(MODULE_DIRS); do \
 		if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
@@ -181,17 +197,22 @@ modules: lib $(OUTDIR)/modules
 				OUTDIR=$(abspath $(OUTDIR)/modules) \
 				LIBDIR=$(abspath $(OUTDIR)) \
 				CFLAGS="$(MODULE_CFLAGS)" \
-				LDFLAGS="$(MODULE_LDFLAGS)"; \
+				LDFLAGS="$(MODULE_LDFLAGS)" \
+				MCP_CFLAGS="$(MCP_CFLAGS)" \
+				MCP_LDFLAGS="$(MCP_LDFLAGS)"; \
 		fi \
 	done
 
 # Build and run tests
 test: lib $(TEST_BINS)
+ifeq ($(MCP_AVAILABLE),1)
+test: modules
+endif
 	@echo "Running tests..."
 	@failed=0; \
 	for test in $(TEST_BINS); do \
 		echo "  Running $$(basename $$test)..."; \
-		if LD_LIBRARY_PATH=$(OUTDIR) $$test; then \
+		if LD_LIBRARY_PATH=$(OUTDIR):$(CURDIR)/deps/mcp-glib/build $$test; then \
 			echo "    PASS"; \
 		else \
 			echo "    FAIL"; \
@@ -206,6 +227,21 @@ test: lib $(TEST_BINS)
 	fi
 
 # Build individual test binaries
+# MCP test needs extra flags for mcp-glib linkage and MCP module sources
+ifeq ($(MCP_AVAILABLE),1)
+$(OBJDIR)/tests/test-mcp-module.o: tests/test-mcp-module.c | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) $(MCP_CFLAGS) -c $< -o $@
+
+$(OUTDIR)/test-mcp-module: $(OBJDIR)/tests/test-mcp-module.o $(OUTDIR)/modules/mcp.so $(OUTDIR)/$(LIB_SHARED_FULL)
+	$(CC) -o $@ $(OBJDIR)/tests/test-mcp-module.o \
+		$(OUTDIR)/modules/mcp.so \
+		$(TEST_LDFLAGS) $(MCP_LDFLAGS) \
+		-Wl,--unresolved-symbols=ignore-in-shared-libs \
+		-Wl,-rpath,$(CURDIR)/$(OUTDIR)/modules \
+		-Wl,-rpath,$(CURDIR)/deps/mcp-glib/build
+endif
+
 $(OUTDIR)/test-%: $(OBJDIR)/tests/test-%.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(CC) -o $@ $< $(TEST_LDFLAGS)
 

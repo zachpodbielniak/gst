@@ -343,6 +343,31 @@ gpointer
 gst_module_manager_get_font_cache(GstModuleManager *self);
 
 /**
+ * gst_module_manager_set_pty:
+ * @self: A #GstModuleManager
+ * @pty: (type gpointer): The PTY instance (weak ref)
+ *
+ * Stores a weak reference to the PTY so modules can
+ * access it via gst_module_manager_get_pty().
+ */
+void
+gst_module_manager_set_pty(
+	GstModuleManager *self,
+	gpointer          pty
+);
+
+/**
+ * gst_module_manager_get_pty:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored PTY reference.
+ *
+ * Returns: (transfer none) (nullable): The PTY, or %NULL
+ */
+gpointer
+gst_module_manager_get_pty(GstModuleManager *self);
+
+/**
  * gst_module_manager_set_backend_type:
  * @self: A #GstModuleManager
  * @backend_type: The active rendering backend type
