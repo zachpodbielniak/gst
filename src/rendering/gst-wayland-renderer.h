@@ -22,6 +22,9 @@
 #include "../gst-types.h"
 #include "../config/gst-config.h"
 
+/* Forward declaration to avoid circular includes */
+typedef struct _GstSelection GstSelection;
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_WAYLAND_RENDERER (gst_wayland_renderer_get_type())
@@ -86,6 +89,20 @@ gst_wayland_renderer_set_win_mode(
  */
 GstWinMode
 gst_wayland_renderer_get_win_mode(GstWaylandRenderer *self);
+
+/**
+ * gst_wayland_renderer_set_selection:
+ * @self: A #GstWaylandRenderer
+ * @selection: (transfer none): A #GstSelection to use for highlight checks
+ *
+ * Sets the selection object used to determine which cells should
+ * be rendered with selection highlighting (reverse video).
+ */
+void
+gst_wayland_renderer_set_selection(
+	GstWaylandRenderer  *self,
+	GstSelection        *selection
+);
 
 G_END_DECLS
 

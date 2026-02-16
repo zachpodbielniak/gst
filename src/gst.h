@@ -63,6 +63,7 @@
 #include "interfaces/gst-glyph-transformer.h"
 #include "interfaces/gst-bell-handler.h"
 #include "interfaces/gst-external-pipe.h"
+#include "interfaces/gst-selection-handler.h"
 
 /* Utilities */
 #include "util/gst-utf8.h"

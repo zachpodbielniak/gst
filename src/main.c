@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <fontconfig/fontconfig.h>
 #include <X11/keysym.h>
 #include <X11/Xlib.h>
@@ -822,6 +823,7 @@ on_button_press(
 	/* Left button starts selection */
 	if (button == Button1) {
 		gst_selection_start(selection, col, row, GST_SELECTION_SNAP_NONE);
+		gst_terminal_mark_dirty(terminal, -1);
 		schedule_draw();
 	}
 
@@ -890,12 +892,16 @@ on_button_release(
 		gst_selection_extend(selection, col, row,
 			GST_SELECTION_TYPE_REGULAR, TRUE);
 
-		/* Set primary selection */
+		/* Set primary selection and notify modules */
 		sel_text = gst_selection_get_text(selection);
 		if (sel_text != NULL) {
 			gst_window_set_selection(window, sel_text, FALSE);
+			gst_module_manager_dispatch_selection_done(
+				gst_module_manager_get_default(),
+				sel_text, (gint)strlen(sel_text));
 			g_free(sel_text);
 		}
+		gst_terminal_mark_dirty(terminal, -1);
 		schedule_draw();
 	}
 }
@@ -953,6 +959,7 @@ on_motion_notify(
 
 	gst_selection_extend(selection, col, row,
 		GST_SELECTION_TYPE_REGULAR, FALSE);
+	gst_terminal_mark_dirty(terminal, -1);
 	schedule_draw();
 }
 
@@ -1321,6 +1328,9 @@ main(
 	const gchar *fontstr;
 	const gchar *shell_cmd;
 
+	/* Ignore SIGPIPE: Wayland clipboard pipes may close unexpectedly */
+	signal(SIGPIPE, SIG_IGN);
+
 	/* Set locale for proper UTF-8 handling */
 	setlocale(LC_ALL, "");
 
@@ -1473,6 +1483,23 @@ main(
 		/* System module directory */
 		gst_module_manager_load_from_directory(mod_mgr, GST_MODULEDIR);
 
+		/*
+		 * Exe-relative module directory: <exe_dir>/modules/
+		 * Allows running from the build tree without installation.
+		 */
+		{
+			g_autofree gchar *exe_path = NULL;
+			g_autofree gchar *exe_dir = NULL;
+			g_autofree gchar *exe_mod_dir = NULL;
+
+			exe_path = g_file_read_link("/proc/self/exe", NULL);
+			if (exe_path != NULL) {
+				exe_dir = g_path_get_dirname(exe_path);
+				exe_mod_dir = g_build_filename(exe_dir, "modules", NULL);
+				gst_module_manager_load_from_directory(mod_mgr, exe_mod_dir);
+			}
+		}
+
 		/* NOTE: activate_all is deferred to after terminal/window creation
 		 * so modules have access to core objects during activation. */
 	}
@@ -1508,6 +1535,22 @@ main(
 			g_object_unref(terminal);
 			return EXIT_FAILURE;
 		}
+	}
+
+	/* Connect selection to renderer for highlight rendering */
+	switch (backend) {
+	case GST_BACKEND_X11:
+		gst_x11_renderer_set_selection(
+			GST_X11_RENDERER(renderer), selection);
+		break;
+#ifdef GST_HAVE_WAYLAND
+	case GST_BACKEND_WAYLAND:
+		gst_wayland_renderer_set_selection(
+			GST_WAYLAND_RENDERER(renderer), selection);
+		break;
+#endif
+	default:
+		break;
 	}
 
 	/* Apply title: CLI --title overrides config */

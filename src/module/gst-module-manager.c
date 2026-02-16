@@ -19,6 +19,7 @@
 #include "../interfaces/gst-color-provider.h"
 #include "../interfaces/gst-font-provider.h"
 #include "../interfaces/gst-escape-handler.h"
+#include "../interfaces/gst-selection-handler.h"
 
 /**
  * SECTION:gst-module-manager
@@ -197,6 +198,12 @@ auto_register_hooks(
 	{
 		gst_module_manager_register_hook(self, module,
 			GST_HOOK_ESCAPE_APC, priority);
+	}
+
+	if (g_type_is_a(module_type, GST_TYPE_SELECTION_HANDLER))
+	{
+		gst_module_manager_register_hook(self, module,
+			GST_HOOK_SELECTION_END, priority);
 	}
 }
 
@@ -1125,6 +1132,48 @@ gst_module_manager_dispatch_escape_string(
 	}
 
 	return FALSE;
+}
+
+/* ===== Public API: selection handler dispatch ===== */
+
+/**
+ * gst_module_manager_dispatch_selection_done:
+ * @self: A #GstModuleManager
+ * @text: The selected text as a UTF-8 string
+ * @len: Length of @text in bytes
+ *
+ * Dispatches a selection-done event to all #GstSelectionHandler modules
+ * registered at %GST_HOOK_SELECTION_END. All registered handlers are
+ * called (non-consumable event).
+ */
+void
+gst_module_manager_dispatch_selection_done(
+	GstModuleManager *self,
+	const gchar      *text,
+	gint              len
+){
+	GList *l;
+
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	for (l = self->hooks[GST_HOOK_SELECTION_END]; l != NULL; l = l->next)
+	{
+		GstHookEntry *entry;
+
+		entry = (GstHookEntry *)l->data;
+
+		if (!gst_module_is_active(entry->module))
+		{
+			continue;
+		}
+
+		if (GST_IS_SELECTION_HANDLER(entry->module))
+		{
+			gst_selection_handler_handle_selection_done(
+				GST_SELECTION_HANDLER(entry->module),
+				text, len);
+		}
+	}
 }
 
 /* ===== Public API: config integration ===== */

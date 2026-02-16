@@ -59,6 +59,7 @@ LIB_SRCS := \
 	src/interfaces/gst-bell-handler.c \
 	src/interfaces/gst-external-pipe.c \
 	src/interfaces/gst-escape-handler.c \
+	src/interfaces/gst-selection-handler.c \
 	src/util/gst-utf8.c \
 	src/util/gst-base64.c
 
@@ -108,6 +109,7 @@ LIB_HDRS := \
 	src/interfaces/gst-bell-handler.h \
 	src/interfaces/gst-external-pipe.h \
 	src/interfaces/gst-escape-handler.h \
+	src/interfaces/gst-selection-handler.h \
 	src/util/gst-utf8.h \
 	src/util/gst-base64.h
 

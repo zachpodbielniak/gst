@@ -367,6 +367,24 @@ gst_module_manager_set_backend_type(
 gint
 gst_module_manager_get_backend_type(GstModuleManager *self);
 
+/* ===== Selection Handler Dispatch ===== */
+
+/**
+ * gst_module_manager_dispatch_selection_done:
+ * @self: A #GstModuleManager
+ * @text: The selected text as a UTF-8 string
+ * @len: Length of @text in bytes
+ *
+ * Dispatches a selection-done event to all #GstSelectionHandler modules.
+ * All registered selection handlers are called (non-consumable).
+ */
+void
+gst_module_manager_dispatch_selection_done(
+	GstModuleManager *self,
+	const gchar      *text,
+	gint              len
+);
+
 /* ===== Glyph Transform Dispatch ===== */
 
 /**

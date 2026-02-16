@@ -1355,3 +1355,24 @@ gst_x11_renderer_get_win_mode(GstX11Renderer *self)
 
 	return self->win_mode;
 }
+
+/**
+ * gst_x11_renderer_set_selection:
+ * @self: A #GstX11Renderer
+ * @selection: (transfer none): A #GstSelection for highlight checks
+ *
+ * Sets the selection object. The renderer uses this to determine
+ * which cells to render with reverse video during draw_line.
+ */
+void
+gst_x11_renderer_set_selection(
+	GstX11Renderer  *self,
+	GstSelection    *selection
+){
+	g_return_if_fail(GST_IS_X11_RENDERER(self));
+
+	if (self->selection != NULL) {
+		g_object_unref(self->selection);
+	}
+	self->selection = (selection != NULL) ? g_object_ref(selection) : NULL;
+}

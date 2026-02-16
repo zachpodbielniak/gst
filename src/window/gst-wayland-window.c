@@ -113,6 +113,7 @@ struct _GstWaylandWindow
 	gint    ch;
 	gint    borderpx;
 	guint32 keyboard_serial;
+	guint32 input_serial;     /* most recent input serial (keyboard or pointer) */
 	gboolean configured;
 	gboolean closed;
 	gboolean focused;
@@ -351,6 +352,7 @@ keyboard_enter(
 
 	self = (GstWaylandWindow *)data;
 	self->keyboard_serial = serial;
+	self->input_serial = serial;
 	self->focused = TRUE;
 	g_signal_emit_by_name(self, "focus-change", TRUE);
 	g_signal_emit_by_name(self, "visibility", TRUE);
@@ -499,6 +501,7 @@ keyboard_key(
 
 	self = (GstWaylandWindow *)data;
 	self->keyboard_serial = serial;
+	self->input_serial = serial;
 
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		emit_key_event(self, key);
@@ -586,6 +589,7 @@ pointer_enter(
 
 	self = (GstWaylandWindow *)data;
 	self->pointer_serial = serial;
+	self->input_serial = serial;
 	self->pointer_x = wl_fixed_to_double(sx);
 	self->pointer_y = wl_fixed_to_double(sy);
 
@@ -657,6 +661,7 @@ pointer_button(
 
 	self = (GstWaylandWindow *)data;
 	self->pointer_serial = serial;
+	self->input_serial = serial;
 
 	/*
 	 * Convert Linux button codes to X11 button numbers.
@@ -1112,6 +1117,7 @@ data_source_send(
 	const gchar *text;
 	gssize len;
 	gssize written;
+	gint flags;
 
 	self = (GstWaylandWindow *)data;
 	text = self->clipboard_text;
@@ -1121,6 +1127,12 @@ data_source_send(
 		return;
 	}
 
+	/* Set non-blocking to avoid stalling the event loop */
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags >= 0) {
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	}
+
 	len = (gssize)strlen(text);
 	while (len > 0) {
 		written = write(fd, text, (gsize)len);
@@ -1128,6 +1140,7 @@ data_source_send(
 			if (errno == EINTR) {
 				continue;
 			}
+			/* EAGAIN/EWOULDBLOCK: pipe full, give up */
 			break;
 		}
 		text += written;
@@ -1144,10 +1157,13 @@ data_source_cancelled(
 	GstWaylandWindow *self;
 
 	self = (GstWaylandWindow *)data;
+
+	/* Always destroy the cancelled source to avoid leaks.
+	 * Clear our reference only if this was the active source. */
 	if (self->data_source == source) {
-		wl_data_source_destroy(source);
 		self->data_source = NULL;
 	}
+	wl_data_source_destroy(source);
 }
 
 static void
@@ -1197,6 +1213,7 @@ primary_source_send(
 	const gchar *text;
 	gssize len;
 	gssize written;
+	gint flags;
 
 	self = (GstWaylandWindow *)data;
 	text = self->selection_text;
@@ -1206,6 +1223,12 @@ primary_source_send(
 		return;
 	}
 
+	/* Set non-blocking to avoid stalling the event loop */
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags >= 0) {
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	}
+
 	len = (gssize)strlen(text);
 	while (len > 0) {
 		written = write(fd, text, (gsize)len);
@@ -1213,6 +1236,7 @@ primary_source_send(
 			if (errno == EINTR) {
 				continue;
 			}
+			/* EAGAIN/EWOULDBLOCK: pipe full, give up */
 			break;
 		}
 		text += written;
@@ -1229,10 +1253,13 @@ primary_source_cancelled(
 	GstWaylandWindow *self;
 
 	self = (GstWaylandWindow *)data;
+
+	/* Always destroy the cancelled source to avoid leaks.
+	 * Clear our reference only if this was the active source. */
 	if (self->primary_source == source) {
-		zwp_primary_selection_source_v1_destroy(source);
 		self->primary_source = NULL;
 	}
+	zwp_primary_selection_source_v1_destroy(source);
 }
 
 static const struct zwp_primary_selection_source_v1_listener
@@ -1307,9 +1334,13 @@ gst_wayland_window_set_selection_impl(
 
 		if (self->data_device_manager != NULL &&
 		    self->data_device != NULL) {
-			if (self->data_source != NULL) {
-				wl_data_source_destroy(self->data_source);
-			}
+			/*
+			 * Don't destroy the old source here. The compositor
+			 * will send a cancelled event for it, and we handle
+			 * destruction there. Destroying prematurely causes
+			 * protocol errors if events for the old source are
+			 * still queued in the socket buffer.
+			 */
 			self->data_source = wl_data_device_manager_create_data_source(
 				self->data_device_manager);
 			wl_data_source_add_listener(self->data_source,
@@ -1317,7 +1348,7 @@ gst_wayland_window_set_selection_impl(
 			wl_data_source_offer(self->data_source,
 				"text/plain;charset=utf-8");
 			wl_data_device_set_selection(self->data_device,
-				self->data_source, self->keyboard_serial);
+				self->data_source, self->input_serial);
 		}
 	} else {
 		/* Set primary selection */
@@ -1326,10 +1357,10 @@ gst_wayland_window_set_selection_impl(
 
 		if (self->primary_mgr != NULL &&
 		    self->primary_device != NULL) {
-			if (self->primary_source != NULL) {
-				zwp_primary_selection_source_v1_destroy(
-					self->primary_source);
-			}
+			/*
+			 * Don't destroy the old source here. The compositor
+			 * will cancel it and we destroy in the callback.
+			 */
 			self->primary_source =
 				zwp_primary_selection_device_manager_v1_create_source(
 				self->primary_mgr);
@@ -1342,7 +1373,7 @@ gst_wayland_window_set_selection_impl(
 			zwp_primary_selection_device_v1_set_selection(
 				self->primary_device,
 				self->primary_source,
-				self->keyboard_serial);
+				self->input_serial);
 		}
 	}
 }
@@ -1355,6 +1386,20 @@ gst_wayland_window_paste_clipboard_impl(GstWindow *window)
 	gchar *text;
 
 	self = GST_WAYLAND_WINDOW(window);
+
+	/*
+	 * If we own the clipboard (data_source is set), use our stored
+	 * text directly. Going through the Wayland protocol would deadlock:
+	 * we'd block in read() waiting for data that only our own
+	 * data_source.send callback can provide, but that callback can't
+	 * fire while we're blocked.
+	 */
+	if (self->data_source != NULL && self->clipboard_text != NULL) {
+		g_signal_emit_by_name(self, "selection-notify",
+			self->clipboard_text,
+			(gint)strlen(self->clipboard_text));
+		return;
+	}
 
 	if (self->data_offer == NULL) {
 		return;
@@ -1386,6 +1431,17 @@ gst_wayland_window_paste_primary_impl(GstWindow *window)
 	gchar *text;
 
 	self = GST_WAYLAND_WINDOW(window);
+
+	/*
+	 * If we own the primary selection, use our stored text directly
+	 * to avoid the same self-paste deadlock as clipboard.
+	 */
+	if (self->primary_source != NULL && self->selection_text != NULL) {
+		g_signal_emit_by_name(self, "selection-notify",
+			self->selection_text,
+			(gint)strlen(self->selection_text));
+		return;
+	}
 
 	if (self->primary_offer == NULL) {
 		return;
@@ -1737,6 +1793,7 @@ gst_wayland_window_init(GstWaylandWindow *self)
 	self->ch = 0;
 	self->borderpx = 0;
 	self->keyboard_serial = 0;
+	self->input_serial = 0;
 	self->configured = FALSE;
 	self->closed = FALSE;
 	self->focused = FALSE;

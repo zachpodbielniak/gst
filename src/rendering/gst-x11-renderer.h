@@ -21,6 +21,9 @@
 #include "../config/gst-config.h"
 #include "../gst-types.h"
 
+/* Forward declaration to avoid circular includes */
+typedef struct _GstSelection GstSelection;
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_X11_RENDERER (gst_x11_renderer_get_type())
@@ -124,6 +127,20 @@ gst_x11_renderer_set_win_mode(
  */
 GstWinMode
 gst_x11_renderer_get_win_mode(GstX11Renderer *self);
+
+/**
+ * gst_x11_renderer_set_selection:
+ * @self: A #GstX11Renderer
+ * @selection: (transfer none): A #GstSelection to use for highlight checks
+ *
+ * Sets the selection object used to determine which cells should
+ * be rendered with selection highlighting (reverse video).
+ */
+void
+gst_x11_renderer_set_selection(
+	GstX11Renderer  *self,
+	GstSelection    *selection
+);
 
 G_END_DECLS
 
