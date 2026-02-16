@@ -151,11 +151,15 @@ src/gst-version.h: src/gst-version.h.in
 		$< > $@
 
 # Default config header generation (embeds YAML as C string constant)
-$(OUTDIR)/gst-default-config.h: data/default-config.yaml
+$(OUTDIR)/gst-default-config.h: data/default-config.yaml data/default-config.c
 	@$(MKDIR_P) $(dir $@)
 	@echo "  GEN     $@"
 	@echo "static const gchar *default_yaml_config =" > $@
-	@sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$$/\\n"/' $< >> $@
+	@sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$$/\\n"/' data/default-config.yaml >> $@
+	@echo ";" >> $@
+	@echo "" >> $@
+	@echo "static const gchar *default_c_config =" >> $@
+	@sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$$/\\n"/' data/default-config.c >> $@
 	@echo ";" >> $@
 
 # Header dependency generation

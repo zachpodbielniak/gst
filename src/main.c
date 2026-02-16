@@ -83,6 +83,7 @@ static gboolean opt_generate_yaml = FALSE;
 static gboolean opt_list_modules = FALSE;
 static gchar *opt_modules_csv = NULL;
 static gchar *opt_c_config = NULL;
+static gboolean opt_generate_c_config = FALSE;
 static gboolean opt_recompile = FALSE;
 static gboolean opt_no_c_config = FALSE;
 static gboolean opt_x11 = FALSE;
@@ -121,6 +122,8 @@ static GOptionEntry entries[] = {
 	  "List available modules with descriptions", NULL },
 	{ "modules", 0, 0, G_OPTION_ARG_STRING, &opt_modules_csv,
 	  "Comma/colon-separated modules for config generation", "MOD1,MOD2" },
+	{ "generate-c-config", 0, 0, G_OPTION_ARG_NONE, &opt_generate_c_config,
+	  "Print default C config to stdout", NULL },
 	{ "c-config", 0, 0, G_OPTION_ARG_FILENAME, &opt_c_config,
 	  "Use specified C config file", "PATH" },
 	{ "recompile", 0, 0, G_OPTION_ARG_NONE, &opt_recompile,
@@ -160,6 +163,7 @@ typedef struct {
 	const gchar *name;
 	const gchar *description;
 	const gchar *yaml_snippet;
+	const gchar *c_snippet;
 } GstBuiltinModule;
 
 static const GstBuiltinModule builtin_modules[] = {
@@ -170,7 +174,11 @@ static const GstBuiltinModule builtin_modules[] = {
 		"    enabled: true\n"
 		"    lines: 10000\n"
 		"    mouse_scroll_lines: 3\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * scrollback: history buffer with keyboard navigation\n"
+		"\t * YAML keys: lines (capacity), mouse_scroll_lines\n"
+		"\t */\n"
 	},
 	{
 		"transparency",
@@ -178,7 +186,11 @@ static const GstBuiltinModule builtin_modules[] = {
 		"  transparency:\n"
 		"    enabled: true\n"
 		"    opacity: 0.9\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * transparency: window opacity via compositor\n"
+		"\t * YAML keys: opacity (0.0-1.0)\n"
+		"\t */\n"
 	},
 	{
 		"urlclick",
@@ -188,7 +200,11 @@ static const GstBuiltinModule builtin_modules[] = {
 		"    opener: xdg-open\n"
 		"    regex: \"(https?|ftp|file)://[\\\\w\\\\-_.~:/?#\\\\[\\\\]@!$&'()*+,;=%]+\"\n"
 		"    modifiers: Ctrl\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * urlclick: Ctrl+click URLs to open in browser\n"
+		"\t * YAML keys: opener, regex, modifiers\n"
+		"\t */\n"
 	},
 	{
 		"externalpipe",
@@ -197,7 +213,11 @@ static const GstBuiltinModule builtin_modules[] = {
 		"    enabled: true\n"
 		"    command: \"\"\n"
 		"    key: \"Ctrl+Shift+e\"\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * externalpipe: pipe terminal content to shell commands\n"
+		"\t * YAML keys: command, key\n"
+		"\t */\n"
 	},
 	{
 		"boxdraw",
@@ -205,7 +225,11 @@ static const GstBuiltinModule builtin_modules[] = {
 		"  boxdraw:\n"
 		"    enabled: true\n"
 		"    bold_offset: 1\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * boxdraw: pixel-perfect box-drawing characters\n"
+		"\t * YAML keys: bold_offset\n"
+		"\t */\n"
 	},
 	{
 		"visualbell",
@@ -213,21 +237,31 @@ static const GstBuiltinModule builtin_modules[] = {
 		"  visualbell:\n"
 		"    enabled: true\n"
 		"    duration: 100\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * visualbell: flash notification on bell event\n"
+		"\t * YAML keys: duration (ms)\n"
+		"\t */\n"
 	},
 	{
 		"undercurl",
 		"Undercurl/curly underline rendering",
 		"  undercurl:\n"
 		"    enabled: true\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * undercurl: curly underline rendering\n"
+		"\t */\n"
 	},
 	{
 		"clipboard",
 		"System clipboard integration",
 		"  clipboard:\n"
 		"    enabled: true\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * clipboard: system clipboard integration\n"
+		"\t */\n"
 	},
 	{
 		"font2",
@@ -235,7 +269,11 @@ static const GstBuiltinModule builtin_modules[] = {
 		"  font2:\n"
 		"    enabled: true\n"
 		"    fonts: []\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * font2: secondary font for fallback glyphs\n"
+		"\t * YAML keys: fonts (list of font specs)\n"
+		"\t */\n"
 	},
 	{
 		"keyboard_select",
@@ -248,7 +286,12 @@ static const GstBuiltinModule builtin_modules[] = {
 		"    highlight_alpha: 100\n"
 		"    search_color: \"#ffff00\"\n"
 		"    search_alpha: 150\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * keyboard_select: keyboard-driven text selection\n"
+		"\t * YAML keys: key, show_crosshair, highlight_color,\n"
+		"\t *            highlight_alpha, search_color, search_alpha\n"
+		"\t */\n"
 	},
 	{
 		"kittygfx",
@@ -260,7 +303,13 @@ static const GstBuiltinModule builtin_modules[] = {
 		"    max_placements: 4096\n"
 		"    allow_file_transfer: false\n"
 		"    allow_shm_transfer: false\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * kittygfx: Kitty graphics protocol for inline images\n"
+		"\t * YAML keys: max_total_ram_mb, max_single_image_mb,\n"
+		"\t *            max_placements, allow_file_transfer,\n"
+		"\t *            allow_shm_transfer\n"
+		"\t */\n"
 	},
 	{
 		"mcp",
@@ -292,9 +341,14 @@ static const GstBuiltinModule builtin_modules[] = {
 		"      send_text: true\n"
 		"      send_keys: true\n"
 		"      screenshot: true\n"
-		"\n"
+		"\n",
+		"\t/*\n"
+		"\t * mcp: MCP server for AI assistant integration\n"
+		"\t * YAML keys: transport, socket_name, port, host,\n"
+		"\t *            tools (map of tool_name: true/false)\n"
+		"\t */\n"
 	},
-	{ NULL, NULL, NULL }
+	{ NULL, NULL, NULL, NULL }
 };
 
 /* ===== Application state ===== */
@@ -507,7 +561,7 @@ print_module_list(void)
 	}
 
 	g_print("\nUse --modules MODULE1,MODULE2 with --generate-yaml-config\n"
-		"to include specific modules in generated config.\n");
+		"or --generate-c-config to include specific modules.\n");
 }
 
 /**
@@ -553,6 +607,68 @@ generate_yaml_with_modules(const gchar *modules_input)
 		}
 	}
 
+	g_strfreev(mod_names);
+}
+
+/**
+ * generate_c_config_with_modules:
+ * @modules_input: comma or colon-separated module names
+ *
+ * Prints the default C config with a modules section appended
+ * that documents each requested module's config keys as comments.
+ * Since module configuration is YAML-driven, the C config shows
+ * the available keys as reference and notes that module options
+ * should be set in the YAML config.
+ */
+static void
+generate_c_config_with_modules(const gchar *modules_input)
+{
+	g_autofree gchar *base = NULL;
+	gchar **mod_names;
+	gchar *return_pos;
+	gint i;
+
+	mod_names = parse_modules_list(modules_input, NULL);
+
+	/*
+	 * Print the base config up to the final "return TRUE;"
+	 * so we can insert module documentation before it.
+	 */
+	base = g_strdup(default_c_config);
+	return_pos = strstr(base, "\t(void)config;\n\treturn TRUE;");
+	if (return_pos != NULL)
+		*return_pos = '\0';
+
+	g_print("%s", base);
+
+	/* Insert module documentation */
+	g_print("\t/* --- Modules ---\n");
+	g_print("\t *\n");
+	g_print("\t * Module-specific options are configured via YAML.\n");
+	g_print("\t * Use --generate-yaml-config --modules to generate\n");
+	g_print("\t * the YAML config with module sections.\n");
+	g_print("\t *\n");
+	g_print("\t * From C, you can access the module manager:\n");
+	g_print("\t *   GstModuleManager *mgr = "
+		"gst_module_manager_get_default();\n");
+	g_print("\t */\n");
+
+	for (i = 0; mod_names[i] != NULL; i++) {
+		const GstBuiltinModule *bmod;
+
+		if (mod_names[i][0] == '\0')
+			continue;
+
+		bmod = find_builtin_module(mod_names[i]);
+		if (bmod != NULL) {
+			g_print("%s", bmod->c_snippet);
+		} else {
+			g_printerr("warning: unknown module '%s'\n",
+				mod_names[i]);
+		}
+	}
+
+	g_print("\n\t(void)config;\n\treturn TRUE;\n}\n");
 	g_strfreev(mod_names);
 }
 
@@ -1703,6 +1819,15 @@ main(
 			generate_yaml_with_modules(opt_modules_csv);
 		else
 			g_print("%s", default_yaml_config);
+		return EXIT_SUCCESS;
+	}
+
+	/* Handle --generate-c-config */
+	if (opt_generate_c_config) {
+		if (opt_modules_csv != NULL)
+			generate_c_config_with_modules(opt_modules_csv);
+		else
+			g_print("%s", default_c_config);
 		return EXIT_SUCCESS;
 	}
 
