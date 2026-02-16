@@ -4,8 +4,8 @@
 # All source objects depend on the generated version header
 $(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h
 
-# main.o depends on the generated default config header
-$(OBJDIR)/main.o: $(OUTDIR)/gst-default-config.h
+# main.o (and its .d file) depends on the generated default config header
+$(OBJDIR)/main.o $(OBJDIR)/main.d: $(OUTDIR)/gst-default-config.h
 
 # Object file compilation
 $(OBJDIR)/%.o: src/%.c | $(OBJDIR)
@@ -101,8 +101,18 @@ $(OUTDIR)/$(GIR_FILE): $(LIB_SRCS) $(LIB_HDRS) | $(OUTDIR)/$(LIB_SHARED_FULL)
 $(OUTDIR)/$(TYPELIB_FILE): $(OUTDIR)/$(GIR_FILE)
 	$(GIR_COMPILER) --output=$@ $<
 
+# Development include symlink for C config compilation
+# Creates $(BUILDDIR)/include/gst -> src/ so that
+# #include <gst/gst.h> resolves during development
+$(BUILDDIR):
+	@$(MKDIR_P) $(BUILDDIR)
+
+$(BUILDDIR)/include/gst: | $(BUILDDIR)
+	@$(MKDIR_P) $(BUILDDIR)/include
+	@ln -sfn $(CURDIR)/src $(BUILDDIR)/include/gst
+
 # Directory creation
-$(OBJDIR):
+$(OBJDIR): | $(BUILDDIR)/include/gst
 	@$(MKDIR_P) $(OBJDIR)
 	@$(MKDIR_P) $(OBJDIR)/core
 	@$(MKDIR_P) $(OBJDIR)/rendering
@@ -141,7 +151,8 @@ src/gst-version.h: src/gst-version.h.in
 		$< > $@
 
 # Default config header generation (embeds YAML as C string constant)
-$(OUTDIR)/gst-default-config.h: data/default-config.yaml | $(OUTDIR)
+$(OUTDIR)/gst-default-config.h: data/default-config.yaml
+	@$(MKDIR_P) $(dir $@)
 	@echo "  GEN     $@"
 	@echo "static const gchar *default_yaml_config =" > $@
 	@sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$$/\\n"/' $< >> $@

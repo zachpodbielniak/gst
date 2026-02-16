@@ -42,6 +42,7 @@ LIB_SRCS := \
 	src/window/gst-window.c \
 	src/window/gst-x11-window.c \
 	src/config/gst-config.c \
+	src/config/gst-config-compiler.c \
 	src/config/gst-color-scheme.c \
 	src/config/gst-keybind.c \
 	src/module/gst-module.c \
@@ -92,6 +93,7 @@ LIB_HDRS := \
 	src/window/gst-window.h \
 	src/window/gst-x11-window.h \
 	src/config/gst-config.h \
+	src/config/gst-config-compiler.h \
 	src/config/gst-color-scheme.h \
 	src/config/gst-keybind.h \
 	src/module/gst-module.h \

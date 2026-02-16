@@ -42,6 +42,7 @@
 
 /* Configuration */
 #include "config/gst-config.h"
+#include "config/gst-config-compiler.h"
 #include "config/gst-color-scheme.h"
 
 /* Module system */

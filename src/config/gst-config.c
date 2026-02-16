@@ -11,6 +11,7 @@
  */
 
 #include "gst-config.h"
+#include "../gst-types.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -1734,4 +1735,353 @@ gst_config_lookup_mouse_action(
 	g_return_val_if_fail(GST_IS_CONFIG(self), GST_ACTION_NONE);
 
 	return gst_mousebind_lookup(self->mousebinds, button, state);
+}
+
+/* ===== Setters (for C config API) ===== */
+
+void
+gst_config_set_shell(
+	GstConfig   *self,
+	const gchar *shell
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(shell != NULL);
+
+	g_free(self->shell);
+	self->shell = g_strdup(shell);
+}
+
+void
+gst_config_set_term_name(
+	GstConfig   *self,
+	const gchar *term_name
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(term_name != NULL);
+
+	g_free(self->term_name);
+	self->term_name = g_strdup(term_name);
+}
+
+void
+gst_config_set_tabspaces(
+	GstConfig *self,
+	guint      tabspaces
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(tabspaces >= 1 && tabspaces <= 64);
+
+	self->tabspaces = tabspaces;
+}
+
+void
+gst_config_set_title(
+	GstConfig   *self,
+	const gchar *title
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(title != NULL);
+
+	g_free(self->title);
+	self->title = g_strdup(title);
+}
+
+void
+gst_config_set_cols(
+	GstConfig *self,
+	guint      cols
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(cols >= 1 && cols <= GST_MAX_COLS);
+
+	self->default_cols = cols;
+}
+
+void
+gst_config_set_rows(
+	GstConfig *self,
+	guint      rows
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(rows >= 1 && rows <= GST_MAX_ROWS);
+
+	self->default_rows = rows;
+}
+
+void
+gst_config_set_border_px(
+	GstConfig *self,
+	guint      border_px
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(border_px <= 100);
+
+	self->border_px = border_px;
+}
+
+void
+gst_config_set_font_primary(
+	GstConfig   *self,
+	const gchar *font
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(font != NULL);
+
+	g_free(self->font_primary);
+	self->font_primary = g_strdup(font);
+}
+
+void
+gst_config_set_font_fallbacks(
+	GstConfig          *self,
+	const gchar *const *fallbacks
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_strfreev(self->font_fallbacks);
+
+	if (fallbacks != NULL) {
+		self->font_fallbacks = g_strdupv((gchar **)fallbacks);
+	} else {
+		self->font_fallbacks = NULL;
+	}
+}
+
+void
+gst_config_set_fg_index(
+	GstConfig *self,
+	guint      index
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(index <= 255);
+
+	self->fg_index = index;
+}
+
+void
+gst_config_set_bg_index(
+	GstConfig *self,
+	guint      index
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(index <= 255);
+
+	self->bg_index = index;
+}
+
+void
+gst_config_set_cursor_fg_index(
+	GstConfig *self,
+	guint      index
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(index <= 255);
+
+	self->cursor_fg_index = index;
+}
+
+void
+gst_config_set_cursor_bg_index(
+	GstConfig *self,
+	guint      index
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(index <= 255);
+
+	self->cursor_bg_index = index;
+}
+
+void
+gst_config_set_fg_hex(
+	GstConfig   *self,
+	const gchar *hex
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_free(self->fg_hex);
+	self->fg_hex = (hex != NULL) ? g_strdup(hex) : NULL;
+}
+
+void
+gst_config_set_bg_hex(
+	GstConfig   *self,
+	const gchar *hex
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_free(self->bg_hex);
+	self->bg_hex = (hex != NULL) ? g_strdup(hex) : NULL;
+}
+
+void
+gst_config_set_cursor_fg_hex(
+	GstConfig   *self,
+	const gchar *hex
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_free(self->cursor_fg_hex);
+	self->cursor_fg_hex = (hex != NULL) ? g_strdup(hex) : NULL;
+}
+
+void
+gst_config_set_cursor_bg_hex(
+	GstConfig   *self,
+	const gchar *hex
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_free(self->cursor_bg_hex);
+	self->cursor_bg_hex = (hex != NULL) ? g_strdup(hex) : NULL;
+}
+
+void
+gst_config_set_palette_hex(
+	GstConfig          *self,
+	const gchar *const *palette,
+	guint               n_colors
+){
+	guint i;
+	guint count;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(palette != NULL);
+	g_return_if_fail(n_colors <= 16);
+
+	g_strfreev(self->palette_hex);
+
+	count = n_colors;
+	self->palette_hex = g_new0(gchar *, count + 1);
+	self->n_palette = count;
+
+	for (i = 0; i < count; i++) {
+		self->palette_hex[i] = g_strdup(
+			(palette[i] != NULL) ? palette[i] : "#000000");
+	}
+	self->palette_hex[count] = NULL;
+}
+
+void
+gst_config_set_cursor_shape(
+	GstConfig      *self,
+	GstCursorShape  shape
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	self->cursor_shape = shape;
+}
+
+void
+gst_config_set_cursor_blink(
+	GstConfig *self,
+	gboolean   blink
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	self->cursor_blink = blink;
+}
+
+void
+gst_config_set_blink_rate(
+	GstConfig *self,
+	guint      rate_ms
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(rate_ms >= 50 && rate_ms <= 5000);
+
+	self->blink_rate = rate_ms;
+}
+
+void
+gst_config_set_word_delimiters(
+	GstConfig   *self,
+	const gchar *delimiters
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(delimiters != NULL);
+
+	g_free(self->word_delimiters);
+	self->word_delimiters = g_strdup(delimiters);
+}
+
+void
+gst_config_set_min_latency(
+	GstConfig *self,
+	guint      ms
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(ms >= 1 && ms <= 1000);
+
+	self->min_latency = ms;
+}
+
+void
+gst_config_set_max_latency(
+	GstConfig *self,
+	guint      ms
+){
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(ms >= 1 && ms <= 1000);
+
+	self->max_latency = ms;
+}
+
+/* ===== Keybind / mousebind management ===== */
+
+gboolean
+gst_config_add_keybind(
+	GstConfig   *self,
+	const gchar *key_str,
+	const gchar *action_str
+){
+	GstKeybind kb;
+
+	g_return_val_if_fail(GST_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(key_str != NULL, FALSE);
+	g_return_val_if_fail(action_str != NULL, FALSE);
+
+	if (!gst_keybind_parse(key_str, action_str, &kb)) {
+		g_warning("Invalid keybind: '%s' -> '%s'", key_str, action_str);
+		return FALSE;
+	}
+
+	g_array_append_val(self->keybinds, kb);
+	return TRUE;
+}
+
+gboolean
+gst_config_add_mousebind(
+	GstConfig   *self,
+	const gchar *key_str,
+	const gchar *action_str
+){
+	GstMousebind mb;
+
+	g_return_val_if_fail(GST_IS_CONFIG(self), FALSE);
+	g_return_val_if_fail(key_str != NULL, FALSE);
+	g_return_val_if_fail(action_str != NULL, FALSE);
+
+	if (!gst_mousebind_parse(key_str, action_str, &mb)) {
+		g_warning("Invalid mousebind: '%s' -> '%s'", key_str, action_str);
+		return FALSE;
+	}
+
+	g_array_append_val(self->mousebinds, mb);
+	return TRUE;
+}
+
+void
+gst_config_clear_keybinds(GstConfig *self)
+{
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_array_set_size(self->keybinds, 0);
+}
+
+void
+gst_config_clear_mousebinds(GstConfig *self)
+{
+	g_return_if_fail(GST_IS_CONFIG(self));
+
+	g_array_set_size(self->mousebinds, 0);
 }

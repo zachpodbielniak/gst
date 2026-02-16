@@ -44,6 +44,7 @@
 #include "window/gst-x11-window.h"
 #include "selection/gst-selection.h"
 #include "config/gst-config.h"
+#include "config/gst-config-compiler.h"
 #include "config/gst-keybind.h"
 #include "module/gst-module-manager.h"
 
@@ -81,6 +82,9 @@ static gchar *opt_mcp_socket = NULL;
 static gboolean opt_generate_yaml = FALSE;
 static gboolean opt_list_modules = FALSE;
 static gchar *opt_modules_csv = NULL;
+static gchar *opt_c_config = NULL;
+static gboolean opt_recompile = FALSE;
+static gboolean opt_no_c_config = FALSE;
 static gboolean opt_x11 = FALSE;
 static gboolean opt_wayland = FALSE;
 
@@ -117,6 +121,12 @@ static GOptionEntry entries[] = {
 	  "List available modules with descriptions", NULL },
 	{ "modules", 0, 0, G_OPTION_ARG_STRING, &opt_modules_csv,
 	  "Comma/colon-separated modules for config generation", "MOD1,MOD2" },
+	{ "c-config", 0, 0, G_OPTION_ARG_FILENAME, &opt_c_config,
+	  "Use specified C config file", "PATH" },
+	{ "recompile", 0, 0, G_OPTION_ARG_NONE, &opt_recompile,
+	  "Compile C config only (do not start terminal)", NULL },
+	{ "no-c-config", 0, 0, G_OPTION_ARG_NONE, &opt_no_c_config,
+	  "Skip C config compilation and loading", NULL },
 	{ NULL }
 };
 
@@ -1744,6 +1754,69 @@ main(
 	cfg_min_latency = gst_config_get_min_latency(config);
 	cfg_max_latency = gst_config_get_max_latency(config);
 
+	/* Step 0.25: Compile and load C config (after YAML, before modules) */
+	if (!opt_no_c_config) {
+		g_autoptr(GstConfigCompiler) compiler = NULL;
+		g_autofree gchar *c_config_path = NULL;
+		g_autofree gchar *so_path = NULL;
+
+		compiler = gst_config_compiler_new();
+
+		/* Find C config source */
+		if (opt_c_config != NULL) {
+			if (!g_file_test(opt_c_config, G_FILE_TEST_IS_REGULAR)) {
+				g_printerr("C config file not found: %s\n",
+					opt_c_config);
+				return EXIT_FAILURE;
+			}
+			c_config_path = g_strdup(opt_c_config);
+		} else {
+			c_config_path = gst_config_compiler_find_config(compiler);
+		}
+
+		if (c_config_path != NULL) {
+			so_path = gst_config_compiler_get_cache_path(compiler);
+
+			/* Compile */
+			if (!gst_config_compiler_compile(compiler,
+				c_config_path, so_path, &error))
+			{
+				g_printerr("Warning: C config compile failed: %s\n",
+					error->message);
+				g_clear_error(&error);
+				/* Continue with YAML-only config */
+			} else if (opt_recompile) {
+				/* --recompile: compile only, do not start */
+				g_print("C config compiled: %s -> %s\n",
+					c_config_path, so_path);
+				g_free(opt_c_config);
+				return EXIT_SUCCESS;
+			} else {
+				/* Load and apply */
+				if (!gst_config_compiler_load_and_apply(compiler,
+					so_path, &error))
+				{
+					g_printerr(
+						"Warning: C config load failed: %s\n",
+						error->message);
+					g_clear_error(&error);
+				}
+
+				/* Re-cache runtime values (C config may change them) */
+				cfg_border_px = gst_config_get_border_px(config);
+				cfg_min_latency = gst_config_get_min_latency(config);
+				cfg_max_latency = gst_config_get_max_latency(config);
+			}
+		} else if (opt_recompile) {
+			g_printerr("No C config file found to compile\n");
+			g_free(opt_c_config);
+			return EXIT_FAILURE;
+		}
+	} else if (opt_recompile) {
+		g_printerr("Cannot use --recompile with --no-c-config\n");
+		return EXIT_FAILURE;
+	}
+
 	/* Determine terminal dimensions (CLI overrides config) */
 	cols = (gint)gst_config_get_cols(config);
 	rows = (gint)gst_config_get_rows(config);
@@ -2005,6 +2078,7 @@ main(
 	g_object_unref(terminal);
 
 	g_free(opt_config);
+	g_free(opt_c_config);
 	g_free(opt_title);
 	g_free(opt_geometry);
 	g_free(opt_font);
