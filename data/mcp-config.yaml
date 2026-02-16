@@ -1,0 +1,169 @@
+# GST Default Configuration
+# ~/.config/gst/config.yaml
+
+terminal:
+  shell: /bin/bash
+  term: st-256color
+  tabspaces: 8
+
+window:
+  title: gst
+  geometry: 80x24
+  border: 2
+
+font:
+  primary: "Liberation Mono:pixelsize=14"
+  fallback:
+    - "Noto Color Emoji:pixelsize=14"
+    - "Symbols Nerd Font:pixelsize=14"
+
+colors:
+  foreground: 7
+  background: 0
+  cursor_fg: 0
+  cursor_bg: 7
+  # 16-color palette (indices 0-15)
+  palette:
+    - "#000000"  # black
+    - "#cc0000"  # red
+    - "#4e9a06"  # green
+    - "#c4a000"  # yellow
+    - "#3465a4"  # blue
+    - "#75507b"  # magenta
+    - "#06989a"  # cyan
+    - "#d3d7cf"  # white
+    - "#555753"  # bright black
+    - "#ef2929"  # bright red
+    - "#8ae234"  # bright green
+    - "#fce94f"  # bright yellow
+    - "#729fcf"  # bright blue
+    - "#ad7fa8"  # bright magenta
+    - "#34e2e2"  # bright cyan
+    - "#eeeeec"  # bright white
+
+cursor:
+  shape: block       # block, underline, bar
+  blink: false
+  blink_rate: 500    # milliseconds
+
+selection:
+  word_delimiters: " `'\"()[]{}|"
+
+keybinds:
+  "Ctrl+Shift+c": clipboard_copy
+  "Ctrl+Shift+v": clipboard_paste
+  "Shift+Page_Up": scroll_up
+  "Shift+Page_Down": scroll_down
+  "Ctrl+Shift+Page_Up": scroll_top
+  "Ctrl+Shift+Page_Down": scroll_bottom
+  "Ctrl+Shift+Home": scroll_top
+  "Ctrl+Shift+End": scroll_bottom
+  "Ctrl+Shift+plus": zoom_in
+  "Ctrl+Shift+minus": zoom_out
+  "Ctrl+Shift+0": zoom_reset
+
+mousebinds:
+  "Button4": scroll_up
+  "Button5": scroll_down
+  "Shift+Button4": scroll_up_fast
+  "Shift+Button5": scroll_down_fast
+
+modules:
+  scrollback:
+    enabled: true
+    lines: 10000
+    mouse_scroll_lines: 3
+
+  transparency:
+    enabled: false
+    opacity: 0.9
+
+  urlclick:
+    enabled: true
+    opener: xdg-open
+    regex: "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
+    modifiers: Ctrl
+
+  externalpipe:
+    enabled: false
+    command: ""
+    key: "Ctrl+Shift+e"
+
+  boxdraw:
+    enabled: true
+    bold_offset: 1
+
+  visualbell:
+    enabled: false
+    duration: 100
+
+  undercurl:
+    enabled: true
+
+  clipboard:
+    enabled: true
+
+  font2:
+    enabled: false
+    fonts: []
+
+  keyboard_select:
+    enabled: false
+    key: Ctrl+Shift+Escape
+    show_crosshair: true
+    highlight_color: "#ff8800"
+    highlight_alpha: 100
+    search_color: "#ffff00"
+    search_alpha: 150
+
+  kittygfx:
+    enabled: false
+    max_total_ram_mb: 256
+    max_single_image_mb: 64
+    max_placements: 4096
+    allow_file_transfer: false
+    allow_shm_transfer: false
+
+  mcp:
+    enabled: true
+    transport: unix-socket   # "unix-socket", "http", or "stdio"
+    # socket_name: myproject # custom socket name (gst-mcp-NAME.sock)
+                             # default: PID-based (gst-mcp-PID.sock)
+                             # also settable via: gst --mcp-socket NAME
+    # port: 8808               # only used with transport: http
+    # host: "127.0.0.1"        # only used with transport: http
+
+    # Per-tool enable/disable (all default to false for safety)
+    tools:
+      # Screen reading
+      read_screen: true
+      read_scrollback: true
+      search_scrollback: true
+      get_cursor_position: true
+      get_cell_attributes: true
+
+      # Process awareness
+      get_foreground_process: true
+      get_working_directory: true
+      is_shell_idle: true
+      get_pty_info: true
+
+      # URL detection
+      list_detected_urls: true
+
+      # Config / module management
+      get_config: true
+      list_modules: true
+      set_config: true           # allows runtime config changes
+      toggle_module: true        # allows enabling/disabling other modules
+
+      # Window management
+      get_window_info: true
+      set_window_title: true
+
+      # Input injection (use with caution)
+      send_text: true            # writes text directly to the PTY
+      send_keys: true            # sends key sequences to the PTY
+
+      # Screenshot capture
+      screenshot: true           # captures terminal as base64 PNG image
