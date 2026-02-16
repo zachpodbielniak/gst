@@ -165,6 +165,9 @@ endif
 ifeq ($(BUILD_GIR),1)
 all: gir
 endif
+ifeq ($(MCP_AVAILABLE),1)
+all: gst-mcp
+endif
 
 # Build dependencies (yaml-glib)
 deps: $(YAMLGLIB_OBJS)
@@ -183,6 +186,13 @@ ifeq ($(MCP_AVAILABLE),1)
 .PHONY: mcp-glib
 mcp-glib:
 	$(MAKE) -C deps/mcp-glib
+endif
+
+# Build gst-mcp relay binary (only if MCP=1)
+ifeq ($(MCP_AVAILABLE),1)
+.PHONY: gst-mcp
+gst-mcp:
+	$(MAKE) -C tools/gst-mcp OUTDIR=$(abspath $(OUTDIR))
 endif
 
 # Build all modules

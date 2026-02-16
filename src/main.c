@@ -76,6 +76,7 @@ static gchar *opt_execute = NULL;
 static gboolean opt_line = FALSE;
 static gboolean opt_version = FALSE;
 static gboolean opt_license = FALSE;
+static gchar *opt_mcp_socket = NULL;
 static gboolean opt_x11 = FALSE;
 static gboolean opt_wayland = FALSE;
 
@@ -104,6 +105,8 @@ static GOptionEntry entries[] = {
 	  "Force X11 backend", NULL },
 	{ "wayland", 0, 0, G_OPTION_ARG_NONE, &opt_wayland,
 	  "Force Wayland backend", NULL },
+	{ "mcp-socket", 0, 0, G_OPTION_ARG_STRING, &opt_mcp_socket,
+	  "MCP socket name (creates gst-mcp-NAME.sock)", "NAME" },
 	{ NULL }
 };
 
@@ -1447,6 +1450,10 @@ main(
 	/* Determine shell (CLI --exec overrides config) */
 	shell_cmd = (opt_execute != NULL) ? opt_execute
 		: gst_config_get_shell(config);
+
+	/* Pass --mcp-socket to the MCP module via environment variable */
+	if (opt_mcp_socket != NULL)
+		g_setenv("GST_MCP_SOCKET_NAME", opt_mcp_socket, TRUE);
 
 	/* Step 0.5: Load modules */
 	{

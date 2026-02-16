@@ -7,15 +7,17 @@
  * Embeds an MCP server inside the terminal emulator, exposing
  * tools for AI assistants to read screen content, inspect processes,
  * detect URLs, manage config/modules, and optionally inject input.
- * Supports stdio and HTTP transports, configurable per-tool opt-in.
+ * Supports unix-socket, stdio, and HTTP transports with per-tool opt-in.
  */
 
 #ifndef GST_MCP_MODULE_H
 #define GST_MCP_MODULE_H
 
+#include <gio/gio.h>
 #include <glib-object.h>
 #include <gmodule.h>
 #include <mcp-server.h>
+#include <mcp-stdio-transport.h>
 #include "../../src/module/gst-module.h"
 
 G_BEGIN_DECLS
@@ -25,7 +27,23 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE(GstMcpModule, gst_mcp_module,
 	GST, MCP_MODULE, GstModule)
 
-/*
+/**
+ * GstMcpSession:
+ *
+ * Tracks a single connected MCP client over the Unix socket
+ * transport. Each accepted connection gets its own McpServer
+ * instance and McpStdioTransport wrapping the socket streams.
+ */
+typedef struct _GstMcpSession GstMcpSession;
+
+struct _GstMcpSession {
+	McpServer            *server;
+	McpStdioTransport    *transport;
+	GSocketConnection    *connection;
+	GstMcpModule         *module;      /* back-reference (unowned) */
+};
+
+/**
  * GstMcpModule:
  *
  * MCP server module. The struct is exposed so that tool registration
@@ -35,13 +53,20 @@ struct _GstMcpModule
 {
 	GstModule    parent_instance;
 
+	/* Single-server mode (http / stdio transports) */
 	McpServer   *server;
 	GCancellable *cancellable;
 
 	/* Transport config */
-	gchar       *transport_type;     /* "stdio" or "http" */
+	gchar       *transport_type;     /* "unix-socket", "stdio", or "http" */
 	guint        http_port;          /* default 8808 */
 	gchar       *http_host;          /* default "127.0.0.1" */
+
+	/* Unix socket transport */
+	gchar          *socket_name;     /* custom name, or NULL for PID-based */
+	GSocketService *socket_service;
+	gchar          *socket_path;
+	GList          *socket_sessions; /* GList of GstMcpSession* */
 
 	/* Per-tool enable flags */
 	gboolean     tool_read_screen;
@@ -63,6 +88,21 @@ struct _GstMcpModule
 	gboolean     tool_send_text;
 	gboolean     tool_send_keys;
 };
+
+/**
+ * gst_mcp_module_setup_server:
+ * @self: a #GstMcpModule
+ * @server: a newly created #McpServer
+ *
+ * Configures an McpServer with instructions and registers all
+ * enabled tools on it. Used for both socket sessions and
+ * single-server (HTTP/stdio) paths.
+ */
+void
+gst_mcp_module_setup_server(
+	GstMcpModule *self,
+	McpServer    *server
+);
 
 G_MODULE_EXPORT GType
 gst_module_register(void);

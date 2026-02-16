@@ -21,7 +21,7 @@ The MCP module is opt-in. Enable it with `MCP=1`:
 MCP=1 make
 ```
 
-This builds the `mcp-glib` library and the `mcp.so` module. Without `MCP=1`, the module is skipped entirely.
+This builds the `mcp-glib` library, the `mcp.so` module, and the `gst-mcp` relay binary. Without `MCP=1`, the module and relay are skipped entirely.
 
 To verify the build configuration:
 
@@ -40,9 +40,11 @@ Add the `mcp` section to your `~/.config/gst/config.yaml`:
 modules:
   mcp:
     enabled: true
-    transport: http          # "http" or "stdio"
-    port: 8808
-    host: "127.0.0.1"
+    transport: unix-socket   # "unix-socket", "http", or "stdio"
+    socket_name: myproject   # custom name -> gst-mcp-myproject.sock
+                             # omit for PID-based default
+    port: 8808               # only used with transport: http
+    host: "127.0.0.1"        # only used with transport: http
 
     # Per-tool enable/disable (all default to false for safety)
     tools:
@@ -83,13 +85,86 @@ Every tool defaults to `false`. You must explicitly enable each capability you w
 
 Destructive tools (`send_text`, `send_keys`, `set_config`) are marked with `destructive_hint: true` in the MCP protocol, so clients can warn users before invoking them.
 
-The HTTP transport binds to `127.0.0.1` (localhost only) by default.
+The unix-socket transport uses filesystem permissions for access control. The HTTP transport binds to `127.0.0.1` (localhost only) by default.
 
 ## Transports
 
-### HTTP (recommended)
+### Unix Socket (recommended)
 
-The default transport. Binds to `host:port` and accepts MCP JSON-RPC over HTTP POST with SSE for notifications.
+The default transport. Creates a Unix domain socket at `$XDG_RUNTIME_DIR/gst-mcp-<PID>.sock` (or `gst-mcp-<NAME>.sock` with a custom name) and accepts connections from the `gst-mcp` relay binary. Each connection gets its own MCP server session, so multiple AI assistants can connect simultaneously.
+
+```yaml
+transport: unix-socket
+```
+
+#### Named sockets
+
+By default, socket files use the PID, which changes every launch. For per-project setups where you want a stable socket name:
+
+```bash
+# Launch GST with a named socket
+gst --mcp-socket myproject
+
+# Connect gst-mcp to that specific socket
+gst-mcp --name myproject
+```
+
+Or via YAML config:
+
+```yaml
+modules:
+  mcp:
+    socket_name: myproject   # creates gst-mcp-myproject.sock
+```
+
+This is useful when running multiple GST instances (one per project) and you want each `.mcp.json` to target a specific terminal:
+
+```json
+{
+  "mcpServers": {
+    "gst-terminal": {
+      "type": "stdio",
+      "command": "gst-mcp",
+      "args": ["--name", "myproject"]
+    }
+  }
+}
+```
+
+#### Socket discovery
+
+The `gst-mcp` relay binary bridges stdin/stdout to the socket:
+
+```bash
+# Auto-discover the socket (picks newest gst-mcp-*.sock)
+gst-mcp
+
+# Connect by name (matches gst --mcp-socket NAME)
+gst-mcp --name myproject
+
+# Explicit socket path
+gst-mcp --socket /run/user/1000/gst-mcp-12345.sock
+
+# Via environment variable
+GST_MCP_SOCKET=/run/user/1000/gst-mcp-12345.sock gst-mcp
+```
+
+**Discovery order for `gst-mcp`:**
+
+1. `--socket PATH` or `--name NAME` command-line argument
+2. `GST_MCP_SOCKET` environment variable
+3. Scan `$XDG_RUNTIME_DIR/gst-mcp-*.sock` and pick the newest by mtime
+
+**Socket name override order for GST:**
+
+1. `--mcp-socket NAME` command-line flag (sets `$GST_MCP_SOCKET_NAME`)
+2. `$GST_MCP_SOCKET_NAME` environment variable
+3. `socket_name` in YAML config
+4. Fall back to PID-based naming
+
+### HTTP (optional)
+
+Binds to `host:port` and accepts MCP JSON-RPC over HTTP POST with SSE for notifications. Useful for remote or web-based MCP clients.
 
 ```yaml
 transport: http
@@ -100,7 +175,7 @@ host: "127.0.0.1"
 Test with curl:
 
 ```bash
-curl -s http://127.0.0.1:8808/mcp -X POST \
+curl -s http://127.0.0.1:8808/ -X POST \
   -H 'Content-Type: application/json' \
   -d '{
     "jsonrpc": "2.0",
@@ -301,9 +376,16 @@ Example: `"Ctrl+c Enter"` sends Ctrl-C followed by Enter.
 
 ## Architecture
 
+```
+Claude Code <-- stdio --> gst-mcp (relay) <-- Unix socket --> GST (mcp.so)
+                          (NDJSON relay)                       GSocketService
+                                                                -> McpServer per session
+                                                                -> McpStdioTransport over socket streams
+```
+
 The MCP module is implemented as a standard GST module (`modules/mcp/`) with:
 
-- `gst-mcp-module.c` -- Module lifecycle (configure, activate, deactivate)
+- `gst-mcp-module.c` -- Module lifecycle (configure, activate, deactivate), socket session management
 - `gst-mcp-tools-screen.c` -- 5 screen reading tools
 - `gst-mcp-tools-process.c` -- 4 process awareness tools
 - `gst-mcp-tools-url.c` -- 1 URL detection tool
@@ -311,7 +393,9 @@ The MCP module is implemented as a standard GST module (`modules/mcp/`) with:
 - `gst-mcp-tools-input.c` -- 2 input injection tools
 - `gst-mcp-tools-window.c` -- 2 window management tools
 
-The module accesses terminal state through the `GstModuleManager` singleton. Tool handlers receive the `GstMcpModule` as user_data and check per-tool enable flags during registration.
+The `gst-mcp` relay binary (`tools/gst-mcp/gst-mcp.c`) bridges stdin/stdout to the Unix socket using NDJSON line forwarding.
+
+The module accesses terminal state through the `GstModuleManager` singleton. Tool handlers receive the `GstMcpModule` as user_data and check per-tool enable flags during registration. The `gst_mcp_module_setup_server()` function is shared across all transport paths to register tools on each McpServer instance.
 
 ## Cross-Module Dependencies
 

@@ -126,9 +126,12 @@ modules:
 
   mcp:
     enabled: true
-    transport: http          # "http" or "stdio"
-    port: 8808
-    host: "127.0.0.1"
+    transport: unix-socket   # "unix-socket", "http", or "stdio"
+    # socket_name: myproject # custom socket name (gst-mcp-NAME.sock)
+                             # default: PID-based (gst-mcp-PID.sock)
+                             # also settable via: gst --mcp-socket NAME
+    # port: 8808               # only used with transport: http
+    # host: "127.0.0.1"        # only used with transport: http
 
     # Per-tool enable/disable (all default to false for safety)
     tools:

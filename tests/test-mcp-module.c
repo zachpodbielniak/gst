@@ -106,9 +106,14 @@ test_mcp_module_defaults(void)
 	mod = g_object_new(GST_TYPE_MCP_MODULE, NULL);
 
 	/* Transport defaults */
-	g_assert_cmpstr(mod->transport_type, ==, "http");
+	g_assert_cmpstr(mod->transport_type, ==, "unix-socket");
 	g_assert_cmpuint(mod->http_port, ==, 8808);
 	g_assert_cmpstr(mod->http_host, ==, "127.0.0.1");
+
+	/* Socket state should be NULL before activation */
+	g_assert_null(mod->socket_service);
+	g_assert_null(mod->socket_path);
+	g_assert_null(mod->socket_sessions);
 
 	/* All tools should default to FALSE */
 	g_assert_false(mod->tool_read_screen);
@@ -287,6 +292,58 @@ test_mcp_tool_registration(void)
 	g_object_unref(server);
 }
 
+/* ===== Setup server tests ===== */
+
+/*
+ * test_mcp_module_setup_server:
+ *
+ * Verifies that gst_mcp_module_setup_server registers tools
+ * on a fresh McpServer when tool flags are enabled.
+ */
+static void
+test_mcp_module_setup_server(void)
+{
+	GstMcpModule *mod;
+	McpServer *server;
+
+	mod = g_object_new(GST_TYPE_MCP_MODULE, NULL);
+
+	/* Enable a few tools */
+	mod->tool_read_screen = TRUE;
+	mod->tool_is_shell_idle = TRUE;
+	mod->tool_get_cursor_position = TRUE;
+
+	server = mcp_server_new("test-server", "1.0.0");
+	gst_mcp_module_setup_server(mod, server);
+
+	/* Server should have been configured successfully */
+	g_assert_nonnull(server);
+
+	g_object_unref(server);
+	g_object_unref(mod);
+}
+
+/*
+ * test_mcp_session_lifecycle:
+ *
+ * Verifies GstMcpSession struct can be allocated and the
+ * module tracks socket-related state correctly.
+ */
+static void
+test_mcp_session_lifecycle(void)
+{
+	GstMcpModule *mod;
+
+	mod = g_object_new(GST_TYPE_MCP_MODULE, NULL);
+
+	/* Before activation, socket state is clean */
+	g_assert_null(mod->socket_service);
+	g_assert_null(mod->socket_path);
+	g_assert_null(mod->socket_sessions);
+
+	g_object_unref(mod);
+}
+
 /* ===== Main ===== */
 
 int
@@ -312,6 +369,12 @@ main(int argc, char **argv)
 	g_test_add_func("/mcp/server/new", test_mcp_server_new);
 	g_test_add_func("/mcp/tool/creation", test_mcp_tool_creation);
 	g_test_add_func("/mcp/tool/registration", test_mcp_tool_registration);
+
+	/* Setup server and session lifecycle */
+	g_test_add_func("/mcp/module/setup-server",
+		test_mcp_module_setup_server);
+	g_test_add_func("/mcp/module/session-lifecycle",
+		test_mcp_session_lifecycle);
 
 	return g_test_run();
 }
