@@ -178,7 +178,7 @@ clean-all:
 	rm -f src/gst-version.h
 
 # Installation rules
-.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop
+.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop install-gst-mcp
 
 install: install-lib install-bin install-headers install-pc install-desktop
 ifeq ($(BUILD_GIR),1)
@@ -186,6 +186,9 @@ install: install-gir
 endif
 ifeq ($(BUILD_MODULES),1)
 install: install-modules
+endif
+ifeq ($(MCP_AVAILABLE),1)
+install: install-gst-mcp
 endif
 
 install-bin: $(OBJDIR)/main.o $(OUTDIR)/$(LIB_SHARED_FULL)
@@ -248,6 +251,10 @@ install-modules:
 		fi \
 	done
 
+install-gst-mcp: $(OUTDIR)/gst-mcp
+	$(MKDIR_P) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROGRAM) $(OUTDIR)/gst-mcp $(DESTDIR)$(BINDIR)/
+
 install-desktop:
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/applications
 	$(INSTALL_DATA) data/gst.desktop $(DESTDIR)$(DATADIR)/applications/
@@ -258,6 +265,7 @@ install-desktop:
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/gst
+	rm -f $(DESTDIR)$(BINDIR)/gst-mcp
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_STATIC)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_FULL)
 	rm -f $(DESTDIR)$(LIBDIR)/$(LIB_SHARED_MAJOR)
