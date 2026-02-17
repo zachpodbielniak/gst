@@ -53,3 +53,5 @@ coverage/
 Thumbs.db
 
 .mcp.json
+.cache/
+compile_commands.json
