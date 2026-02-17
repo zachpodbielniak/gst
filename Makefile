@@ -299,5 +299,8 @@ help:
 	@echo "  help         - Show this help message"
 
 # Dependency tracking (optional, for incremental builds)
+# Skip when cleaning to avoid regenerating headers that clean will delete
+ifeq ($(filter clean clean-all,$(MAKECMDGOALS)),)
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
+endif
