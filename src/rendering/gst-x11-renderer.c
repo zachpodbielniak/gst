@@ -618,14 +618,111 @@ x11_renderer_draw_line_impl(
 		if (has_glyph_transformers && cur.rune > 0x7F) {
 			gint pixel_x;
 			gint pixel_y;
+			XftColor *gt_fg;
+			XftColor *gt_bg;
+			XftColor *gt_temp;
+			XftColor gt_truefg;
+			XftColor gt_truebg;
+			XftColor gt_dimfg;
+			XRenderColor gt_colfg;
+			XRenderColor gt_colbg;
+			gboolean gt_truefg_alloc;
+			gboolean gt_truebg_alloc;
+			guint16 gt_mode;
+			guint32 gt_fg_idx;
+			guint32 gt_bg_idx;
 
 			pixel_x = self->borderpx + x * self->cw;
 			pixel_y = self->borderpx + row * self->ch;
+
+			/* Resolve per-glyph fg/bg colors for the render context */
+			gt_mode = (guint16)cur.attr;
+			gt_fg_idx = cur.fg;
+			gt_bg_idx = cur.bg;
+			gt_truefg_alloc = FALSE;
+			gt_truebg_alloc = FALSE;
+
+			if (GST_IS_TRUECOLOR(gt_fg_idx)) {
+				gt_colfg.alpha = 0xffff;
+				gt_colfg.red = (guint16)GST_TRUERED(gt_fg_idx);
+				gt_colfg.green = (guint16)GST_TRUEGREEN(gt_fg_idx);
+				gt_colfg.blue = (guint16)GST_TRUEBLUE(gt_fg_idx);
+				XftColorAllocValue(self->display, self->vis,
+					self->cmap, &gt_colfg, &gt_truefg);
+				gt_fg = &gt_truefg;
+				gt_truefg_alloc = TRUE;
+			} else {
+				gt_fg = &self->colors[gt_fg_idx];
+			}
+
+			if (GST_IS_TRUECOLOR(gt_bg_idx)) {
+				gt_colbg.alpha = 0xffff;
+				gt_colbg.red = (guint16)GST_TRUERED(gt_bg_idx);
+				gt_colbg.green = (guint16)GST_TRUEGREEN(gt_bg_idx);
+				gt_colbg.blue = (guint16)GST_TRUEBLUE(gt_bg_idx);
+				XftColorAllocValue(self->display, self->vis,
+					self->cmap, &gt_colbg, &gt_truebg);
+				gt_bg = &gt_truebg;
+				gt_truebg_alloc = TRUE;
+			} else {
+				gt_bg = &self->colors[gt_bg_idx];
+			}
+
+			/* Bold brightening */
+			if ((gt_mode & GST_GLYPH_ATTR_BOLD)
+			    && !(gt_mode & GST_GLYPH_ATTR_FAINT)
+			    && !GST_IS_TRUECOLOR(gt_fg_idx) && gt_fg_idx <= 7) {
+				gt_fg = &self->colors[gt_fg_idx + 8];
+			}
+
+			/* Faint dimming */
+			if ((gt_mode & GST_GLYPH_ATTR_FAINT)
+			    && !(gt_mode & GST_GLYPH_ATTR_BOLD)) {
+				gt_colfg.red = gt_fg->color.red / 2;
+				gt_colfg.green = gt_fg->color.green / 2;
+				gt_colfg.blue = gt_fg->color.blue / 2;
+				gt_colfg.alpha = gt_fg->color.alpha;
+				XftColorAllocValue(self->display, self->vis,
+					self->cmap, &gt_colfg, &gt_dimfg);
+				gt_fg = &gt_dimfg;
+			}
+
+			/* Reverse video */
+			if (gt_mode & GST_GLYPH_ATTR_REVERSE) {
+				gt_temp = gt_fg;
+				gt_fg = gt_bg;
+				gt_bg = gt_temp;
+			}
+
+			/* Blink: invisible during off phase */
+			if ((gt_mode & GST_GLYPH_ATTR_BLINK)
+			    && (self->win_mode & GST_WIN_MODE_BLINK)) {
+				gt_fg = gt_bg;
+			}
+
+			/* Invisible attribute */
+			if (gt_mode & GST_GLYPH_ATTR_INVISIBLE) {
+				gt_fg = gt_bg;
+			}
+
+			gt_ctx.fg = gt_fg;
+			gt_ctx.bg = gt_bg;
+			gt_ctx.base.glyph_attr = gt_mode;
 
 			if (gst_module_manager_dispatch_glyph_transform(
 				mgr, cur.rune, &gt_ctx.base,
 				pixel_x, pixel_y, self->cw, self->ch))
 			{
+				/* Free truecolor resources */
+				if (gt_truefg_alloc) {
+					XftColorFree(self->display, self->vis,
+						self->cmap, &gt_truefg);
+				}
+				if (gt_truebg_alloc) {
+					XftColorFree(self->display, self->vis,
+						self->cmap, &gt_truebg);
+				}
+
 				/* Flush accumulated run before skipping */
 				if (i > 0) {
 					x11_draw_glyph_specs(self, specs, &base, i, ox, row);
@@ -634,6 +731,16 @@ x11_renderer_draw_line_impl(
 					i = 0;
 				}
 				continue;
+			}
+
+			/* Free truecolor resources if transformer didn't handle it */
+			if (gt_truefg_alloc) {
+				XftColorFree(self->display, self->vis,
+					self->cmap, &gt_truefg);
+			}
+			if (gt_truebg_alloc) {
+				XftColorFree(self->display, self->vis,
+					self->cmap, &gt_truebg);
 			}
 		}
 

@@ -815,9 +815,40 @@ wl_renderer_draw_line_impl(
 		if (has_glyph_transformers && cur.rune > 0x7F) {
 			gint pixel_x;
 			gint pixel_y;
+			GstColor gt_fg_c;
+			GstColor gt_bg_c;
+			GstColor gt_tmp_c;
+			guint16 gt_mode;
 
 			pixel_x = self->borderpx + x * self->cw;
 			pixel_y = self->borderpx + row * self->ch;
+
+			/* Resolve per-glyph fg/bg colors for the render context */
+			gt_mode = (guint16)cur.attr;
+			gt_fg_c = resolve_fg_color(self, cur.fg, gt_mode);
+			gt_bg_c = resolve_bg_color(self, cur.bg);
+
+			/* Reverse video */
+			if (gt_mode & GST_GLYPH_ATTR_REVERSE) {
+				gt_tmp_c = gt_fg_c;
+				gt_fg_c = gt_bg_c;
+				gt_bg_c = gt_tmp_c;
+			}
+
+			/* Blink: invisible during off phase */
+			if ((gt_mode & GST_GLYPH_ATTR_BLINK)
+			    && (self->win_mode & GST_WIN_MODE_BLINK)) {
+				gt_fg_c = gt_bg_c;
+			}
+
+			/* Invisible attribute */
+			if (gt_mode & GST_GLYPH_ATTR_INVISIBLE) {
+				gt_fg_c = gt_bg_c;
+			}
+
+			gt_ctx.fg = gt_fg_c;
+			gt_ctx.bg = gt_bg_c;
+			gt_ctx.base.glyph_attr = gt_mode;
 
 			if (gst_module_manager_dispatch_glyph_transform(
 				mgr, cur.rune, &gt_ctx.base,
