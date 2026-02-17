@@ -2830,8 +2830,9 @@ static const GstKeyMapping key_map[] = {
 	{ XK_BackSpace, 0,           "\177",   0,  0 },
 
 	/* Tab / Shift-Tab (backtab) */
-	{ XK_Tab,       ShiftMask,   "\033[Z", 0,  0 },
-	{ XK_Tab,       0,           "\t",     0,  0 },
+	{ XK_ISO_Left_Tab, 0,       "\033[Z", 0,  0 },
+	{ XK_Tab,       ShiftMask,  "\033[Z", 0,  0 },
+	{ XK_Tab,       0,          "\t",     0,  0 },
 
 	/* Return */
 	{ XK_Return,    Mod1Mask,    "\033\r", 0,  0 },
