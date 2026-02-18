@@ -86,6 +86,7 @@ static gchar *opt_c_config = NULL;
 static gboolean opt_generate_c_config = FALSE;
 static gboolean opt_recompile = FALSE;
 static gboolean opt_no_c_config = FALSE;
+static gboolean opt_no_yaml_config = FALSE;
 static gboolean opt_x11 = FALSE;
 static gboolean opt_wayland = FALSE;
 
@@ -130,6 +131,8 @@ static GOptionEntry entries[] = {
 	  "Compile C config only (do not start terminal)", NULL },
 	{ "no-c-config", 0, 0, G_OPTION_ARG_NONE, &opt_no_c_config,
 	  "Skip C config compilation and loading", NULL },
+	{ "no-yaml-config", 0, 0, G_OPTION_ARG_NONE, &opt_no_yaml_config,
+	  "Skip YAML config file loading (use built-in defaults)", NULL },
 	{ NULL }
 };
 
@@ -1851,7 +1854,9 @@ main(
 	/* Step 0: Load configuration */
 	config = gst_config_get_default();
 
-	if (opt_config != NULL) {
+	if (opt_no_yaml_config) {
+		/* --no-yaml-config: skip YAML entirely, use built-in defaults */
+	} else if (opt_config != NULL) {
 		/* Explicit config path from --config */
 		if (!gst_config_load_from_path(config, opt_config, &error)) {
 			g_printerr("Failed to load config '%s': %s\n",

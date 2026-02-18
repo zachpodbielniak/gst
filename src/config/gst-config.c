@@ -1090,6 +1090,13 @@ gst_config_load_from_file(
 		return FALSE;
 	}
 
+	/* Check ignore_yaml: if true, discard everything and use defaults */
+	if (yaml_mapping_has_member(root_map, "ignore_yaml")) {
+		if (yaml_mapping_get_boolean_member(root_map, "ignore_yaml")) {
+			return TRUE;
+		}
+	}
+
 	/* Load each section — short-circuit on first error */
 	if (!load_terminal_section(self, root_map, error)) {
 		return FALSE;

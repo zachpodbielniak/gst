@@ -1,6 +1,10 @@
 # GST Default Configuration
 # ~/.config/gst/config.yaml
 
+# Set to true to ignore this config file entirely (use built-in defaults).
+# Equivalent to running with --no-yaml-config.
+# ignore_yaml: false
+
 terminal:
   shell: /bin/bash
   term: st-256color
