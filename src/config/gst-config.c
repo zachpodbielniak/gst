@@ -1668,6 +1668,222 @@ gst_config_get_module_config(
 		self->module_configs, module_name);
 }
 
+/* ===== Module config setters ===== */
+
+/*
+ * ensure_module_mapping:
+ *
+ * Lazily creates the top-level module_configs mapping and the
+ * per-module sub-mapping. Returns the per-module YamlMapping.
+ */
+static YamlMapping *
+ensure_module_mapping(
+	GstConfig   *self,
+	const gchar *module_name
+){
+	YamlMapping *mod_map;
+
+	/* Create the top-level modules mapping if needed */
+	if (self->module_configs == NULL) {
+		self->module_configs = yaml_mapping_new();
+	}
+
+	/* Create the per-module sub-mapping if needed */
+	if (!yaml_mapping_has_member(self->module_configs, module_name)) {
+		mod_map = yaml_mapping_new();
+		yaml_mapping_set_mapping_member(
+			self->module_configs, module_name, mod_map);
+		yaml_mapping_unref(mod_map);
+	}
+
+	return yaml_mapping_get_mapping_member(
+		self->module_configs, module_name);
+}
+
+/**
+ * gst_config_set_module_config_string:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "scrollback")
+ * @key: Configuration key within the module
+ * @value: String value to set
+ *
+ * Sets a string value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_string(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	const gchar *value
+){
+	YamlMapping *mod_map;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(module_name != NULL);
+	g_return_if_fail(key != NULL);
+
+	mod_map = ensure_module_mapping(self, module_name);
+	yaml_mapping_set_string_member(mod_map, key, value);
+}
+
+/**
+ * gst_config_set_module_config_int:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "scrollback")
+ * @key: Configuration key within the module
+ * @value: Integer value to set
+ *
+ * Sets an integer value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_int(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	gint64       value
+){
+	YamlMapping *mod_map;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(module_name != NULL);
+	g_return_if_fail(key != NULL);
+
+	mod_map = ensure_module_mapping(self, module_name);
+	yaml_mapping_set_int_member(mod_map, key, value);
+}
+
+/**
+ * gst_config_set_module_config_double:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "transparency")
+ * @key: Configuration key within the module
+ * @value: Double value to set
+ *
+ * Sets a double value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_double(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	gdouble      value
+){
+	YamlMapping *mod_map;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(module_name != NULL);
+	g_return_if_fail(key != NULL);
+
+	mod_map = ensure_module_mapping(self, module_name);
+	yaml_mapping_set_double_member(mod_map, key, value);
+}
+
+/**
+ * gst_config_set_module_config_bool:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "visualbell")
+ * @key: Configuration key within the module
+ * @value: Boolean value to set
+ *
+ * Sets a boolean value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_bool(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	gboolean     value
+){
+	YamlMapping *mod_map;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(module_name != NULL);
+	g_return_if_fail(key != NULL);
+
+	mod_map = ensure_module_mapping(self, module_name);
+	yaml_mapping_set_boolean_member(mod_map, key, value);
+}
+
+/**
+ * gst_config_set_module_config_strv:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "font2")
+ * @key: Configuration key within the module
+ * @strv: (array zero-terminated=1): NULL-terminated array of strings
+ *
+ * Sets a string array value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_strv(
+	GstConfig          *self,
+	const gchar        *module_name,
+	const gchar        *key,
+	const gchar *const *strv
+){
+	YamlMapping *mod_map;
+	YamlSequence *seq;
+	guint i;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(module_name != NULL);
+	g_return_if_fail(key != NULL);
+	g_return_if_fail(strv != NULL);
+
+	mod_map = ensure_module_mapping(self, module_name);
+
+	seq = yaml_sequence_new();
+	for (i = 0; strv[i] != NULL; i++) {
+		yaml_sequence_add_string_element(seq, strv[i]);
+	}
+	yaml_mapping_set_sequence_member(mod_map, key, seq);
+	yaml_sequence_unref(seq);
+}
+
+/**
+ * gst_config_set_module_config_sub_bool:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "mcp")
+ * @sub_name: Sub-mapping name (e.g. "tools")
+ * @key: Configuration key within the sub-mapping
+ * @value: Boolean value to set
+ *
+ * Sets a boolean value in a sub-mapping within a module's configuration.
+ * Creates the module mapping and sub-mapping if they do not exist.
+ */
+void
+gst_config_set_module_config_sub_bool(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *sub_name,
+	const gchar *key,
+	gboolean     value
+){
+	YamlMapping *mod_map;
+	YamlMapping *sub_map;
+
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(module_name != NULL);
+	g_return_if_fail(sub_name != NULL);
+	g_return_if_fail(key != NULL);
+
+	mod_map = ensure_module_mapping(self, module_name);
+
+	/* Create the sub-mapping if needed */
+	if (!yaml_mapping_has_member(mod_map, sub_name)) {
+		sub_map = yaml_mapping_new();
+		yaml_mapping_set_mapping_member(mod_map, sub_name, sub_map);
+		yaml_mapping_unref(sub_map);
+	}
+	sub_map = yaml_mapping_get_mapping_member(mod_map, sub_name);
+
+	yaml_mapping_set_boolean_member(sub_map, key, value);
+}
+
 /* ===== Key binding getters ===== */
 
 /**

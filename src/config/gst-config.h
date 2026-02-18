@@ -453,6 +453,118 @@ gst_config_get_module_config(
 	const gchar *module_name
 );
 
+/* ===== Module config setters ===== */
+
+/**
+ * gst_config_set_module_config_string:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "scrollback")
+ * @key: Configuration key within the module
+ * @value: String value to set
+ *
+ * Sets a string value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_string(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	const gchar *value
+);
+
+/**
+ * gst_config_set_module_config_int:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "scrollback")
+ * @key: Configuration key within the module
+ * @value: Integer value to set
+ *
+ * Sets an integer value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_int(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	gint64       value
+);
+
+/**
+ * gst_config_set_module_config_double:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "transparency")
+ * @key: Configuration key within the module
+ * @value: Double value to set
+ *
+ * Sets a double value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_double(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	gdouble      value
+);
+
+/**
+ * gst_config_set_module_config_bool:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "visualbell")
+ * @key: Configuration key within the module
+ * @value: Boolean value to set
+ *
+ * Sets a boolean value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_bool(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *key,
+	gboolean     value
+);
+
+/**
+ * gst_config_set_module_config_strv:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "font2")
+ * @key: Configuration key within the module
+ * @strv: (array zero-terminated=1): NULL-terminated array of strings
+ *
+ * Sets a string array value in a module's configuration section.
+ * Creates the module mapping if it does not exist.
+ */
+void
+gst_config_set_module_config_strv(
+	GstConfig          *self,
+	const gchar        *module_name,
+	const gchar        *key,
+	const gchar *const *strv
+);
+
+/**
+ * gst_config_set_module_config_sub_bool:
+ * @self: A #GstConfig
+ * @module_name: Module name (e.g. "mcp")
+ * @sub_name: Sub-mapping name (e.g. "tools")
+ * @key: Configuration key within the sub-mapping
+ * @value: Boolean value to set
+ *
+ * Sets a boolean value in a sub-mapping within a module's configuration.
+ * Creates the module mapping and sub-mapping if they do not exist.
+ */
+void
+gst_config_set_module_config_sub_bool(
+	GstConfig   *self,
+	const gchar *module_name,
+	const gchar *sub_name,
+	const gchar *key,
+	gboolean     value
+);
+
 /* ===== Key binding getters ===== */
 
 /**

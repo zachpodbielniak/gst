@@ -373,7 +373,8 @@ gst_config_compiler_compile(
 
 	/* get pkg-config flags for dependencies */
 	pkg_flags = run_pkg_config(
-		"--cflags --libs glib-2.0 gobject-2.0 gmodule-2.0", error);
+		"--cflags --libs glib-2.0 gobject-2.0 gmodule-2.0"
+		" x11 xft fontconfig json-glib-1.0", error);
 	if (pkg_flags == NULL)
 		return FALSE;
 

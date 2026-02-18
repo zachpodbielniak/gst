@@ -81,6 +81,12 @@ gst_config_init(void)
 	/* gst_config_add_keybind(config, "Ctrl+Shift+c", "clipboard_copy"); */
 	/* gst_config_add_keybind(config, "Ctrl+Shift+v", "clipboard_paste"); */
 
+	/* --- Module config --- */
+	/* gst_config_set_module_config_bool(config, "scrollback", "enabled", TRUE); */
+	/* gst_config_set_module_config_int(config, "scrollback", "lines", 10000); */
+	/* gst_config_set_module_config_double(config, "transparency", "opacity", 0.9); */
+	/* gst_config_set_module_config_string(config, "urlclick", "opener", "xdg-open"); */
+
 	(void)config;
 	return TRUE;
 }
