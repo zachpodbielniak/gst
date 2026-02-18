@@ -120,7 +120,7 @@ typedef struct
 	gint     cursor_movement; /* 'C' key: 0=move cursor, 1=don't */
 
 	/* Quiet mode */
-	gint     quiet;           /* 'q' key: 0=respond, 1=ok-only, 2=silent */
+	gint     quiet;           /* 'q' key: 0=all responses, 1=suppress OK, 2=suppress errors */
 
 	/* Delete specifier */
 	gchar    delete_target;   /* 'd' key when action='d' */
