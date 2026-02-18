@@ -183,6 +183,16 @@ get_yaml_glib_include_flags(void)
 	}
 #endif
 
+	/* installed case: query pkg-config for yaml-glib */
+	{
+		g_autoptr(GError) error = NULL;
+		gchar *flags;
+
+		flags = run_pkg_config("--cflags yaml-glib-1.0", &error);
+		if (flags != NULL)
+			return flags;
+	}
+
 	return g_strdup("");
 }
 
@@ -212,6 +222,16 @@ get_crispy_include_flags(void)
 		return g_strdup_printf("-I%s", crispy_dir);
 	}
 #endif
+
+	/* installed case: query pkg-config for crispy */
+	{
+		g_autoptr(GError) error = NULL;
+		gchar *flags;
+
+		flags = run_pkg_config("--cflags crispy", &error);
+		if (flags != NULL)
+			return flags;
+	}
 
 	return g_strdup("");
 }
