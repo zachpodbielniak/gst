@@ -110,10 +110,8 @@ test_mcp_module_defaults(void)
 	g_assert_cmpuint(mod->http_port, ==, 8808);
 	g_assert_cmpstr(mod->http_host, ==, "127.0.0.1");
 
-	/* Socket state should be NULL before activation */
-	g_assert_null(mod->socket_service);
-	g_assert_null(mod->socket_path);
-	g_assert_null(mod->socket_sessions);
+	/* Unix server should be NULL before activation */
+	g_assert_null(mod->unix_server);
 
 	/* All tools should default to FALSE */
 	g_assert_false(mod->tool_read_screen);
@@ -337,10 +335,8 @@ test_mcp_session_lifecycle(void)
 
 	mod = g_object_new(GST_TYPE_MCP_MODULE, NULL);
 
-	/* Before activation, socket state is clean */
-	g_assert_null(mod->socket_service);
-	g_assert_null(mod->socket_path);
-	g_assert_null(mod->socket_sessions);
+	/* Before activation, unix server is clean */
+	g_assert_null(mod->unix_server);
 
 	g_object_unref(mod);
 }

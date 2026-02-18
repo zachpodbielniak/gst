@@ -17,7 +17,7 @@
 #include <glib-object.h>
 #include <gmodule.h>
 #include <mcp-server.h>
-#include <mcp-stdio-transport.h>
+#include <mcp-unix-socket-server.h>
 #include "../../src/module/gst-module.h"
 
 G_BEGIN_DECLS
@@ -26,22 +26,6 @@ G_BEGIN_DECLS
 
 G_DECLARE_FINAL_TYPE(GstMcpModule, gst_mcp_module,
 	GST, MCP_MODULE, GstModule)
-
-/**
- * GstMcpSession:
- *
- * Tracks a single connected MCP client over the Unix socket
- * transport. Each accepted connection gets its own McpServer
- * instance and McpStdioTransport wrapping the socket streams.
- */
-typedef struct _GstMcpSession GstMcpSession;
-
-struct _GstMcpSession {
-	McpServer            *server;
-	McpStdioTransport    *transport;
-	GSocketConnection    *connection;
-	GstMcpModule         *module;      /* back-reference (unowned) */
-};
 
 /**
  * GstMcpModule:
@@ -62,11 +46,9 @@ struct _GstMcpModule
 	guint        http_port;          /* default 8808 */
 	gchar       *http_host;          /* default "127.0.0.1" */
 
-	/* Unix socket transport */
-	gchar          *socket_name;     /* custom name, or NULL for PID-based */
-	GSocketService *socket_service;
-	gchar          *socket_path;
-	GList          *socket_sessions; /* GList of GstMcpSession* */
+	/* Unix socket transport (via mcp-glib McpUnixSocketServer) */
+	gchar               *socket_name;    /* custom name, or NULL for PID-based */
+	McpUnixSocketServer *unix_server;
 
 	/* Per-tool enable flags */
 	gboolean     tool_read_screen;
