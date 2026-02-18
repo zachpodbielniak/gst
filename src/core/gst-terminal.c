@@ -1648,12 +1648,15 @@ term_setmode(
 					 * On set: save to primary slot (idx=0).
 					 * On reset: restore from alt slot (idx=1).
 					 */
-					if (args[i] == 1049) {
-						if (set) {
-							gst_terminal_cursor_save(term);
-						} else {
-							gst_terminal_cursor_restore(term);
-						}
+					/*
+					 * 1049: save cursor BEFORE swap (on enter),
+					 * restore AFTER swap (on exit). The cursor
+					 * slot is indexed by ALTSCREEN state, so
+					 * restoring after swap ensures idx=0 (primary
+					 * slot) which is where we saved on enter.
+					 */
+					if (args[i] == 1049 && set) {
+						gst_terminal_cursor_save(term);
 					}
 					if (is_alt != (gboolean)set) {
 						if (set) {
@@ -1665,6 +1668,9 @@ term_setmode(
 							gst_terminal_clear(term);
 							gst_terminal_swap_screen(term);
 						}
+					}
+					if (args[i] == 1049 && !set) {
+						gst_terminal_cursor_restore(term);
 					}
 				}
 				break;

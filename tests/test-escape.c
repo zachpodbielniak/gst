@@ -1627,13 +1627,14 @@ test_decset_1049_saves_to_correct_slot(void)
 	g_assert_false(gst_terminal_has_mode(term, GST_MODE_ALTSCREEN));
 
 	/*
-	 * Cursor should NOT be at the alt screen position (40,12).
-	 * The 1049 restore loads from alt slot (idx=1), which was
-	 * not explicitly saved to, so cursor position depends on
-	 * initial state. The key check is that the primary screen
-	 * content is restored (not the alt screen content).
+	 * Cursor should be restored to the primary position (6,3),
+	 * NOT the alt screen position (41,12). The 1049 restore
+	 * runs after the screen swap, so it reads from slot 0
+	 * (primary) where the cursor was saved on enter.
 	 */
 	cursor = gst_terminal_get_cursor(term);
+	g_assert_cmpint(cursor->x, ==, 6);
+	g_assert_cmpint(cursor->y, ==, 3);
 
 	/*
 	 * Verify primary screen content is intact.
