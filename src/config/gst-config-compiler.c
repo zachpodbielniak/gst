@@ -5,14 +5,18 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Compiles a user-written C configuration file into a shared object
- * and loads it at runtime.  The config source may define
- * GST_BUILD_ARGS to pass extra compiler flags (e.g. additional
- * pkg-config packages).  The compiled .so must export a
- * `gst_config_init` symbol that is called to apply the
+ * and loads it at runtime.  Uses the crispy library for gcc-based
+ * compilation and SHA256 content-hash caching.  The config source
+ * may define CRISPY_PARAMS to pass extra compiler flags (e.g.
+ * additional pkg-config packages).  The compiled .so must export
+ * a `gst_config_init` symbol that is called to apply the
  * configuration.
  */
 
 #include "gst-config-compiler.h"
+
+#define CRISPY_COMPILATION
+#include <crispy.h>
 
 #include <glib.h>
 #include <gio/gio.h>
@@ -23,15 +27,16 @@
  * GstConfigCompiler:
  *
  * Compiles a user-written C configuration file into a shared object
- * and loads it at runtime.  The config source may define
- * GST_BUILD_ARGS to pass extra compiler flags.  The compiled .so
+ * and loads it at runtime.  Uses the crispy library for compilation
+ * and SHA256 content-hash caching.  The config source may define
+ * CRISPY_PARAMS to pass extra compiler flags.  The compiled .so
  * must export a `gst_config_init` symbol.
  */
 struct _GstConfigCompiler {
-	GObject  parent_instance;
+	GObject              parent_instance;
 
-	gchar   *gcc_path;
-	gchar   *cache_dir;
+	CrispyGccCompiler   *compiler;   /* crispy compiler backend */
+	CrispyFileCache     *cache;      /* crispy file cache (SHA256) */
 };
 
 G_DEFINE_FINAL_TYPE(GstConfigCompiler, gst_config_compiler, G_TYPE_OBJECT)
@@ -45,8 +50,8 @@ gst_config_compiler_finalize(GObject *object)
 
 	self = GST_CONFIG_COMPILER(object);
 
-	g_free(self->gcc_path);
-	g_free(self->cache_dir);
+	g_clear_object(&self->compiler);
+	g_clear_object(&self->cache);
 
 	G_OBJECT_CLASS(gst_config_compiler_parent_class)->finalize(object);
 }
@@ -66,15 +71,16 @@ gst_config_compiler_class_init(GstConfigCompilerClass *klass)
 static void
 gst_config_compiler_init(GstConfigCompiler *self)
 {
-	self->gcc_path  = g_find_program_in_path("gcc");
-	self->cache_dir = g_build_filename(g_get_user_cache_dir(), "gst", NULL);
+	/* fields set in _new() after gcc probe */
+	self->compiler = NULL;
+	self->cache = NULL;
 }
 
 /* --- Internal helpers --- */
 
 /**
  * run_pkg_config:
- * @args: arguments to pass to pkg-config (e.g. "--cflags --libs glib-2.0")
+ * @args: arguments to pass to pkg-config (e.g. "--cflags --libs x11")
  * @error: (nullable): return location for a #GError, or %NULL
  *
  * Runs pkg-config with the given arguments and captures its stdout.
@@ -181,18 +187,71 @@ get_yaml_glib_include_flags(void)
 }
 
 /**
- * extract_build_args:
- * @source_content: the full text of the config source file
+ * get_crispy_include_flags:
  *
- * Scans the source for a line matching `#define GST_BUILD_ARGS ...`
- * and extracts the value portion.  Leading/trailing whitespace and
- * surrounding double-quotes are stripped from the result.
+ * Gets include flags for crispy headers.  In development mode,
+ * points to deps/crispy/src.  When installed, these come via
+ * the gst pkg-config flags.
  *
- * Returns: (transfer full): the extracted args string, or an empty
- *          string if no GST_BUILD_ARGS define was found
+ * Returns: (transfer full): include flags string; free with g_free()
  */
 static gchar *
-extract_build_args(const gchar *source_content)
+get_crispy_include_flags(void)
+{
+#ifdef GST_DEV_INCLUDE_DIR
+	g_autofree gchar *build_dir = NULL;
+	g_autofree gchar *project_dir = NULL;
+	g_autofree gchar *crispy_dir = NULL;
+
+	build_dir = g_path_get_dirname(GST_DEV_INCLUDE_DIR);
+	project_dir = g_path_get_dirname(build_dir);
+	crispy_dir = g_build_filename(project_dir, "deps",
+	                              "crispy", "src", NULL);
+
+	if (g_file_test(crispy_dir, G_FILE_TEST_IS_DIR)) {
+		return g_strdup_printf("-I%s", crispy_dir);
+	}
+#endif
+
+	return g_strdup("");
+}
+
+/**
+ * get_gst_extra_pkg_flags:
+ *
+ * Gets the pkg-config flags for dependencies that gst.h needs
+ * beyond the base glib/gobject/gio/gmodule that crispy provides.
+ *
+ * Returns: (transfer full): pkg-config flags string; free with g_free()
+ */
+static gchar *
+get_gst_extra_pkg_flags(void)
+{
+	g_autoptr(GError) error = NULL;
+	gchar *flags;
+
+	flags = run_pkg_config(
+		"--cflags --libs x11 xft fontconfig json-glib-1.0", &error);
+	if (flags != NULL)
+		return flags;
+
+	g_warning("Failed to get GST extra pkg-config flags: %s",
+	          error->message);
+	return g_strdup("");
+}
+
+/**
+ * extract_crispy_params:
+ * @source_content: the full text of the config source file
+ *
+ * Scans the source for a line matching `#define CRISPY_PARAMS "..."`
+ * and extracts the quoted value portion.
+ *
+ * Returns: (transfer full): the extracted params string, or an empty
+ *          string if no CRISPY_PARAMS define was found
+ */
+static gchar *
+extract_crispy_params(const gchar *source_content)
 {
 	const gchar *line_start;
 	const gchar *pos;
@@ -210,9 +269,9 @@ extract_build_args(const gchar *source_content)
 		if (line_end == NULL)
 			line_end = pos + strlen(pos);
 
-		/* check if this line starts with #define GST_BUILD_ARGS */
-		if (g_str_has_prefix(line_start, "#define GST_BUILD_ARGS")) {
-			value_start = line_start + strlen("#define GST_BUILD_ARGS");
+		/* check if this line starts with #define CRISPY_PARAMS */
+		if (g_str_has_prefix(line_start, "#define CRISPY_PARAMS")) {
+			value_start = line_start + strlen("#define CRISPY_PARAMS");
 
 			/* skip whitespace after the macro name */
 			while (value_start < line_end && g_ascii_isspace(*value_start))
@@ -245,22 +304,82 @@ extract_build_args(const gchar *source_content)
 	return g_strdup("");
 }
 
+/**
+ * shell_expand:
+ * @params: the raw CRISPY_PARAMS value
+ * @error: (nullable): return location for a #GError, or %NULL
+ *
+ * Shell-expands the CRISPY_PARAMS value.  This allows use of
+ * $(pkg-config ...) and other shell substitutions.
+ *
+ * Returns: (transfer full): the expanded string, or %NULL on error
+ */
+static gchar *
+shell_expand(
+	const gchar  *params,
+	GError      **error
+){
+	g_autofree gchar *cmd = NULL;
+	g_autofree gchar *stdout_output = NULL;
+	g_autofree gchar *stderr_output = NULL;
+	gint exit_status;
+
+	if (params == NULL || params[0] == '\0')
+		return g_strdup("");
+
+	cmd = g_strdup_printf("/bin/sh -c \"printf '%%s' %s\"", params);
+
+	if (!g_spawn_command_line_sync(cmd, &stdout_output, &stderr_output,
+	                               &exit_status, error))
+		return NULL;
+
+	if (!g_spawn_check_wait_status(exit_status, NULL)) {
+		g_set_error(error,
+		            G_IO_ERROR,
+		            G_IO_ERROR_FAILED,
+		            "CRISPY_PARAMS expansion failed: %s",
+		            stderr_output != NULL ? stderr_output : "(no output)");
+		return NULL;
+	}
+
+	g_strstrip(stdout_output);
+	return g_steal_pointer(&stdout_output);
+}
+
 /* --- Public API --- */
 
 /**
  * gst_config_compiler_new:
+ * @error: (nullable): return location for a #GError, or %NULL
  *
- * Creates a new #GstConfigCompiler.  The gcc binary is located
- * via g_find_program_in_path() and the cache directory is set to
- * $XDG_CACHE_HOME/gst.
+ * Creates a new #GstConfigCompiler backed by the crispy library.
+ * Probes gcc for its version and caches pkg-config output.
+ * Sets up SHA256 content-hash caching in $XDG_CACHE_HOME/gst.
  *
- * Returns: (transfer full): a newly allocated #GstConfigCompiler
+ * Returns: (transfer full) (nullable): a new #GstConfigCompiler,
+ *          or %NULL if gcc is not found
  */
 GstConfigCompiler *
-gst_config_compiler_new(void)
+gst_config_compiler_new(GError **error)
 {
-	return (GstConfigCompiler *)g_object_new(
+	GstConfigCompiler *self;
+	g_autofree gchar *cache_dir = NULL;
+
+	self = (GstConfigCompiler *)g_object_new(
 		GST_TYPE_CONFIG_COMPILER, NULL);
+
+	/* create crispy gcc compiler (probes gcc, caches base flags) */
+	self->compiler = crispy_gcc_compiler_new(error);
+	if (self->compiler == NULL) {
+		g_object_unref(self);
+		return NULL;
+	}
+
+	/* create crispy file cache in ~/.cache/gst */
+	cache_dir = g_build_filename(g_get_user_cache_dir(), "gst", NULL);
+	self->cache = crispy_file_cache_new_with_dir(cache_dir);
+
+	return self;
 }
 
 /**
@@ -331,122 +450,100 @@ gst_config_compiler_find_config(GstConfigCompiler *self)
  * gst_config_compiler_compile:
  * @self: a #GstConfigCompiler
  * @source_path: path to the C configuration source file
- * @output_path: path where the compiled .so should be written
+ * @force: if %TRUE, bypass cache and force recompilation
  * @error: (nullable): return location for a #GError, or %NULL
  *
- * Reads the source file, scans for an optional GST_BUILD_ARGS
- * define, and invokes gcc to compile the source into a shared
- * object.  The compilation uses -std=gnu89 -shared -fPIC and
- * links against glib-2.0, gobject-2.0, and gmodule-2.0.
+ * Reads the source file, scans for an optional CRISPY_PARAMS
+ * define, computes a SHA256 content hash, and compiles to a
+ * shared object if no valid cached artifact exists (or if
+ * @force is %TRUE).
  *
- * Returns: %TRUE on success, %FALSE on error
+ * Returns: (transfer full) (nullable): path to the compiled .so,
+ *          or %NULL on error.  Free with g_free().
  */
-gboolean
+gchar *
 gst_config_compiler_compile(
 	GstConfigCompiler  *self,
 	const gchar        *source_path,
-	const gchar        *output_path,
+	gboolean            force,
 	GError            **error
 ){
 	g_autofree gchar *source_content = NULL;
-	g_autofree gchar *extra_args = NULL;
-	g_autofree gchar *pkg_flags = NULL;
+	g_autofree gchar *raw_params = NULL;
+	g_autofree gchar *expanded_params = NULL;
 	g_autofree gchar *gst_flags = NULL;
 	g_autofree gchar *yaml_flags = NULL;
-	g_autofree gchar *cmd = NULL;
-	g_autofree gchar *stderr_output = NULL;
-	gint exit_status;
-	gboolean ok;
+	g_autofree gchar *crispy_flags = NULL;
+	g_autofree gchar *extra_pkg_flags = NULL;
+	g_autofree gchar *extra_flags = NULL;
+	g_autofree gchar *hash = NULL;
+	gchar *so_path;
+	const gchar *compiler_version;
 
-	g_return_val_if_fail(GST_IS_CONFIG_COMPILER(self), FALSE);
-	g_return_val_if_fail(source_path != NULL, FALSE);
-	g_return_val_if_fail(output_path != NULL, FALSE);
-
-	/* verify we found gcc */
-	if (self->gcc_path == NULL) {
-		g_set_error_literal(error,
-		                    G_IO_ERROR,
-		                    G_IO_ERROR_NOT_FOUND,
-		                    "gcc not found in PATH");
-		return FALSE;
-	}
-
-	/* get pkg-config flags for dependencies */
-	pkg_flags = run_pkg_config(
-		"--cflags --libs glib-2.0 gobject-2.0 gmodule-2.0"
-		" x11 xft fontconfig json-glib-1.0", error);
-	if (pkg_flags == NULL)
-		return FALSE;
-
-	/* get gst include flags (installed or development fallback) */
-	gst_flags = get_gst_include_flags();
-
-	/* get yaml-glib include flags for development builds */
-	yaml_flags = get_yaml_glib_include_flags();
+	g_return_val_if_fail(GST_IS_CONFIG_COMPILER(self), NULL);
+	g_return_val_if_fail(source_path != NULL, NULL);
 
 	/* read the source file */
 	if (!g_file_get_contents(source_path, &source_content, NULL, error))
-		return FALSE;
+		return NULL;
 
-	/* extract optional build arguments from the source */
-	extra_args = extract_build_args(source_content);
+	/* extract optional CRISPY_PARAMS from the source */
+	raw_params = extract_crispy_params(source_content);
 
-	/* ensure the output directory exists */
-	g_mkdir_with_parents(self->cache_dir, 0755);
+	/* shell-expand CRISPY_PARAMS (supports $(pkg-config ...) etc.) */
+	expanded_params = shell_expand(raw_params, error);
+	if (expanded_params == NULL)
+		return NULL;
 
-	/* build the compilation command */
-	cmd = g_strdup_printf(
-		"%s -std=gnu89 -shared -fPIC %s %s %s %s -o %s %s",
-		self->gcc_path,
-		pkg_flags,
-		gst_flags,
-		yaml_flags,
-		extra_args,
-		output_path,
-		source_path);
+	/* get GST-specific include flags */
+	gst_flags = get_gst_include_flags();
+	yaml_flags = get_yaml_glib_include_flags();
+	crispy_flags = get_crispy_include_flags();
+	extra_pkg_flags = get_gst_extra_pkg_flags();
 
-	g_debug("C config compile command: %s", cmd);
+	/* build the combined extra_flags string */
+	extra_flags = g_strdup_printf("%s %s %s %s %s",
+	                              gst_flags,
+	                              yaml_flags,
+	                              crispy_flags,
+	                              extra_pkg_flags,
+	                              expanded_params);
 
-	/* execute the compiler */
-	ok = g_spawn_command_line_sync(cmd,
-	                               NULL,
-	                               &stderr_output,
-	                               &exit_status,
-	                               error);
-	if (!ok)
-		return FALSE;
+	/* compute content hash for caching */
+	compiler_version = crispy_compiler_get_version(
+		CRISPY_COMPILER(self->compiler));
+	hash = crispy_cache_provider_compute_hash(
+		CRISPY_CACHE_PROVIDER(self->cache),
+		source_content, -1,
+		extra_flags,
+		compiler_version);
 
-	if (!g_spawn_check_wait_status(exit_status, NULL)) {
-		g_set_error(error,
-		            G_IO_ERROR,
-		            G_IO_ERROR_FAILED,
-		            "gcc compilation failed:\n%s",
-		            stderr_output != NULL ? stderr_output : "(no output)");
-		return FALSE;
+	/* get the cache path for this hash */
+	so_path = crispy_cache_provider_get_path(
+		CRISPY_CACHE_PROVIDER(self->cache), hash);
+
+	/* check cache unless force recompilation */
+	if (!force &&
+	    crispy_cache_provider_has_valid(
+	        CRISPY_CACHE_PROVIDER(self->cache),
+	        hash, source_path)) {
+		g_debug("C config cache hit: %s", so_path);
+		return so_path;
 	}
 
-	return TRUE;
-}
+	/* compile the source to a shared object */
+	g_debug("C config compile: %s -> %s", source_path, so_path);
+	if (!crispy_compiler_compile_shared(
+	        CRISPY_COMPILER(self->compiler),
+	        source_path,
+	        so_path,
+	        extra_flags,
+	        error)) {
+		g_free(so_path);
+		return NULL;
+	}
 
-/**
- * gst_config_compiler_get_cache_path:
- * @self: a #GstConfigCompiler
- *
- * Returns the default path for the compiled config shared object.
- * Creates the cache directory if it does not exist.
- *
- * Returns: (transfer full): a newly allocated path string; free
- *          with g_free()
- */
-gchar *
-gst_config_compiler_get_cache_path(GstConfigCompiler *self)
-{
-	g_return_val_if_fail(GST_IS_CONFIG_COMPILER(self), NULL);
-
-	/* ensure the cache directory exists */
-	g_mkdir_with_parents(self->cache_dir, 0755);
-
-	return g_build_filename(self->cache_dir, "config.so", NULL);
+	return so_path;
 }
 
 /**

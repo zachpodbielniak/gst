@@ -250,8 +250,15 @@ static void
 test_compiler_new(void)
 {
 	g_autoptr(GstConfigCompiler) compiler = NULL;
+	GError *error = NULL;
 
-	compiler = gst_config_compiler_new();
+	if (g_find_program_in_path("gcc") == NULL) {
+		g_test_skip("gcc not found in PATH");
+		return;
+	}
+
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
 	g_assert_nonnull(compiler);
 	g_assert_true(GST_IS_CONFIG_COMPILER(compiler));
 }
@@ -263,8 +270,15 @@ test_compiler_find_config_none(void)
 {
 	g_autoptr(GstConfigCompiler) compiler = NULL;
 	g_autofree gchar *path = NULL;
+	GError *error = NULL;
 
-	compiler = gst_config_compiler_new();
+	if (g_find_program_in_path("gcc") == NULL) {
+		g_test_skip("gcc not found in PATH");
+		return;
+	}
+
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
 
 	/*
 	 * This might find a real config.c if one is installed.
@@ -277,21 +291,6 @@ test_compiler_find_config_none(void)
 	}
 }
 
-/* ===== Test: get_cache_path ===== */
-
-static void
-test_compiler_get_cache_path(void)
-{
-	g_autoptr(GstConfigCompiler) compiler = NULL;
-	g_autofree gchar *path = NULL;
-
-	compiler = gst_config_compiler_new();
-	path = gst_config_compiler_get_cache_path(compiler);
-
-	g_assert_nonnull(path);
-	g_assert_true(g_str_has_suffix(path, "config.so"));
-}
-
 /* ===== Test: compile a simple config ===== */
 
 static void
@@ -301,7 +300,6 @@ test_compiler_compile_simple(void)
 	g_autofree gchar *source_path = NULL;
 	g_autofree gchar *so_path = NULL;
 	GError *error = NULL;
-	gboolean ok;
 
 	/* Skip if gcc is not available */
 	if (g_find_program_in_path("gcc") == NULL) {
@@ -314,13 +312,13 @@ test_compiler_compile_simple(void)
 		"#include <gmodule.h>\n"
 		"G_MODULE_EXPORT int gst_config_init(void) { return 1; }\n");
 
-	so_path = write_temp_file(".so", "");
-	g_unlink(so_path);
-
-	compiler = gst_config_compiler_new();
-	ok = gst_config_compiler_compile(compiler, source_path, so_path, &error);
+	compiler = gst_config_compiler_new(&error);
 	g_assert_no_error(error);
-	g_assert_true(ok);
+
+	so_path = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(so_path);
 	g_assert_true(g_file_test(so_path, G_FILE_TEST_EXISTS));
 
 	g_unlink(source_path);
@@ -336,7 +334,6 @@ test_compiler_compile_invalid(void)
 	g_autofree gchar *source_path = NULL;
 	g_autofree gchar *so_path = NULL;
 	GError *error = NULL;
-	gboolean ok;
 
 	if (g_find_program_in_path("gcc") == NULL) {
 		g_test_skip("gcc not found in PATH");
@@ -347,12 +344,12 @@ test_compiler_compile_invalid(void)
 	source_path = write_temp_file(".c",
 		"this is not valid C code!!!\n");
 
-	so_path = write_temp_file(".so", "");
-	g_unlink(so_path);
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
 
-	compiler = gst_config_compiler_new();
-	ok = gst_config_compiler_compile(compiler, source_path, so_path, &error);
-	g_assert_false(ok);
+	so_path = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
+	g_assert_null(so_path);
 	g_assert_nonnull(error);
 	g_error_free(error);
 
@@ -377,7 +374,7 @@ test_compiler_load_and_apply(void)
 	}
 
 	/*
-	 * Write a config that calls gst_config_set_title on
+	 * Write a config that calls gst_config_init on
 	 * the default singleton. We use a minimal include to
 	 * avoid needing the full gst headers in the test env.
 	 */
@@ -385,15 +382,14 @@ test_compiler_load_and_apply(void)
 		"#include <gmodule.h>\n"
 		"G_MODULE_EXPORT int gst_config_init(void) { return 1; }\n");
 
-	so_path = write_temp_file(".so", "");
-	g_unlink(so_path);
-
-	compiler = gst_config_compiler_new();
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
 
 	/* Compile */
-	ok = gst_config_compiler_compile(compiler, source_path, so_path, &error);
+	so_path = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
 	g_assert_no_error(error);
-	g_assert_true(ok);
+	g_assert_nonnull(so_path);
 
 	/* Load and apply */
 	ok = gst_config_compiler_load_and_apply(compiler, so_path, &error);
@@ -425,15 +421,14 @@ test_compiler_missing_symbol(void)
 		"#include <gmodule.h>\n"
 		"G_MODULE_EXPORT int some_other_func(void) { return 1; }\n");
 
-	so_path = write_temp_file(".so", "");
-	g_unlink(so_path);
-
-	compiler = gst_config_compiler_new();
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
 
 	/* Compile (should succeed) */
-	ok = gst_config_compiler_compile(compiler, source_path, so_path, &error);
+	so_path = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
 	g_assert_no_error(error);
-	g_assert_true(ok);
+	g_assert_nonnull(so_path);
 
 	/* Load should fail (missing gst_config_init symbol) */
 	ok = gst_config_compiler_load_and_apply(compiler, so_path, &error);
@@ -445,10 +440,10 @@ test_compiler_missing_symbol(void)
 	g_unlink(so_path);
 }
 
-/* ===== Test: extract_build_args via compile ===== */
+/* ===== Test: CRISPY_PARAMS extraction via compile ===== */
 
 static void
-test_compiler_build_args(void)
+test_compiler_crispy_params(void)
 {
 	g_autoptr(GstConfigCompiler) compiler = NULL;
 	g_autofree gchar *source_path = NULL;
@@ -462,25 +457,24 @@ test_compiler_build_args(void)
 	}
 
 	/*
-	 * Write a config with GST_BUILD_ARGS that adds a -DTEST_DEFINE.
+	 * Write a config with CRISPY_PARAMS that adds a -DTEST_DEFINE.
 	 * The code checks the define compiled correctly.
 	 */
 	source_path = write_temp_file(".c",
-		"#define GST_BUILD_ARGS \"-DTEST_DEFINE=42\"\n"
+		"#define CRISPY_PARAMS \"-DTEST_DEFINE=42\"\n"
 		"#include <gmodule.h>\n"
 		"G_MODULE_EXPORT int gst_config_init(void) {\n"
 		"    return (TEST_DEFINE == 42) ? 1 : 0;\n"
 		"}\n");
 
-	so_path = write_temp_file(".so", "");
-	g_unlink(so_path);
-
-	compiler = gst_config_compiler_new();
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
 
 	/* Compile - should pick up the extra define */
-	ok = gst_config_compiler_compile(compiler, source_path, so_path, &error);
+	so_path = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
 	g_assert_no_error(error);
-	g_assert_true(ok);
+	g_assert_nonnull(so_path);
 
 	/* Load and apply - init should return TRUE (42 == 42) */
 	ok = gst_config_compiler_load_and_apply(compiler, so_path, &error);
@@ -489,6 +483,46 @@ test_compiler_build_args(void)
 
 	g_unlink(source_path);
 	g_unlink(so_path);
+}
+
+/* ===== Test: cache hit on second compile ===== */
+
+static void
+test_compiler_cache_hit(void)
+{
+	g_autoptr(GstConfigCompiler) compiler = NULL;
+	g_autofree gchar *source_path = NULL;
+	g_autofree gchar *so_path_1 = NULL;
+	g_autofree gchar *so_path_2 = NULL;
+	GError *error = NULL;
+
+	if (g_find_program_in_path("gcc") == NULL) {
+		g_test_skip("gcc not found in PATH");
+		return;
+	}
+
+	source_path = write_temp_file(".c",
+		"#include <gmodule.h>\n"
+		"G_MODULE_EXPORT int gst_config_init(void) { return 1; }\n");
+
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
+
+	/* First compile */
+	so_path_1 = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(so_path_1);
+
+	/* Second compile - should be a cache hit (same path) */
+	so_path_2 = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(so_path_2);
+	g_assert_cmpstr(so_path_1, ==, so_path_2);
+
+	g_unlink(source_path);
+	g_unlink(so_path_1);
 }
 
 /* ===== main ===== */
@@ -517,8 +551,6 @@ main(
 		test_compiler_new);
 	g_test_add_func("/config-compiler/find-config-none",
 		test_compiler_find_config_none);
-	g_test_add_func("/config-compiler/get-cache-path",
-		test_compiler_get_cache_path);
 	g_test_add_func("/config-compiler/compile-simple",
 		test_compiler_compile_simple);
 	g_test_add_func("/config-compiler/compile-invalid",
@@ -527,8 +559,10 @@ main(
 		test_compiler_load_and_apply);
 	g_test_add_func("/config-compiler/missing-symbol",
 		test_compiler_missing_symbol);
-	g_test_add_func("/config-compiler/build-args",
-		test_compiler_build_args);
+	g_test_add_func("/config-compiler/crispy-params",
+		test_compiler_crispy_params);
+	g_test_add_func("/config-compiler/cache-hit",
+		test_compiler_cache_hit);
 
 	return g_test_run();
 }

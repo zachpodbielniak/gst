@@ -1896,7 +1896,14 @@ main(
 		g_autofree gchar *c_config_path = NULL;
 		g_autofree gchar *so_path = NULL;
 
-		compiler = gst_config_compiler_new();
+		compiler = gst_config_compiler_new(&error);
+		if (compiler == NULL) {
+			g_printerr("Warning: C config compiler init failed: %s\n",
+				error->message);
+			g_clear_error(&error);
+			/* Continue without C config */
+			goto skip_c_config;
+		}
 
 		/* Find C config source */
 		if (opt_c_config != NULL) {
@@ -1911,12 +1918,10 @@ main(
 		}
 
 		if (c_config_path != NULL) {
-			so_path = gst_config_compiler_get_cache_path(compiler);
-
-			/* Compile */
-			if (!gst_config_compiler_compile(compiler,
-				c_config_path, so_path, &error))
-			{
+			/* Compile (with content-hash caching) */
+			so_path = gst_config_compiler_compile(compiler,
+				c_config_path, opt_recompile, &error);
+			if (so_path == NULL) {
 				g_printerr("Warning: C config compile failed: %s\n",
 					error->message);
 				g_clear_error(&error);
@@ -1952,6 +1957,7 @@ main(
 		g_printerr("Cannot use --recompile with --no-c-config\n");
 		return EXIT_FAILURE;
 	}
+skip_c_config:
 
 	/* Determine terminal dimensions (CLI overrides config) */
 	cols = (gint)gst_config_get_cols(config);

@@ -5,8 +5,9 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Compiles a user-written C configuration file into a shared object
- * and loads it at runtime. The config source may define
- * GST_BUILD_ARGS to pass extra compiler flags. The compiled .so
+ * and loads it at runtime.  Uses the crispy library for compilation
+ * and content-hash caching (SHA256).  The config source may define
+ * CRISPY_PARAMS to pass extra compiler flags.  The compiled .so
  * must export a `gst_config_init` symbol.
  *
  * Search path for config.c:
@@ -31,19 +32,22 @@ G_DECLARE_FINAL_TYPE(GstConfigCompiler, gst_config_compiler,
 
 /**
  * gst_config_compiler_new:
+ * @error: (nullable): return location for a #GError
  *
- * Creates a new #GstConfigCompiler. Locates gcc via
- * g_find_program_in_path() and sets the cache directory
- * to $XDG_CACHE_HOME/gst.
+ * Creates a new #GstConfigCompiler backed by the crispy library.
+ * Probes gcc for its version and caches pkg-config output for
+ * the default GLib/GObject/GIO libraries.  Uses SHA256 content-
+ * hash caching in $XDG_CACHE_HOME/gst.
  *
- * Returns: (transfer full): A new #GstConfigCompiler
+ * Returns: (transfer full) (nullable): a new #GstConfigCompiler,
+ *          or %NULL if gcc is not found
  */
 GstConfigCompiler *
-gst_config_compiler_new(void);
+gst_config_compiler_new(GError **error);
 
 /**
  * gst_config_compiler_find_config:
- * @self: A #GstConfigCompiler
+ * @self: a #GstConfigCompiler
  *
  * Searches standard paths for a C config file.
  *
@@ -53,50 +57,40 @@ gst_config_compiler_new(void);
  *  3. DATADIR/gst/config.c
  *  4. ./data/config.c (development fallback)
  *
- * Returns: (transfer full) (nullable): Path to the config.c,
- *          or %NULL if none found. Free with g_free().
+ * Returns: (transfer full) (nullable): path to the config.c,
+ *          or %NULL if none found.  Free with g_free().
  */
 gchar *
 gst_config_compiler_find_config(GstConfigCompiler *self);
 
 /**
  * gst_config_compiler_compile:
- * @self: A #GstConfigCompiler
- * @source_path: Path to the C configuration source file
- * @output_path: Path where the compiled .so should be written
- * @error: (nullable): Return location for a #GError
+ * @self: a #GstConfigCompiler
+ * @source_path: path to the C configuration source file
+ * @force: if %TRUE, bypass cache and force recompilation
+ * @error: (nullable): return location for a #GError
  *
- * Reads the source file, scans for optional GST_BUILD_ARGS,
- * and invokes gcc to compile the source into a shared object.
- * Links against glib-2.0, gobject-2.0, and gmodule-2.0.
+ * Reads the source file, scans for an optional CRISPY_PARAMS
+ * define, computes a SHA256 content hash, and compiles to a
+ * shared object if no valid cached artifact exists (or if
+ * @force is %TRUE).
  *
- * Returns: %TRUE on success, %FALSE on error
+ * Returns: (transfer full) (nullable): path to the compiled .so,
+ *          or %NULL on error.  Free with g_free().
  */
-gboolean
+gchar *
 gst_config_compiler_compile(
 	GstConfigCompiler  *self,
 	const gchar        *source_path,
-	const gchar        *output_path,
+	gboolean            force,
 	GError            **error
 );
 
 /**
- * gst_config_compiler_get_cache_path:
- * @self: A #GstConfigCompiler
- *
- * Returns the default path for the compiled config .so.
- * Creates the cache directory if it does not exist.
- *
- * Returns: (transfer full): Path string; free with g_free()
- */
-gchar *
-gst_config_compiler_get_cache_path(GstConfigCompiler *self);
-
-/**
  * gst_config_compiler_load_and_apply:
- * @self: A #GstConfigCompiler
- * @so_path: Path to the compiled shared object
- * @error: (nullable): Return location for a #GError
+ * @self: a #GstConfigCompiler
+ * @so_path: path to the compiled shared object
+ * @error: (nullable): return location for a #GError
  *
  * Opens the .so, looks up `gst_config_init`, and calls it.
  * The init function must have signature:

@@ -8,7 +8,7 @@
 
 # Version
 VERSION_MAJOR := 0
-VERSION_MINOR := 1
+VERSION_MINOR := 2
 VERSION_MICRO := 0
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
@@ -131,7 +131,7 @@ ifeq ($(WAYLAND_AVAILABLE),1)
 endif
 
 # Include paths
-CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -I$(OUTDIR)
+CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -Ideps/crispy/src -I$(OUTDIR)
 
 # Combine all CFLAGS
 CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(CFLAGS_INC) $(CFLAGS_DEPS)
@@ -158,7 +158,7 @@ TEST_CFLAGS := $(CFLAGS) $(shell $(PKG_CONFIG) --cflags glib-2.0)
 TEST_LDFLAGS := $(LDFLAGS) -L$(OUTDIR) -lgst -Wl,-rpath,$(OUTDIR)
 
 # Module flags (absolute include paths for out-of-tree compilation)
-MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src
+MODULE_CFLAGS_INC := -I$(CURDIR) -I$(CURDIR)/src -I$(CURDIR)/deps/yaml-glib/src -I$(CURDIR)/deps/crispy/src
 MODULE_CFLAGS := $(CFLAGS_BASE) $(CFLAGS_BUILD) $(MODULE_CFLAGS_INC) $(CFLAGS_DEPS)
 MODULE_LDFLAGS := -shared -fPIC
 

@@ -1,8 +1,8 @@
 # rules.mk - GST Build Rules
 # Pattern rules and common build recipes
 
-# All source objects depend on the generated version header
-$(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h
+# All source objects depend on the generated version headers
+$(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h deps/crispy/src/crispy-version.h
 
 # main.o (and its .d file) depends on the generated default config header
 $(OBJDIR)/main.o $(OBJDIR)/main.d: $(OUTDIR)/gst-default-config.h
@@ -63,13 +63,22 @@ $(OBJDIR)/deps/yaml-glib/src/%.o: deps/yaml-glib/src/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# crispy dependency compilation
+$(OBJDIR)/deps/crispy/src/interfaces/%.o: deps/crispy/src/interfaces/%.c deps/crispy/src/crispy-version.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR)/deps/crispy/src/core/%.o: deps/crispy/src/core/%.c deps/crispy/src/crispy-version.h | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Static library creation
-$(OUTDIR)/$(LIB_STATIC): $(LIB_OBJS) $(YAMLGLIB_OBJS)
+$(OUTDIR)/$(LIB_STATIC): $(LIB_OBJS) $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 	@$(MKDIR_P) $(dir $@)
 	$(AR) rcs $@ $^
 
 # Shared library creation
-$(OUTDIR)/$(LIB_SHARED_FULL): $(LIB_OBJS) $(YAMLGLIB_OBJS)
+$(OUTDIR)/$(LIB_SHARED_FULL): $(LIB_OBJS) $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(LDFLAGS_SHARED) -o $@ $^ $(LDFLAGS)
 	cd $(OUTDIR) && ln -sf $(LIB_SHARED_FULL) $(LIB_SHARED_MAJOR)
@@ -125,6 +134,8 @@ $(OBJDIR): | $(BUILDDIR)/include/gst
 	@$(MKDIR_P) $(OBJDIR)/util
 	@$(MKDIR_P) $(OBJDIR)/tests
 	@$(MKDIR_P) $(OBJDIR)/deps/yaml-glib/src
+	@$(MKDIR_P) $(OBJDIR)/deps/crispy/src/core
+	@$(MKDIR_P) $(OBJDIR)/deps/crispy/src/interfaces
 
 $(OUTDIR):
 	@$(MKDIR_P) $(OUTDIR)
@@ -150,6 +161,15 @@ src/gst-version.h: src/gst-version.h.in
 		-e 's|@GST_VERSION@|$(VERSION)|g' \
 		$< > $@
 
+# Crispy version header generation
+deps/crispy/src/crispy-version.h: deps/crispy/src/crispy-version.h.in
+	sed \
+		-e 's|@CRISPY_VERSION_MAJOR@|0|g' \
+		-e 's|@CRISPY_VERSION_MINOR@|1|g' \
+		-e 's|@CRISPY_VERSION_MICRO@|0|g' \
+		-e 's|@CRISPY_VERSION@|0.1.0|g' \
+		$< > $@
+
 # Default config header generation (embeds YAML as C string constant)
 $(OUTDIR)/gst-default-config.h: data/default-config.yaml data/default-config.c
 	@$(MKDIR_P) $(dir $@)
@@ -172,10 +192,12 @@ $(OBJDIR)/%.d: src/%.c | $(OBJDIR)
 clean:
 	rm -rf $(BUILDDIR)/$(BUILD_TYPE)
 	rm -f src/gst-version.h
+	rm -f deps/crispy/src/crispy-version.h
 
 clean-all:
 	rm -rf $(BUILDDIR)
 	rm -f src/gst-version.h
+	rm -f deps/crispy/src/crispy-version.h
 
 # Installation rules
 .PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop install-gst-mcp

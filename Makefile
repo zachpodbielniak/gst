@@ -137,6 +137,15 @@ YAMLGLIB_SRCS := \
 	deps/yaml-glib/src/yaml-sequence.c \
 	deps/yaml-glib/src/yaml-serializable.c
 
+# crispy sources (built-in dependency)
+CRISPY_SRCS := \
+	deps/crispy/src/interfaces/crispy-compiler.c \
+	deps/crispy/src/interfaces/crispy-cache-provider.c \
+	deps/crispy/src/core/crispy-gcc-compiler.c \
+	deps/crispy/src/core/crispy-file-cache.c \
+	deps/crispy/src/core/crispy-plugin-engine.c \
+	deps/crispy/src/core/crispy-script.c
+
 # Test sources
 TEST_SRCS := $(wildcard tests/test-*.c)
 ifneq ($(MCP_AVAILABLE),1)
@@ -152,6 +161,7 @@ endif
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
 YAMLGLIB_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(YAMLGLIB_SRCS))
+CRISPY_OBJS := $(patsubst deps/%.c,$(OBJDIR)/deps/%.o,$(CRISPY_SRCS))
 MAIN_OBJ := $(OBJDIR)/main.o
 TEST_OBJS := $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
 TEST_BINS := $(patsubst tests/%.c,$(OUTDIR)/%,$(TEST_SRCS))
@@ -171,8 +181,8 @@ ifeq ($(MCP_AVAILABLE),1)
 all: gst-mcp
 endif
 
-# Build dependencies (yaml-glib)
-deps: $(YAMLGLIB_OBJS)
+# Build dependencies (yaml-glib, crispy)
+deps: $(YAMLGLIB_OBJS) $(CRISPY_OBJS)
 
 # Build the library
 lib: src/gst-version.h $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL) $(OUTDIR)/gst.pc
