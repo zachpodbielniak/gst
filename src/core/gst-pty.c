@@ -393,9 +393,16 @@ gst_pty_write_no_echo(
 
 	gst_pty_write(pty, data, len);
 
-	/* Restore echo */
+	/*
+	 * Restore echo only after the line discipline has finished
+	 * processing the written data. Without tcdrain(), ECHO can be
+	 * restored before the line discipline sees the bytes, causing
+	 * them to echo back to the master read buffer. This creates
+	 * feedback loops for protocols like kitty graphics.
+	 */
 	if (restored) {
-		tcsetattr(priv->master_fd, TCSANOW, &saved);
+		tcdrain(priv->master_fd);
+		tcsetattr(priv->master_fd, TCSADRAIN, &saved);
 	}
 }
 

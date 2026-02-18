@@ -25,6 +25,7 @@ G_BEGIN_DECLS
 typedef struct
 {
 	guint32  image_id;
+	guint32  image_number; /* 'I' key: non-unique image number */
 	guint8  *data;        /* decoded RGBA pixels, owned */
 	gint     width;
 	gint     height;
@@ -65,11 +66,28 @@ typedef struct
 typedef struct
 {
 	guint32     image_id;
+	guint32     image_number; /* 'I' key: non-unique image number */
 	GByteArray *chunks;      /* accumulated base64 data */
 	gint        format;      /* pixel format (GstGfxFormat) */
 	gint        width;       /* declared source width */
 	gint        height;      /* declared source height */
 	gint        compression; /* 'o' value: 'z' for zlib */
+
+	/* Fields from the first chunk, preserved for final-chunk processing.
+	 * Continuation chunks only carry 'm' and payload per the spec. */
+	gchar       action;       /* 'a' value: 't' or 'T' */
+	gint        quiet;        /* 'q' value */
+	guint32     placement_id; /* 'p' value */
+	gint        src_x;        /* 'x' value: source crop x */
+	gint        src_y;        /* 'y' value: source crop y */
+	gint        crop_w;       /* 'w' value: crop width */
+	gint        crop_h;       /* 'h' value: crop height */
+	gint        dst_cols;     /* 'c' value: display columns */
+	gint        dst_rows;     /* 'r' value: display rows */
+	gint        x_offset;     /* 'X' value: pixel offset x */
+	gint        y_offset;     /* 'Y' value: pixel offset y */
+	gint32      z_index;      /* 'z' value: z-layer */
+	gint        cursor_movement; /* 'C' value: cursor movement */
 } GstKittyUpload;
 
 /*
@@ -88,6 +106,7 @@ typedef struct
 	gsize       max_single;   /* max single image in bytes */
 	gint        max_placements;
 	guint32     next_image_id;  /* auto-assign if id=0 */
+	guint32     last_image_id;  /* most recent transmit id for continuation chunks */
 } GstKittyImageCache;
 
 /**
@@ -120,6 +139,8 @@ gst_kitty_image_cache_free(GstKittyImageCache *cache);
  * gst_kitty_image_cache_process:
  * @cache: the image cache
  * @cmd: parsed graphics command
+ * @cursor_col: current cursor column (0-indexed), used for delete targets
+ * @cursor_row: current cursor row (0-indexed), used for delete targets
  * @response: (out) (nullable): response string to send back via PTY,
  *            or %NULL if no response needed. Caller frees.
  *
@@ -133,6 +154,8 @@ gboolean
 gst_kitty_image_cache_process(
 	GstKittyImageCache *cache,
 	GstGraphicsCommand *cmd,
+	gint                cursor_col,
+	gint                cursor_row,
 	gchar             **response
 );
 

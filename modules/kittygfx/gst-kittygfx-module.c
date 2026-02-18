@@ -29,11 +29,21 @@
 
 /* ===== Type definition ===== */
 
+/* Maximum number of queued response bodies for echo detection */
+#define MAX_SENT_RESPONSES (64)
+
 struct _GstKittygfxModule
 {
 	GstModule parent_instance;
 
 	GstKittyImageCache *cache;
+
+	/*
+	 * Queue of APC bodies (gchar*) we have sent as responses.
+	 * Used to detect and discard echoed responses that the PTY
+	 * line discipline reflects back. Capped at MAX_SENT_RESPONSES.
+	 */
+	GQueue *sent_responses;
 
 	/* Config */
 	gint  max_ram_mb;
@@ -206,7 +216,7 @@ kittygfx_handle_escape(
 	/*
 	 * Detect and discard echoed responses to prevent echo cascade.
 	 *
-	 * When we write a response (e.g. \033_Gi=31;OK\033\\) to the PTY,
+	 * When we write a response (e.g. \033_Gi=31,p=1;OK\033\\) to the PTY,
 	 * the line discipline echoes it back if ECHO is on. The echoed
 	 * data arrives here as a new APC. Without this check, it would
 	 * be parsed as a transmit command (default action='t'), fail to
@@ -215,23 +225,69 @@ kittygfx_handle_escape(
 	 * messages contain characters like 'd' that leak to the child
 	 * process as keypresses.
 	 *
-	 * Echoed responses match: i=<digits>;<status> (no comma before ';').
-	 * Real commands always have multiple keys (a=, f=, s=, etc.).
+	 * Strategy:
+	 * 1. Queue match: compare incoming body against bodies we sent.
+	 * 2. Fallback heuristic: detect response-shaped strings that
+	 *    start with "i=" and whose payload starts with a status
+	 *    word (OK, E...) rather than base64 data.
 	 */
 	{
-		const gchar *after_g = buf + 1;
-		gsize after_g_len = len - 1;
-		const gchar *semi;
+		const gchar *after_g;
+		gsize after_g_len;
+		GList *ql;
 
-		semi = (const gchar *)memchr(after_g, ';', after_g_len);
-		if (semi != NULL && after_g_len >= 3 &&
-		    after_g[0] == 'i' && after_g[1] == '=') {
-			const gchar *comma;
+		after_g = buf + 1;
+		after_g_len = len - 1;
 
-			comma = (const gchar *)memchr(
-				after_g, ',', (gsize)(semi - after_g));
-			if (comma == NULL) {
-				return TRUE; /* consume echoed response silently */
+		/* Queue match: exact body comparison against sent responses */
+		for (ql = self->sent_responses->head; ql != NULL; ql = ql->next) {
+			const gchar *queued;
+			gsize queued_len;
+
+			queued = (const gchar *)ql->data;
+			queued_len = strlen(queued);
+			if (queued_len == after_g_len &&
+			    memcmp(queued, after_g, queued_len) == 0) {
+				/* Match found - remove from queue and consume */
+				g_free(ql->data);
+				g_queue_delete_link(self->sent_responses, ql);
+				return TRUE;
+			}
+		}
+
+		/*
+		 * Fallback heuristic: response bodies always start with "i="
+		 * and the payload after ';' is a status word (OK or E...),
+		 * never valid base64 image data. Real transmit commands have
+		 * action keys like "a=", "f=", "s=" in addition to "i=".
+		 */
+		{
+			const gchar *semi;
+
+			semi = (const gchar *)memchr(after_g, ';', after_g_len);
+			if (semi != NULL && after_g_len >= 3 &&
+			    after_g[0] == 'i' && after_g[1] == '=') {
+				const gchar *payload;
+				gsize payload_len;
+
+				payload = semi + 1;
+				payload_len = after_g_len - (gsize)(payload - after_g);
+
+				/*
+				 * Status payloads are "OK" or error codes matching
+				 * E<UPPERCASE>:<message> (e.g., EINVAL:, ENOENT:).
+				 * The colon ':' is NOT in the base64 alphabet, so
+				 * checking E + uppercase + colon definitively identifies
+				 * error responses vs base64 image data.
+				 */
+				if ((payload_len >= 2 &&
+				     payload[0] == 'O' && payload[1] == 'K') ||
+				    (payload_len >= 3 &&
+				     payload[0] == 'E' &&
+				     payload[1] >= 'A' && payload[1] <= 'Z' &&
+				     memchr(payload, ':', payload_len) != NULL)) {
+					return TRUE; /* consume echoed response */
+				}
 			}
 		}
 	}
@@ -253,38 +309,70 @@ kittygfx_handle_escape(
 		}
 	}
 
-	/* Process the command */
-	response = NULL;
-	gst_kitty_image_cache_process(self->cache, &cmd, &response);
-
-	/* Set placement position from cursor for transmit+display */
-	if (cmd.action == 'T' || cmd.action == 'p') {
+	/* Get cursor position for delete commands */
+	{
 		GstTerminal *term;
-		GList *last;
+		GstCursor *cursor;
+		gint cur_col;
+		gint cur_row;
 
 		term = (GstTerminal *)terminal;
-		last = g_list_last(self->cache->placements);
-		if (last != NULL && term != NULL) {
-			GstImagePlacement *pl;
-			GstCursor *cursor;
-
-			pl = (GstImagePlacement *)last->data;
-
-			/* Get cursor position from terminal */
+		cur_col = 0;
+		cur_row = 0;
+		if (term != NULL) {
 			cursor = gst_terminal_get_cursor(term);
 			if (cursor != NULL) {
-				if (pl->col < 0) {
-					pl->col = cursor->x;
-				}
-				if (pl->row < 0) {
-					pl->row = cursor->y;
-				}
+				cur_col = cursor->x;
+				cur_row = cursor->y;
 			}
+		}
+
+		/* Process the command */
+		response = NULL;
+		gst_kitty_image_cache_process(self->cache, &cmd,
+			cur_col, cur_row, &response);
+
+		/*
+		 * Delete commands remove placements but don't modify any
+		 * terminal line content, so no lines get marked dirty by
+		 * the escape processor. Without an explicit dirty mark,
+		 * the renderer skips those lines and old image pixels
+		 * persist in the pixmap from the previous frame.
+		 *
+		 * Force a full redraw so line backgrounds get repainted
+		 * over the area where the old image was.
+		 */
+		if (cmd.action == 'd' && term != NULL) {
+			gst_terminal_mark_dirty(term, -1);
 		}
 	}
 
 	/* Send response back to PTY via terminal signal */
 	if (response != NULL && terminal != NULL) {
+		/*
+		 * Record the APC body (between \033_G and \033\\) so we can
+		 * detect and discard the echo if the line discipline reflects
+		 * it back. Extract body by skipping the \033_G prefix (3 bytes)
+		 * and trimming the \033\\ suffix (2 bytes).
+		 */
+		{
+			gsize resp_len;
+
+			resp_len = strlen(response);
+			if (resp_len > 5) {
+				gchar *body;
+
+				body = g_strndup(response + 3, resp_len - 5);
+				g_queue_push_tail(self->sent_responses, body);
+
+				/* Cap queue size to prevent unbounded growth */
+				while (g_queue_get_length(self->sent_responses) >
+				       MAX_SENT_RESPONSES) {
+					g_free(g_queue_pop_head(self->sent_responses));
+				}
+			}
+		}
+
 		g_signal_emit_by_name(terminal, "response",
 			response, (glong)strlen(response));
 		g_free(response);
@@ -432,6 +520,11 @@ gst_kittygfx_module_finalize(GObject *object)
 		self->cache = NULL;
 	}
 
+	if (self->sent_responses != NULL) {
+		g_queue_free_full(self->sent_responses, g_free);
+		self->sent_responses = NULL;
+	}
+
 	G_OBJECT_CLASS(gst_kittygfx_module_parent_class)->finalize(object);
 }
 
@@ -481,6 +574,7 @@ static void
 gst_kittygfx_module_init(GstKittygfxModule *self)
 {
 	self->cache = NULL;
+	self->sent_responses = g_queue_new();
 
 	/* Defaults */
 	self->max_ram_mb = 256;

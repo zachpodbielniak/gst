@@ -212,51 +212,59 @@ finalize_upload(
 	decompressed = NULL;
 	if (upload->compression == 'z') {
 		g_autoptr(GZlibDecompressor) decomp = NULL;
-		g_autoptr(GConverter) conv = NULL;
-		guint8 *out_buf;
-		gsize out_size;
-		gsize total_read;
-		gsize total_written;
-		GConverterResult result;
+		g_autoptr(GInputStream) mem_in = NULL;
+		g_autoptr(GInputStream) conv_in = NULL;
+		GByteArray *result_buf;
+		guint8 read_buf[65536];
+		gssize n_read;
 
 		decomp = g_zlib_decompressor_new(G_ZLIB_COMPRESSOR_FORMAT_ZLIB);
-		conv = G_CONVERTER(g_object_ref(decomp));
 
-		/* Allocate generous output buffer */
-		out_size = decoded_len * 4;
-		if (out_size < 65536) {
-			out_size = 65536;
+		/*
+		 * Use GConverterInputStream for streaming decompression.
+		 * This avoids the problems of raw g_converter_convert():
+		 * - No fixed output buffer size (handles any compression ratio)
+		 * - No corrupted state on retry (stream handles internally)
+		 * - Proper EOF detection (returns 0 on complete)
+		 */
+		mem_in = g_memory_input_stream_new_from_data(
+			decoded, decoded_len, NULL);
+		conv_in = g_converter_input_stream_new(
+			mem_in, G_CONVERTER(decomp));
+
+		result_buf = g_byte_array_new();
+
+		/* Read all decompressed data in chunks */
+		for (;;) {
+			n_read = g_input_stream_read(conv_in,
+				read_buf, sizeof(read_buf), NULL, NULL);
+
+			if (n_read < 0) {
+				/* Decompression error */
+				g_byte_array_unref(result_buf);
+				g_free(decoded);
+				return NULL;
+			}
+			if (n_read == 0) {
+				break; /* EOF - decompression complete */
+			}
+
+			g_byte_array_append(result_buf, read_buf, (guint)n_read);
 		}
-		out_buf = (guint8 *)g_malloc(out_size);
 
-		result = g_converter_convert(conv,
-			decoded, decoded_len,
-			out_buf, out_size,
-			G_CONVERTER_INPUT_AT_END,
-			&total_read, &total_written,
-			NULL);
-
-		if (result == G_CONVERTER_ERROR || result == G_CONVERTER_FLUSHED) {
-			/* Retry with larger buffer if needed */
-			out_size = decoded_len * 16;
-			out_buf = (guint8 *)g_realloc(out_buf, out_size);
-
-			result = g_converter_convert(conv,
-				decoded, decoded_len,
-				out_buf, out_size,
-				G_CONVERTER_INPUT_AT_END,
-				&total_read, &total_written,
-				NULL);
-		}
-
-		if (result == G_CONVERTER_FINISHED || result == G_CONVERTER_FLUSHED) {
-			decompressed = out_buf;
-			decomp_len = total_written;
-		} else {
-			g_free(out_buf);
+		if (result_buf->len == 0) {
+			g_byte_array_unref(result_buf);
 			g_free(decoded);
 			return NULL;
 		}
+
+		/*
+		 * Transfer ownership of the byte array's internal buffer.
+		 * g_byte_array_free(arr, FALSE) frees the wrapper but
+		 * returns the data pointer for us to own.
+		 */
+		decomp_len = result_buf->len;
+		decompressed = g_byte_array_free(result_buf, FALSE);
 		g_free(decoded);
 	}
 
@@ -296,6 +304,7 @@ finalize_upload(
 	/* Create image entry */
 	img = g_new0(GstKittyImage, 1);
 	img->image_id = upload->image_id;
+	img->image_number = upload->image_number;
 	img->width = w;
 	img->height = h;
 	img->stride = stride;
@@ -331,14 +340,33 @@ finalize_upload(
  * build_response:
  *
  * Builds a kitty graphics protocol response string.
- * Format: \033_Gi=<id>;OK\033\\  or  \033_Gi=<id>;ENOENT:msg\033\\
+ * Includes placement_id and image_number when non-zero per spec:
+ *   \033_Gi=<id>;OK\033\\
+ *   \033_Gi=<id>,p=<placement_id>;OK\033\\
+ *   \033_Gi=<id>,I=<image_number>;OK\033\\
  */
 static gchar *
 build_response(
 	guint32      image_id,
+	guint32      placement_id,
+	guint32      image_number,
 	const gchar *status
 ){
-	return g_strdup_printf("\033_Gi=%u;%s\033\\", image_id, status);
+	GString *resp;
+
+	resp = g_string_new(NULL);
+	g_string_append_printf(resp, "\033_Gi=%u", image_id);
+
+	if (placement_id > 0) {
+		g_string_append_printf(resp, ",p=%u", placement_id);
+	}
+	if (image_number > 0) {
+		g_string_append_printf(resp, ",I=%u", image_number);
+	}
+
+	g_string_append_printf(resp, ";%s\033\\", status);
+
+	return g_string_free(resp, FALSE);
 }
 
 /*
@@ -351,6 +379,8 @@ static gboolean
 handle_transmit(
 	GstKittyImageCache *cache,
 	GstGraphicsCommand *cmd,
+	gint                cursor_col,
+	gint                cursor_row,
 	gchar             **response
 ){
 	GstKittyUpload *upload;
@@ -358,11 +388,28 @@ handle_transmit(
 
 	img_id = cmd->image_id;
 
-	/* Auto-assign image id if not specified */
+	/*
+	 * Resolve image id for continuation chunks.
+	 * Per the kitty spec, subsequent chunks of a chunked transfer
+	 * may omit the 'i' key; in that case we reuse the id from
+	 * the most recent transmit command.  Only auto-assign a brand
+	 * new id when there is no active upload to continue.
+	 */
 	if (img_id == 0) {
-		img_id = cache->next_image_id++;
+		if (cache->last_image_id != 0 &&
+		    g_hash_table_lookup(cache->uploads,
+		        GUINT_TO_POINTER(cache->last_image_id)) != NULL) {
+			/* Continuation chunk - reuse the active upload id */
+			img_id = cache->last_image_id;
+		} else {
+			/* New upload with no explicit id */
+			img_id = cache->next_image_id++;
+		}
 		cmd->image_id = img_id;
 	}
+
+	/* Track the most recent transmit id for future continuations */
+	cache->last_image_id = img_id;
 
 	/* Look up or create upload accumulator */
 	upload = (GstKittyUpload *)g_hash_table_lookup(
@@ -371,11 +418,31 @@ handle_transmit(
 	if (upload == NULL) {
 		upload = g_new0(GstKittyUpload, 1);
 		upload->image_id = img_id;
+		upload->image_number = cmd->image_number;
 		upload->chunks = g_byte_array_new();
 		upload->format = cmd->format;
 		upload->width = cmd->src_width;
 		upload->height = cmd->src_height;
 		upload->compression = cmd->compression;
+
+		/*
+		 * Preserve first-chunk control keys for final-chunk processing.
+		 * Per the kitty spec, continuation chunks only carry 'm' and
+		 * payload — all other keys come from the first chunk.
+		 */
+		upload->action = cmd->action;
+		upload->quiet = cmd->quiet;
+		upload->placement_id = cmd->placement_id;
+		upload->src_x = cmd->src_x;
+		upload->src_y = cmd->src_y;
+		upload->crop_w = cmd->crop_w;
+		upload->crop_h = cmd->crop_h;
+		upload->dst_cols = cmd->dst_cols;
+		upload->dst_rows = cmd->dst_rows;
+		upload->x_offset = cmd->x_offset;
+		upload->y_offset = cmd->y_offset;
+		upload->z_index = cmd->z_index;
+		upload->cursor_movement = cmd->cursor_movement;
 
 		g_hash_table_insert(cache->uploads,
 			GUINT_TO_POINTER(img_id), upload);
@@ -389,35 +456,51 @@ handle_transmit(
 
 	/* If more chunks expected, we're done for now */
 	if (cmd->more == 1) {
-		if (response != NULL && cmd->quiet < 2) {
-			*response = NULL; /* no response for intermediate chunks */
-		}
+		/* No response for intermediate chunks per protocol */
 		return TRUE;
 	}
 
-	/* Final chunk - decode the complete image */
+	/*
+	 * Final chunk - decode the complete image.
+	 *
+	 * Use the upload's stored first-chunk values for action, quiet,
+	 * and placement_id since continuation chunks only carry 'm' and
+	 * payload — the parser defaults would be wrong.
+	 */
 	{
 		GstKittyImage *img;
+		GstKittyUpload saved;
+
+		/*
+		 * Copy the upload struct before the hash table remove frees it.
+		 * We need first-chunk fields for placement creation and response.
+		 */
+		saved = *upload;
 
 		/* Null-terminate for base64 decode */
 		g_byte_array_append(upload->chunks, (const guint8 *)"\0", 1);
 
 		img = finalize_upload(cache, upload);
 
-		/* Remove upload accumulator */
+		/* Remove upload accumulator and clear continuation tracker */
 		g_hash_table_remove(cache->uploads,
 			GUINT_TO_POINTER(img_id));
+		if (cache->last_image_id == img_id) {
+			cache->last_image_id = 0;
+		}
 
 		if (img == NULL) {
-			if (response != NULL && cmd->quiet == 0) {
+			/* q=2 suppresses errors; q=0 and q=1 send errors */
+			if (response != NULL && saved.quiet != 2) {
 				*response = build_response(img_id,
+					saved.placement_id, saved.image_number,
 					"EINVAL:failed to decode image");
 			}
 			return TRUE;
 		}
 
 		/* For 'T' (transmit+display), create a placement */
-		if (cmd->action == 'T') {
+		if (saved.action == 'T') {
 			GstImagePlacement *pl;
 
 			if ((gint)g_list_length(cache->placements) >=
@@ -435,25 +518,27 @@ handle_transmit(
 
 			pl = g_new0(GstImagePlacement, 1);
 			pl->image_id = img_id;
-			pl->placement_id = cmd->placement_id;
-			pl->col = -1;  /* will be set by caller from cursor pos */
-			pl->row = -1;
-			pl->src_x = cmd->src_x;
-			pl->src_y = cmd->src_y;
-			pl->crop_w = cmd->crop_w;
-			pl->crop_h = cmd->crop_h;
-			pl->dst_cols = cmd->dst_cols;
-			pl->dst_rows = cmd->dst_rows;
-			pl->x_offset = cmd->x_offset;
-			pl->y_offset = cmd->y_offset;
-			pl->z_index = cmd->z_index;
+			pl->placement_id = saved.placement_id;
+			pl->col = cursor_col;
+			pl->row = cursor_row;
+			pl->src_x = saved.src_x;
+			pl->src_y = saved.src_y;
+			pl->crop_w = saved.crop_w;
+			pl->crop_h = saved.crop_h;
+			pl->dst_cols = saved.dst_cols;
+			pl->dst_rows = saved.dst_rows;
+			pl->x_offset = saved.x_offset;
+			pl->y_offset = saved.y_offset;
+			pl->z_index = saved.z_index;
 
 			cache->placements = g_list_append(
 				cache->placements, pl);
 		}
 
-		if (response != NULL && cmd->quiet == 0) {
-			*response = build_response(img_id, "OK");
+		/* q=0 sends OK; q=1 and q=2 suppress it */
+		if (response != NULL && saved.quiet == 0) {
+			*response = build_response(img_id,
+				saved.placement_id, saved.image_number, "OK");
 		}
 	}
 
@@ -470,6 +555,8 @@ static gboolean
 handle_display(
 	GstKittyImageCache *cache,
 	GstGraphicsCommand *cmd,
+	gint                cursor_col,
+	gint                cursor_row,
 	gchar             **response
 ){
 	GstKittyImage *img;
@@ -477,8 +564,10 @@ handle_display(
 
 	img = gst_kitty_image_cache_get_image(cache, cmd->image_id);
 	if (img == NULL) {
-		if (response != NULL && cmd->quiet == 0) {
+		/* q=2 suppresses errors; q=0 and q=1 send errors */
+		if (response != NULL && cmd->quiet != 2) {
 			*response = build_response(cmd->image_id,
+				cmd->placement_id, cmd->image_number,
 				"ENOENT:image not found");
 		}
 		return TRUE;
@@ -498,8 +587,8 @@ handle_display(
 	pl = g_new0(GstImagePlacement, 1);
 	pl->image_id = cmd->image_id;
 	pl->placement_id = cmd->placement_id;
-	pl->col = -1;  /* set by caller */
-	pl->row = -1;
+	pl->col = cursor_col;
+	pl->row = cursor_row;
 	pl->src_x = cmd->src_x;
 	pl->src_y = cmd->src_y;
 	pl->crop_w = cmd->crop_w;
@@ -512,8 +601,10 @@ handle_display(
 
 	cache->placements = g_list_append(cache->placements, pl);
 
+	/* q=0 sends OK; q=1 and q=2 suppress it */
 	if (response != NULL && cmd->quiet == 0) {
-		*response = build_response(cmd->image_id, "OK");
+		*response = build_response(cmd->image_id,
+			cmd->placement_id, cmd->image_number, "OK");
 	}
 
 	return TRUE;
@@ -524,6 +615,7 @@ handle_display(
  *
  * Handles 'a=q' (query) commands.
  * Responds with OK to indicate kitty graphics support.
+ * Per spec, query responses are always sent regardless of quiet flag.
  */
 static gboolean
 handle_query(
@@ -534,100 +626,436 @@ handle_query(
 	(void)cache;
 
 	if (response != NULL) {
-		*response = build_response(cmd->image_id, "OK");
+		*response = build_response(cmd->image_id,
+			cmd->placement_id, cmd->image_number, "OK");
 	}
 
 	return TRUE;
 }
 
 /*
+ * placement_intersects_cell:
+ *
+ * Checks if a placement covers the given cell (0-indexed col, row).
+ * Uses dst_cols/dst_rows when set, otherwise assumes 1x1.
+ */
+static gboolean
+placement_intersects_cell(
+	GstImagePlacement *pl,
+	gint               col,
+	gint               row
+){
+	gint end_col;
+	gint end_row;
+
+	end_col = pl->col + ((pl->dst_cols > 0) ? pl->dst_cols : 1);
+	end_row = pl->row + ((pl->dst_rows > 0) ? pl->dst_rows : 1);
+
+	return (col >= pl->col && col < end_col &&
+	        row >= pl->row && row < end_row);
+}
+
+/*
+ * maybe_free_orphan_image:
+ *
+ * For uppercase delete variants: if the image has no remaining
+ * placements, free its pixel data from the cache.
+ */
+static void
+maybe_free_orphan_image(
+	GstKittyImageCache *cache,
+	guint32             image_id
+){
+	GstKittyImage *img;
+	GList *l;
+
+	/* Check if any placement still references this image */
+	for (l = cache->placements; l != NULL; l = l->next) {
+		GstImagePlacement *pl;
+
+		pl = (GstImagePlacement *)l->data;
+		if (pl->image_id == image_id) {
+			return; /* still referenced */
+		}
+	}
+
+	/* No placements remain - free image data */
+	img = (GstKittyImage *)g_hash_table_lookup(
+		cache->images, GUINT_TO_POINTER(image_id));
+	if (img != NULL) {
+		cache->total_ram -= img->data_size;
+		g_hash_table_remove(cache->images, GUINT_TO_POINTER(image_id));
+	}
+}
+
+/*
+ * delete_placements_matching:
+ *
+ * Removes all placements that match a predicate. If free_orphans is
+ * TRUE (uppercase variants), also frees image data when no placements
+ * remain for that image.
+ *
+ * The match function receives each placement, the command, cursor_col,
+ * and cursor_row, returning TRUE if the placement should be deleted.
+ */
+typedef gboolean (*PlacementMatchFunc)(GstImagePlacement *, GstGraphicsCommand *,
+                                       gint, gint);
+
+static void
+delete_placements_matching(
+	GstKittyImageCache *cache,
+	GstGraphicsCommand *cmd,
+	gint                cursor_col,
+	gint                cursor_row,
+	gboolean            free_orphans,
+	PlacementMatchFunc  match_fn
+){
+	GList *l;
+	GList *next;
+	GList *orphan_ids;
+
+	orphan_ids = NULL;
+
+	for (l = cache->placements; l != NULL; l = next) {
+		GstImagePlacement *pl;
+
+		next = l->next;
+		pl = (GstImagePlacement *)l->data;
+
+		if (match_fn(pl, cmd, cursor_col, cursor_row)) {
+			if (free_orphans) {
+				/* Track image id for orphan check */
+				orphan_ids = g_list_prepend(orphan_ids,
+					GUINT_TO_POINTER(pl->image_id));
+			}
+			placement_free(pl);
+			cache->placements = g_list_delete_link(
+				cache->placements, l);
+		}
+	}
+
+	/* Free orphaned images for uppercase variants */
+	if (free_orphans) {
+		for (l = orphan_ids; l != NULL; l = l->next) {
+			maybe_free_orphan_image(cache,
+				GPOINTER_TO_UINT(l->data));
+		}
+	}
+	g_list_free(orphan_ids);
+}
+
+/* ===== Match functions for each delete target ===== */
+
+static gboolean
+match_by_id(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+            gint cursor_col, gint cursor_row)
+{
+	(void)cursor_col; (void)cursor_row;
+	if (pl->image_id != cmd->image_id) {
+		return FALSE;
+	}
+	/* If placement_id specified, only match that placement */
+	if (cmd->placement_id > 0 && pl->placement_id != cmd->placement_id) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static gboolean
+match_at_cursor(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+                gint cursor_col, gint cursor_row)
+{
+	(void)cmd;
+	return placement_intersects_cell(pl, cursor_col, cursor_row);
+}
+
+static gboolean
+match_at_cell(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+              gint cursor_col, gint cursor_row)
+{
+	gint col;
+	gint row;
+
+	(void)cursor_col; (void)cursor_row;
+
+	/* x,y keys are 1-indexed per spec */
+	col = (cmd->src_x > 0) ? cmd->src_x - 1 : 0;
+	row = (cmd->src_y > 0) ? cmd->src_y - 1 : 0;
+
+	return placement_intersects_cell(pl, col, row);
+}
+
+static gboolean
+match_at_cell_z(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+                gint cursor_col, gint cursor_row)
+{
+	if (pl->z_index != cmd->z_index) {
+		return FALSE;
+	}
+	return match_at_cell(pl, cmd, cursor_col, cursor_row);
+}
+
+static gboolean
+match_at_column(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+                gint cursor_col, gint cursor_row)
+{
+	gint col;
+	gint end_col;
+
+	(void)cursor_col; (void)cursor_row;
+
+	/* x key is 1-indexed */
+	col = (cmd->src_x > 0) ? cmd->src_x - 1 : 0;
+	end_col = pl->col + ((pl->dst_cols > 0) ? pl->dst_cols : 1);
+
+	return (col >= pl->col && col < end_col);
+}
+
+static gboolean
+match_at_row(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+             gint cursor_col, gint cursor_row)
+{
+	gint row;
+	gint end_row;
+
+	(void)cursor_col; (void)cursor_row;
+
+	/* y key is 1-indexed */
+	row = (cmd->src_y > 0) ? cmd->src_y - 1 : 0;
+	end_row = pl->row + ((pl->dst_rows > 0) ? pl->dst_rows : 1);
+
+	return (row >= pl->row && row < end_row);
+}
+
+static gboolean
+match_at_zindex(GstImagePlacement *pl, GstGraphicsCommand *cmd,
+                gint cursor_col, gint cursor_row)
+{
+	(void)cursor_col; (void)cursor_row;
+	return (pl->z_index == cmd->z_index);
+}
+
+/*
  * handle_delete:
  *
- * Handles 'a=d' (delete) commands.
- * Removes images and/or placements based on the delete target.
+ * Handles 'a=d' (delete) commands per the kitty graphics protocol spec.
+ *
+ * Lowercase targets delete placements only. Uppercase targets also
+ * free image data when no placements remain for that image.
+ *
+ * Delete targets:
+ *   a/A - all placements (A also frees unreferenced images)
+ *   i/I - by image id (respects placement_id filter)
+ *   n/N - by image number (newest, respects placement_id)
+ *   c/C - at cursor position
+ *   p/P - at specific cell (x,y keys, 1-indexed)
+ *   q/Q - at cell+z-index (x,y,z keys)
+ *   r/R - by id range (x <= id <= y)
+ *   x/X - at column (x key)
+ *   y/Y - at row (y key)
+ *   z/Z - at z-index (z key)
+ *   f/F - animation frames (not implemented, ignored)
  */
 static gboolean
 handle_delete(
 	GstKittyImageCache *cache,
 	GstGraphicsCommand *cmd,
+	gint                cursor_col,
+	gint                cursor_row,
 	gchar             **response
 ){
-	GList *l;
-	GList *next;
+	gboolean is_upper;
+
+	/*
+	 * Per the kitty spec, the default delete target is 'a' (all
+	 * placements) when no 'd=' key is provided.
+	 */
+	if (cmd->delete_target == 0) {
+		cmd->delete_target = 'a';
+	}
+
+	is_upper = (cmd->delete_target >= 'A' && cmd->delete_target <= 'Z');
 
 	switch (cmd->delete_target) {
-	case 'a': /* delete all */
-		g_hash_table_remove_all(cache->images);
+	case 'a':
+	case 'A':
+		/* Delete all placements */
 		g_list_free_full(cache->placements, placement_free);
 		cache->placements = NULL;
-		cache->total_ram = 0;
+
+		if (is_upper) {
+			/* Free all image data */
+			g_hash_table_remove_all(cache->images);
+			cache->total_ram = 0;
+		}
 		break;
 
-	case 'i': /* delete by image id */
-		{
-			GstKittyImage *img;
+	case 'i':
+	case 'I':
+		/* Delete by image id, optionally filtered by placement_id */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_by_id);
 
-			img = (GstKittyImage *)g_hash_table_lookup(
-				cache->images,
-				GUINT_TO_POINTER(cmd->image_id));
-			if (img != NULL) {
-				cache->total_ram -= img->data_size;
-				g_hash_table_remove(cache->images,
-					GUINT_TO_POINTER(cmd->image_id));
+		/*
+		 * For uppercase, also free the image directly even if no
+		 * placements existed (spec says delete image data by id).
+		 */
+		if (is_upper) {
+			maybe_free_orphan_image(cache, cmd->image_id);
+		}
+		break;
+
+	case 'n':
+	case 'N':
+		{
+			/*
+			 * Delete newest image with specified image_number.
+			 * Find highest image_id with matching image_number.
+			 */
+			GHashTableIter iter;
+			gpointer value;
+			GstKittyImage *newest;
+			guint32 newest_id;
+
+			newest = NULL;
+			newest_id = 0;
+
+			g_hash_table_iter_init(&iter, cache->images);
+			while (g_hash_table_iter_next(&iter, NULL, &value)) {
+				GstKittyImage *img;
+
+				img = (GstKittyImage *)value;
+				if (img->image_number == cmd->image_number &&
+				    img->image_id >= newest_id) {
+					newest = img;
+					newest_id = img->image_id;
+				}
 			}
 
-			/* Remove associated placements */
-			for (l = cache->placements; l != NULL; l = next) {
-				GstImagePlacement *pl;
+			if (newest != NULL) {
+				GList *l;
+				GList *next;
 
-				next = l->next;
-				pl = (GstImagePlacement *)l->data;
-				if (pl->image_id == cmd->image_id) {
-					placement_free(pl);
-					cache->placements = g_list_delete_link(
-						cache->placements, l);
+				/* Delete placements for this image */
+				for (l = cache->placements; l != NULL; l = next) {
+					GstImagePlacement *pl;
+
+					next = l->next;
+					pl = (GstImagePlacement *)l->data;
+					if (pl->image_id == newest_id) {
+						if (cmd->placement_id > 0 &&
+						    pl->placement_id != cmd->placement_id) {
+							continue;
+						}
+						placement_free(pl);
+						cache->placements = g_list_delete_link(
+							cache->placements, l);
+					}
+				}
+
+				if (is_upper) {
+					maybe_free_orphan_image(cache, newest_id);
 				}
 			}
 		}
 		break;
 
-	case 'c': /* delete at cursor */
-	case 'p': /* delete at cell */
-	case 'x': /* delete at column */
-	case 'y': /* delete at row */
-	case 'z': /* delete at z-index */
-		/* Remove matching placements */
-		for (l = cache->placements; l != NULL; l = next) {
-			GstImagePlacement *pl;
-			gboolean match;
+	case 'c':
+	case 'C':
+		/* Delete at cursor position */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_at_cursor);
+		break;
 
-			next = l->next;
-			pl = (GstImagePlacement *)l->data;
-			match = FALSE;
+	case 'p':
+	case 'P':
+		/* Delete at specific cell (x,y keys, 1-indexed) */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_at_cell);
+		break;
 
-			switch (cmd->delete_target) {
-			case 'z':
-				match = (pl->z_index == cmd->z_index);
-				break;
-			default:
-				/* Other targets need cursor position context
-				 * which we don't have here - skip for now */
-				break;
+	case 'q':
+	case 'Q':
+		/* Delete at cell+z-index */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_at_cell_z);
+		break;
+
+	case 'r':
+	case 'R':
+		{
+			/*
+			 * Delete by id range: x <= image_id <= y.
+			 * x,y keys are reused (src_x, src_y) but here they
+			 * are raw image id bounds, not 1-indexed cell coords.
+			 */
+			GList *l;
+			GList *next;
+			guint32 lo;
+			guint32 hi;
+			GList *orphan_ids;
+
+			lo = (guint32)cmd->src_x;
+			hi = (guint32)cmd->src_y;
+			orphan_ids = NULL;
+
+			for (l = cache->placements; l != NULL; l = next) {
+				GstImagePlacement *pl;
+
+				next = l->next;
+				pl = (GstImagePlacement *)l->data;
+				if (pl->image_id >= lo && pl->image_id <= hi) {
+					if (is_upper) {
+						orphan_ids = g_list_prepend(orphan_ids,
+							GUINT_TO_POINTER(pl->image_id));
+					}
+					placement_free(pl);
+					cache->placements = g_list_delete_link(
+						cache->placements, l);
+				}
 			}
 
-			if (match) {
-				placement_free(pl);
-				cache->placements = g_list_delete_link(
-					cache->placements, l);
+			if (is_upper) {
+				for (l = orphan_ids; l != NULL; l = l->next) {
+					maybe_free_orphan_image(cache,
+						GPOINTER_TO_UINT(l->data));
+				}
 			}
+			g_list_free(orphan_ids);
 		}
+		break;
+
+	case 'x':
+	case 'X':
+		/* Delete at column */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_at_column);
+		break;
+
+	case 'y':
+	case 'Y':
+		/* Delete at row */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_at_row);
+		break;
+
+	case 'z':
+	case 'Z':
+		/* Delete at z-index */
+		delete_placements_matching(cache, cmd, cursor_col, cursor_row,
+			is_upper, match_at_zindex);
+		break;
+
+	case 'f':
+	case 'F':
+		/* Animation frame delete - not implemented, ignore */
 		break;
 
 	default:
 		break;
 	}
 
-	(void)response;
+	(void)response; /* delete commands don't generate responses */
 	return TRUE;
 }
 
@@ -689,6 +1117,8 @@ gst_kitty_image_cache_free(GstKittyImageCache *cache)
  * gst_kitty_image_cache_process:
  * @cache: the image cache
  * @cmd: parsed graphics command
+ * @cursor_col: current cursor column (0-indexed)
+ * @cursor_row: current cursor row (0-indexed)
  * @response: (out) (nullable): response string, caller frees
  *
  * Routes a parsed command to the appropriate handler.
@@ -699,6 +1129,8 @@ gboolean
 gst_kitty_image_cache_process(
 	GstKittyImageCache *cache,
 	GstGraphicsCommand *cmd,
+	gint                cursor_col,
+	gint                cursor_row,
 	gchar             **response
 ){
 	if (response != NULL) {
@@ -708,16 +1140,18 @@ gst_kitty_image_cache_process(
 	switch (cmd->action) {
 	case 't':
 	case 'T':
-		return handle_transmit(cache, cmd, response);
+		return handle_transmit(cache, cmd, cursor_col, cursor_row,
+			response);
 
 	case 'p':
-		return handle_display(cache, cmd, response);
+		return handle_display(cache, cmd, cursor_col, cursor_row,
+			response);
 
 	case 'q':
 		return handle_query(cache, cmd, response);
 
 	case 'd':
-		return handle_delete(cache, cmd, response);
+		return handle_delete(cache, cmd, cursor_col, cursor_row, response);
 
 	default:
 		/* Unknown action - ignore */
