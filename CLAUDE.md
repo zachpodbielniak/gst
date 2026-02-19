@@ -63,6 +63,7 @@ gst_terminal_new(
 - `src/core/gst-terminal.c` - Core terminal emulation
 - `config.mk` - Build configuration
 - `data/default-config.yaml` - Default configuration template
+- `data/all-modules.yaml` - Config with every module enabled (for testing)
 
 ## Dependencies
 
@@ -90,6 +91,16 @@ G_MODULE_EXPORT GType gst_module_register(void);
 ```
 
 Hook points are defined in `GstHookPoint` enum in `src/gst-enums.h`.
+
+**When adding a new module**, you MUST also:
+1. Add its config section (with `enabled: false`) to `data/default-config.yaml`
+2. Add its config section (with `enabled: true` and test-safe defaults) to `data/all-modules.yaml`
+
+`data/all-modules.yaml` enables every module and is used for full integration testing:
+```bash
+make MCP=1 WEBVIEW=1 DEBUG=1
+./build/debug/gst --config data/all-modules.yaml
+```
 
 ## Current Status
 

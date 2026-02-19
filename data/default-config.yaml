@@ -128,6 +128,17 @@ modules:
     allow_file_transfer: false
     allow_shm_transfer: false
 
+  webview:
+    enabled: false
+    host: "127.0.0.1"         # bind address ("0.0.0.0" for all interfaces)
+    port: 7681                # HTTP port
+    read_only: true            # false allows keyboard input from web clients
+    auth: none                 # "none", "token", or "password"
+    token: ""                  # used when auth: token
+    password: ""               # used when auth: password
+    update_interval: 50        # min ms between WebSocket screen pushes
+    max_clients: 10            # max simultaneous WebSocket connections
+
   mcp:
     enabled: false
     transport: unix-socket   # "unix-socket", "http", or "stdio"

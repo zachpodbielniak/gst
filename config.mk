@@ -9,7 +9,7 @@
 # Version
 VERSION_MAJOR := 0
 VERSION_MINOR := 2
-VERSION_MICRO := 3
+VERSION_MICRO := 4
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
@@ -113,6 +113,14 @@ else
 MCP_AVAILABLE := 0
 endif
 
+# Optional Webview dependencies (HTTP/WebSocket terminal viewer)
+ifeq ($(WEBVIEW),1)
+DEPS_WEBVIEW := libsoup-3.0 json-glib-1.0
+WEBVIEW_AVAILABLE := $(shell $(PKG_CONFIG) --exists $(DEPS_WEBVIEW) 2>/dev/null && echo 1 || echo 0)
+else
+WEBVIEW_AVAILABLE := 0
+endif
+
 # Check for required dependencies
 define check_dep
 $(if $(shell $(PKG_CONFIG) --exists $(1) && echo yes),,$(error Missing dependency: $(1)))
@@ -168,6 +176,12 @@ MCP_CFLAGS := -I$(CURDIR)/deps/mcp-glib/src $(shell $(PKG_CONFIG) --cflags $(DEP
 MCP_LDFLAGS := -L$(CURDIR)/deps/mcp-glib/build -lmcp-glib-1.0 $(shell $(PKG_CONFIG) --libs $(DEPS_MCP) json-glib-1.0 2>/dev/null)
 endif
 
+# Webview module flags (libsoup + json-glib for HTTP/WebSocket)
+ifeq ($(WEBVIEW_AVAILABLE),1)
+WEBVIEW_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(DEPS_WEBVIEW) 2>/dev/null)
+WEBVIEW_LDFLAGS := $(shell $(PKG_CONFIG) --libs $(DEPS_WEBVIEW) 2>/dev/null)
+endif
+
 # Print configuration (for debugging)
 .PHONY: show-config
 show-config:
@@ -189,6 +203,8 @@ show-config:
 	@echo "WAYLAND_AVAILABLE:$(WAYLAND_AVAILABLE)"
 	@echo "MCP:    $(MCP)"
 	@echo "MCP_AVAILABLE:$(MCP_AVAILABLE)"
+	@echo "WEBVIEW:$(WEBVIEW)"
+	@echo "WEBVIEW_AVAILABLE:$(WEBVIEW_AVAILABLE)"
 
 # Fedora package names for dependencies
 FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
@@ -197,6 +213,7 @@ FEDORA_DEPS_REQUIRED := glib2-devel libX11-devel libXft-devel \
 FEDORA_DEPS_GIR := gobject-introspection-devel
 FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-devel
 FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel libpng-devel
+FEDORA_DEPS_WEBVIEW := libsoup3-devel json-glib-devel
 
 # Install build dependencies (Fedora/dnf)
 .PHONY: install-deps

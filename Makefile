@@ -160,6 +160,9 @@ MODULE_DIRS := $(wildcard modules/*)
 ifneq ($(MCP_AVAILABLE),1)
 MODULE_DIRS := $(filter-out modules/mcp,$(MODULE_DIRS))
 endif
+ifneq ($(WEBVIEW_AVAILABLE),1)
+MODULE_DIRS := $(filter-out modules/webview,$(MODULE_DIRS))
+endif
 
 # Object files
 LIB_OBJS := $(patsubst src/%.c,$(OBJDIR)/%.o,$(LIB_SRCS))
@@ -224,7 +227,9 @@ modules: lib $(OUTDIR)/modules
 				CFLAGS="$(MODULE_CFLAGS)" \
 				LDFLAGS="$(MODULE_LDFLAGS)" \
 				MCP_CFLAGS="$(MCP_CFLAGS)" \
-				MCP_LDFLAGS="$(MCP_LDFLAGS)"; \
+				MCP_LDFLAGS="$(MCP_LDFLAGS)" \
+				WEBVIEW_CFLAGS="$(WEBVIEW_CFLAGS)" \
+				WEBVIEW_LDFLAGS="$(WEBVIEW_LDFLAGS)"; \
 		fi \
 	done
 

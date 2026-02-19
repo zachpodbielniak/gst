@@ -1,0 +1,106 @@
+# GST All-Modules Configuration
+#
+# Enables every module with sane test defaults.
+# Use with: gst --config data/all-modules.yaml
+#
+# Or for debug builds:
+#   make MCP=1 WEBVIEW=1 DEBUG=1
+#   ./build/debug/gst --config data/all-modules.yaml
+#
+# IMPORTANT: When adding a new module, add its section here with
+# enabled: true and reasonable test-safe defaults.
+
+modules:
+  scrollback:
+    enabled: true
+    lines: 10000
+    mouse_scroll_lines: 3
+
+  transparency:
+    enabled: true
+    opacity: 0.95
+    focus_opacity: 1.0
+    unfocus_opacity: 0.85
+
+  urlclick:
+    enabled: true
+    opener: xdg-open
+    regex: "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
+    modifiers: Ctrl
+
+  externalpipe:
+    enabled: true
+    command: "cat"
+    key: "Ctrl+Shift+e"
+
+  boxdraw:
+    enabled: true
+    bold_offset: 1
+
+  visualbell:
+    enabled: true
+    duration: 100
+
+  undercurl:
+    enabled: true
+
+  clipboard:
+    enabled: true
+
+  font2:
+    enabled: true
+    fonts: []
+
+  keyboard_select:
+    enabled: true
+    key: Ctrl+Shift+Escape
+    show_crosshair: true
+    highlight_color: "#ff8800"
+    highlight_alpha: 100
+    search_color: "#ffff00"
+    search_alpha: 150
+
+  kittygfx:
+    enabled: true
+    max_total_ram_mb: 256
+    max_single_image_mb: 64
+    max_placements: 4096
+    allow_file_transfer: false
+    allow_shm_transfer: false
+
+  webview:
+    enabled: true
+    host: "127.0.0.1"
+    port: 7681
+    read_only: false
+    auth: none
+    # auth: token
+    # auth: password
+    token: "test-token"
+    password: "test-password"
+    update_interval: 50
+    max_clients: 10
+
+  mcp:
+    enabled: true
+    transport: unix-socket
+    tools:
+      read_screen: true
+      read_scrollback: true
+      search_scrollback: true
+      get_cursor_position: true
+      get_cell_attributes: true
+      get_foreground_process: true
+      get_working_directory: true
+      is_shell_idle: true
+      get_pty_info: true
+      list_detected_urls: true
+      get_config: true
+      list_modules: true
+      set_config: true
+      toggle_module: true
+      get_window_info: true
+      set_window_title: true
+      send_text: true
+      send_keys: true
+      screenshot: true
