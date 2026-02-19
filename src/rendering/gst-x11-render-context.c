@@ -309,6 +309,45 @@ x11_draw_image(
 	g_free(bgra);
 }
 
+/*
+ * x11_draw_glyph_id:
+ *
+ * Draws a glyph by its font-internal glyph index (e.g. from HarfBuzz
+ * shaping output) rather than by Unicode codepoint. Uses XftDrawGlyphs
+ * to render the glyph at the specified pixel position with the current
+ * foreground color.
+ */
+static void
+x11_draw_glyph_id(
+	GstRenderContext *base,
+	guint32           glyph_id,
+	GstFontStyle      style,
+	gint              px,
+	gint              py
+){
+	GstX11RenderContext *ctx;
+	GstFontVariant *fv;
+	XftFont *font;
+	FT_UInt glyph_index;
+
+	ctx = (GstX11RenderContext *)base;
+
+	/* Get the font for the requested style */
+	fv = gst_font_cache_get_font(ctx->font_cache, style);
+	if (fv == NULL || fv->match == NULL) {
+		return;
+	}
+
+	font = fv->match;
+	glyph_index = (FT_UInt)glyph_id;
+
+	/* Use the current foreground color */
+	if (ctx->fg != NULL) {
+		XftDrawGlyphs(ctx->xft_draw, ctx->fg, font,
+			px, py + fv->ascent, &glyph_index, 1);
+	}
+}
+
 /* ===== Static vtable ===== */
 
 static const GstRenderContextOps x11_ops = {
@@ -317,7 +356,8 @@ static const GstRenderContextOps x11_ops = {
 	x11_fill_rect_fg,
 	x11_fill_rect_bg,
 	x11_draw_glyph,
-	x11_draw_image
+	x11_draw_image,
+	x11_draw_glyph_id
 };
 
 /* ===== Public API ===== */

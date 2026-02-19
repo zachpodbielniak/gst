@@ -69,6 +69,7 @@ struct _GstModuleManager
 	gpointer     font_cache;       /* weak ref to font cache (X11 or Cairo) */
 	gpointer     pty;              /* weak ref to GstPty */
 	gpointer     renderer;         /* weak ref to GstRenderer */
+	gpointer     color_scheme;     /* weak ref to GstColorScheme */
 	gint         backend_type;     /* GstBackendType value */
 };
 
@@ -202,6 +203,10 @@ auto_register_hooks(
 	{
 		gst_module_manager_register_hook(self, module,
 			GST_HOOK_ESCAPE_APC, priority);
+		gst_module_manager_register_hook(self, module,
+			GST_HOOK_ESCAPE_OSC, priority);
+		gst_module_manager_register_hook(self, module,
+			GST_HOOK_ESCAPE_DCS, priority);
 	}
 
 	if (g_type_is_a(module_type, GST_TYPE_SELECTION_HANDLER))
@@ -293,6 +298,7 @@ gst_module_manager_init(GstModuleManager *self)
 	self->window = NULL;
 	self->font_cache = NULL;
 	self->renderer = NULL;
+	self->color_scheme = NULL;
 	self->backend_type = 0;
 }
 
@@ -1079,6 +1085,43 @@ gst_module_manager_get_renderer(GstModuleManager *self)
 	return self->renderer;
 }
 
+/* ===== Public API: color scheme accessor ===== */
+
+/**
+ * gst_module_manager_set_color_scheme:
+ * @self: A #GstModuleManager
+ * @color_scheme: (type gpointer): The color scheme instance (weak ref)
+ *
+ * Stores a weak reference to the color scheme for module access.
+ * Used by modules like dynamic_colors (OSC 10/11/12) to modify
+ * palette colors at runtime.
+ */
+void
+gst_module_manager_set_color_scheme(
+	GstModuleManager *self,
+	gpointer          color_scheme
+){
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	self->color_scheme = color_scheme;
+}
+
+/**
+ * gst_module_manager_get_color_scheme:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored color scheme reference.
+ *
+ * Returns: (transfer none) (nullable): The color scheme, or %NULL
+ */
+gpointer
+gst_module_manager_get_color_scheme(GstModuleManager *self)
+{
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), NULL);
+
+	return self->color_scheme;
+}
+
 /* ===== Public API: font cache and backend type accessors ===== */
 
 /**
@@ -1210,14 +1253,15 @@ gst_module_manager_dispatch_glyph_transform(
 /**
  * gst_module_manager_dispatch_escape_string:
  * @self: A #GstModuleManager
- * @str_type: The escape string type character ('_' for APC, 'P' for DCS)
+ * @str_type: The escape string type character ('_' for APC, ']' for OSC, 'P' for DCS)
  * @buf: The raw string buffer
  * @len: Length of the buffer in bytes
  * @terminal: (type gpointer): The #GstTerminal that received the sequence
  *
  * Dispatches a string-type escape sequence to all #GstEscapeHandler
- * modules registered at %GST_HOOK_ESCAPE_APC. Walks in priority order
- * and stops at the first handler that returns %TRUE (consumed).
+ * modules registered at the appropriate hook point based on @str_type.
+ * Walks in priority order and stops at the first handler that returns
+ * %TRUE (consumed).
  *
  * Returns: %TRUE if a module consumed the escape sequence
  */
@@ -1230,10 +1274,25 @@ gst_module_manager_dispatch_escape_string(
 	gpointer          terminal
 ){
 	GList *l;
+	GstHookPoint hook;
 
 	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
 
-	for (l = self->hooks[GST_HOOK_ESCAPE_APC]; l != NULL; l = l->next)
+	/* Select the hook list based on escape string type */
+	switch (str_type) {
+	case ']':
+		hook = GST_HOOK_ESCAPE_OSC;
+		break;
+	case 'P':
+		hook = GST_HOOK_ESCAPE_DCS;
+		break;
+	case '_':
+	default:
+		hook = GST_HOOK_ESCAPE_APC;
+		break;
+	}
+
+	for (l = self->hooks[hook]; l != NULL; l = l->next)
 	{
 		GstHookEntry *entry;
 

@@ -1684,6 +1684,9 @@ term_setmode(
 			case 2004: /* Bracketed paste */
 				gst_terminal_set_mode(term, GST_MODE_BRCKTPASTE, set);
 				break;
+			case 2026: /* Synchronized update */
+				gst_terminal_set_mode(term, GST_MODE_SYNC_UPDATE, set);
+				break;
 			default:
 				break;
 			}
@@ -2065,73 +2068,94 @@ term_strhandle(GstTerminal *term)
 	priv->esc &= ~(GST_ESC_STR_END | GST_ESC_STR);
 
 	/*
-	 * APC sequences must be dispatched with the raw buffer intact.
-	 * term_strparse() replaces ';' with '\0' which corrupts protocols
-	 * like kitty graphics that use ';' as a payload separator.
-	 * Handle APC before parsing to preserve the raw buffer.
+	 * APC and DCS sequences must be dispatched with the raw buffer
+	 * intact. term_strparse() replaces ';' with '\0' which corrupts
+	 * protocols like kitty graphics and sixel that use ';' as a
+	 * payload separator. Handle these before parsing.
 	 */
-	if (priv->str_type == '_') {
+	if (priv->str_type == '_' || priv->str_type == 'P') {
 		if (priv->str_buf != NULL && priv->str_len > 0) {
 			priv->str_buf[priv->str_len] = '\0';
 			g_signal_emit(term, signals[SIGNAL_ESCAPE_STRING], 0,
-				(gchar)'_', priv->str_buf,
+				priv->str_type, priv->str_buf,
 				(gulong)priv->str_len);
 		}
 		return;
 	}
 
-	term_strparse(term);
+	/*
+	 * For OSC sequences, save the raw buffer before term_strparse()
+	 * corrupts semicolons. Modules receive the raw buffer for parsing.
+	 */
+	{
+		g_autofree gchar *raw_buf = NULL;
+		gsize raw_len;
 
-	if (priv->str_nargs == 0) {
-		return;
-	}
+		raw_buf = NULL;
+		raw_len = 0;
+		if (priv->str_type == ']' && priv->str_buf != NULL &&
+		    priv->str_len > 0)
+		{
+			raw_len = priv->str_len;
+			raw_buf = g_strndup(priv->str_buf, raw_len);
+		}
 
-	switch (priv->str_type) {
-	case ']': /* OSC - Operating System Command */
-		par = (gint)strtol(priv->str_args[0], NULL, 10);
-		switch (par) {
-		case 0: /* Set icon and window title */
-			if (priv->str_nargs > 1) {
-				gst_terminal_set_title(term, priv->str_args[1]);
-				gst_terminal_set_icon(term, priv->str_args[1]);
+		term_strparse(term);
+
+		if (priv->str_nargs == 0) {
+			return;
+		}
+
+		switch (priv->str_type) {
+		case ']': /* OSC - Operating System Command */
+			par = (gint)strtol(priv->str_args[0], NULL, 10);
+			switch (par) {
+			case 0: /* Set icon and window title */
+				if (priv->str_nargs > 1) {
+					gst_terminal_set_title(term,
+						priv->str_args[1]);
+					gst_terminal_set_icon(term,
+						priv->str_args[1]);
+				}
+				break;
+			case 1: /* Set icon title */
+				if (priv->str_nargs > 1) {
+					gst_terminal_set_icon(term,
+						priv->str_args[1]);
+				}
+				break;
+			case 2: /* Set window title */
+				if (priv->str_nargs > 1) {
+					gst_terminal_set_title(term,
+						priv->str_args[1]);
+				}
+				break;
+			default:
+				/* Dispatch unhandled OSC to modules */
+				if (raw_buf != NULL) {
+					g_signal_emit(term,
+						signals[SIGNAL_ESCAPE_STRING], 0,
+						(gchar)']', raw_buf,
+						(gulong)raw_len);
+				}
+				break;
 			}
 			break;
-		case 1: /* Set icon title */
-			if (priv->str_nargs > 1) {
-				gst_terminal_set_icon(term, priv->str_args[1]);
+
+		case 'k': /* Old title set */
+			if (priv->str_nargs > 0) {
+				gst_terminal_set_title(term,
+					priv->str_args[0]);
 			}
 			break;
-		case 2: /* Set window title */
-			if (priv->str_nargs > 1) {
-				gst_terminal_set_title(term, priv->str_args[1]);
-			}
+
+		case '^': /* PM */
+			/* Ignored */
 			break;
-		case 4:  /* Set color (index; spec) */
-		case 10: /* Set foreground color */
-		case 11: /* Set background color */
-		case 12: /* Set cursor color */
-		case 52: /* Set clipboard */
-		case 104: /* Reset color */
-			/* TODO: color and clipboard operations */
-			break;
+
 		default:
 			break;
 		}
-		break;
-
-	case 'k': /* Old title set */
-		if (priv->str_nargs > 0) {
-			gst_terminal_set_title(term, priv->str_args[0]);
-		}
-		break;
-
-	case 'P': /* DCS */
-	case '^': /* PM */
-		/* Ignored for now */
-		break;
-
-	default:
-		break;
 	}
 }
 

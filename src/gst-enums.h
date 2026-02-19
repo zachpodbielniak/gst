@@ -192,7 +192,8 @@ typedef enum {
     GST_MODE_HIDE         = 1 << 19,  /* Cursor hidden */
     GST_MODE_FOCUS        = 1 << 20,  /* Focus reporting mode */
     GST_MODE_MOUSE_MANY   = 1 << 21,  /* Highlight mouse tracking */
-    GST_MODE_MOUSE_UTF8   = 1 << 22   /* UTF-8 extended mouse mode */
+    GST_MODE_MOUSE_UTF8   = 1 << 22,  /* UTF-8 extended mouse mode */
+    GST_MODE_SYNC_UPDATE  = 1 << 23   /* Synchronized update (mode 2026) */
 } GstTermMode;
 
 GType gst_term_mode_get_type(void) G_GNUC_CONST;

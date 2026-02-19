@@ -18,9 +18,9 @@ modules:
 
   transparency:
     enabled: true
-    opacity: 0.95
-    focus_opacity: 1.0
-    unfocus_opacity: 0.85
+    opacity: 0.9
+    focus_opacity: 0.9
+    unfocus_opacity: 0.8
 
   urlclick:
     enabled: true
@@ -80,6 +80,64 @@ modules:
     password: "test-password"
     update_interval: 50
     max_clients: 10
+
+  notify:
+    enabled: true
+    show_title: true
+    suppress_focused: true
+    timeout: -1
+    urgency: normal
+
+  dynamic_colors:
+    enabled: true
+    allow_query: true
+    allow_set: true
+
+  osc52:
+    enabled: true
+    allow_read: true
+    allow_write: true
+    max_bytes: 100000
+
+  sync_update:
+    enabled: true
+    timeout: 150
+
+  shell_integration:
+    enabled: true
+    mark_prompts: true
+    show_exit_code: true
+    error_color: "#ef2929"
+
+  hyperlinks:
+    enabled: true
+    opener: xdg-open
+    modifier: Ctrl
+    underline_hover: true
+
+  search:
+    enabled: true
+    highlight_color: "#ffff00"
+    highlight_alpha: 100
+    current_color: "#ff8800"
+    current_alpha: 150
+    match_case: false
+    regex: false
+
+  sixel:
+    enabled: true
+    max_width: 4096
+    max_height: 4096
+    max_colors: 1024
+    max_total_ram_mb: 128
+    max_placements: 256
+
+  ligatures:
+    enabled: true
+    features:
+      - "calt"
+      - "liga"
+    cache_size: 4096
 
   mcp:
     enabled: true

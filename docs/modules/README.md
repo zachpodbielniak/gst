@@ -4,6 +4,8 @@ Modules extend GST's functionality through a plugin system. Each module is a sha
 
 ## Quick Reference
 
+### Core Modules
+
 | Module | Description | Default |
 |--------|-------------|---------|
 | [scrollback](scrollback.md) | Scrollback history with keyboard/mouse navigation | Enabled |
@@ -18,6 +20,30 @@ Modules extend GST's functionality through a plugin system. Each module is a sha
 | [keyboard_select](keyboard-select.md) | Vim-like keyboard text selection | Disabled |
 | [kittygfx](kittygfx.md) | Kitty graphics protocol (inline images) | Disabled |
 | [mcp](mcp.md) | MCP server for AI assistant integration | Disabled |
+
+### Escape Sequence Modules
+
+| Module | Description | Default |
+|--------|-------------|---------|
+| [notify](notify.md) | Desktop notifications via OSC 9/777/99 | Disabled |
+| [dynamic_colors](dynamic-colors.md) | Runtime color palette changes via OSC 10/11/12/4/104 | Enabled |
+| [osc52](osc52.md) | Remote clipboard access via OSC 52 | Disabled |
+| [sync_update](sync-update.md) | Synchronized output (mode 2026) to eliminate flicker | Enabled |
+| [shell_integration](shell-integration.md) | Semantic prompt zones via OSC 133 | Disabled |
+| [hyperlinks](hyperlinks.md) | OSC 8 explicit hyperlinks with click-to-open | Disabled |
+
+### Graphics and Rendering Modules
+
+| Module | Description | Default |
+|--------|-------------|---------|
+| [sixel](sixel.md) | DEC Sixel graphics protocol for inline images | Disabled |
+| [ligatures](ligatures.md) | HarfBuzz font ligature rendering | Disabled |
+
+### Interactive Modules
+
+| Module | Description | Default |
+|--------|-------------|---------|
+| [search](search.md) | Interactive scrollback text search with highlighting | Disabled |
 
 ## Enabling / Disabling Modules
 

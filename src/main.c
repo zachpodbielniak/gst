@@ -351,6 +351,140 @@ static const GstBuiltinModule builtin_modules[] = {
 		"\t *            tools (map of tool_name: true/false)\n"
 		"\t */\n"
 	},
+	{
+		"notify",
+		"Desktop notifications via OSC 9/777/99 escape sequences",
+		"  notify:\n"
+		"    enabled: true\n"
+		"    show_title: true\n"
+		"    urgency: normal\n"
+		"    timeout: -1\n"
+		"    suppress_focused: true\n"
+		"\n",
+		"\t/*\n"
+		"\t * notify: desktop notifications via OSC 9/777/99\n"
+		"\t * YAML keys: show_title, urgency, timeout,\n"
+		"\t *            suppress_focused\n"
+		"\t */\n"
+	},
+	{
+		"dynamic_colors",
+		"Runtime color changes via OSC 10/11/12/4/104",
+		"  dynamic_colors:\n"
+		"    enabled: true\n"
+		"    allow_query: true\n"
+		"    allow_set: true\n"
+		"\n",
+		"\t/*\n"
+		"\t * dynamic_colors: runtime color changes via OSC 10/11/12\n"
+		"\t * YAML keys: allow_query, allow_set\n"
+		"\t */\n"
+	},
+	{
+		"osc52",
+		"Remote clipboard access via OSC 52",
+		"  osc52:\n"
+		"    enabled: true\n"
+		"    allow_read: false\n"
+		"    allow_write: true\n"
+		"    max_bytes: 100000\n"
+		"\n",
+		"\t/*\n"
+		"\t * osc52: remote clipboard access via OSC 52\n"
+		"\t * YAML keys: allow_read, allow_write, max_bytes\n"
+		"\t */\n"
+	},
+	{
+		"sync_update",
+		"Synchronized updates (mode 2026) to eliminate flicker",
+		"  sync_update:\n"
+		"    enabled: true\n"
+		"    timeout: 150\n"
+		"\n",
+		"\t/*\n"
+		"\t * sync_update: synchronized updates (mode 2026)\n"
+		"\t * YAML keys: timeout (ms)\n"
+		"\t */\n"
+	},
+	{
+		"shell_integration",
+		"Semantic zones (OSC 133) for prompt navigation and exit codes",
+		"  shell_integration:\n"
+		"    enabled: true\n"
+		"    mark_prompts: true\n"
+		"    show_exit_code: true\n"
+		"    error_color: \"#ef2929\"\n"
+		"\n",
+		"\t/*\n"
+		"\t * shell_integration: OSC 133 semantic zones\n"
+		"\t * YAML keys: mark_prompts, show_exit_code, error_color\n"
+		"\t */\n"
+	},
+	{
+		"hyperlinks",
+		"OSC 8 explicit hyperlinks with click-to-open",
+		"  hyperlinks:\n"
+		"    enabled: true\n"
+		"    opener: xdg-open\n"
+		"    modifier: Ctrl\n"
+		"    underline_hover: true\n"
+		"\n",
+		"\t/*\n"
+		"\t * hyperlinks: OSC 8 explicit hyperlinks\n"
+		"\t * YAML keys: opener, modifier, underline_hover\n"
+		"\t */\n"
+	},
+	{
+		"search",
+		"Interactive scrollback text search with highlighting",
+		"  search:\n"
+		"    enabled: true\n"
+		"    highlight_color: \"#ffff00\"\n"
+		"    highlight_alpha: 100\n"
+		"    current_color: \"#ff8800\"\n"
+		"    current_alpha: 150\n"
+		"    match_case: false\n"
+		"    regex: false\n"
+		"\n",
+		"\t/*\n"
+		"\t * search: interactive scrollback text search\n"
+		"\t * YAML keys: highlight_color, highlight_alpha,\n"
+		"\t *            current_color, current_alpha,\n"
+		"\t *            match_case, regex\n"
+		"\t */\n"
+	},
+	{
+		"sixel",
+		"DEC Sixel graphics protocol for inline images",
+		"  sixel:\n"
+		"    enabled: true\n"
+		"    max_width: 4096\n"
+		"    max_height: 4096\n"
+		"    max_colors: 1024\n"
+		"    max_total_ram_mb: 128\n"
+		"    max_placements: 256\n"
+		"\n",
+		"\t/*\n"
+		"\t * sixel: DEC Sixel graphics protocol\n"
+		"\t * YAML keys: max_width, max_height, max_colors,\n"
+		"\t *            max_total_ram_mb, max_placements\n"
+		"\t */\n"
+	},
+	{
+		"ligatures",
+		"HarfBuzz font ligature rendering for programming fonts",
+		"  ligatures:\n"
+		"    enabled: true\n"
+		"    features:\n"
+		"      - \"calt\"\n"
+		"      - \"liga\"\n"
+		"    cache_size: 4096\n"
+		"\n",
+		"\t/*\n"
+		"\t * ligatures: HarfBuzz font ligature rendering\n"
+		"\t * YAML keys: features (list), cache_size\n"
+		"\t */\n"
+	},
 	{ NULL, NULL, NULL, NULL }
 };
 

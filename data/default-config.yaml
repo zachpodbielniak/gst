@@ -182,3 +182,64 @@ modules:
 
       # Screenshot capture
       screenshot: false           # captures terminal as base64 PNG image
+
+      # Save screenshot to file
+      save_screenshot: false
+
+  notify:
+    enabled: false
+    show_title: true
+    urgency: normal                # low, normal, critical
+    timeout: -1                    # -1 = system default, else seconds
+    suppress_focused: true         # suppress when window is focused
+
+  dynamic_colors:
+    enabled: true
+    allow_query: true              # respond to OSC 10/11/12 queries
+    allow_set: true                # allow OSC 10/11/12 color changes
+
+  osc52:
+    enabled: false
+    allow_read: false              # allow apps to read clipboard (security risk)
+    allow_write: true              # allow apps to write clipboard
+    max_bytes: 100000              # max decoded payload size
+
+  sync_update:
+    enabled: true
+    timeout: 150                   # max ms to wait for sync end
+
+  shell_integration:
+    enabled: false
+    mark_prompts: true             # render prompt markers in left margin
+    show_exit_code: true           # red marker for non-zero exit codes
+    error_color: "#ef2929"         # color for error indicators
+
+  hyperlinks:
+    enabled: false
+    opener: xdg-open
+    modifier: Ctrl                 # Ctrl, Shift, or Alt
+    underline_hover: true          # underline hovered URI spans
+
+  search:
+    enabled: false
+    highlight_color: "#ffff00"     # match highlight color
+    highlight_alpha: 100           # match highlight opacity (0-255)
+    current_color: "#ff8800"       # current match color
+    current_alpha: 150             # current match opacity (0-255)
+    match_case: false
+    regex: false
+
+  sixel:
+    enabled: false
+    max_width: 4096
+    max_height: 4096
+    max_colors: 1024
+    max_total_ram_mb: 128
+    max_placements: 256
+
+  ligatures:
+    enabled: false
+    features:
+      - "calt"
+      - "liga"
+    cache_size: 4096

@@ -326,6 +326,57 @@ wl_draw_image(
 	g_free(argb_data);
 }
 
+/*
+ * wl_draw_glyph_id:
+ *
+ * Draws a glyph by its font-internal glyph index (e.g. from HarfBuzz
+ * shaping output) rather than by Unicode codepoint. Uses cairo_show_glyphs
+ * to render the glyph at the specified pixel position with the current
+ * foreground color.
+ */
+static void
+wl_draw_glyph_id(
+	GstRenderContext *ctx,
+	guint32           glyph_id,
+	GstFontStyle      style,
+	gint              px,
+	gint              py
+){
+	GstWaylandRenderContext *wctx;
+	cairo_scaled_font_t *scaled_font;
+	gulong dummy_glyph;
+	cairo_glyph_t glyph;
+	gint ascent;
+
+	wctx = (GstWaylandRenderContext *)ctx;
+
+	if (wctx->cr == NULL || wctx->font_cache == NULL) {
+		return;
+	}
+
+	/*
+	 * We need a cairo_scaled_font_t for the requested style.
+	 * Use a dummy lookup with space (U+0020) just to get the font;
+	 * the actual glyph index comes from glyph_id, not from lookup.
+	 */
+	if (!gst_cairo_font_cache_lookup_glyph(wctx->font_cache,
+	    (GstRune)' ', style, &scaled_font, &dummy_glyph)) {
+		return;
+	}
+
+	/* Set font and foreground color */
+	cairo_set_scaled_font(wctx->cr, scaled_font);
+	set_source_from_color(wctx->cr, wctx->fg);
+
+	/* Position the glyph at baseline */
+	ascent = gst_cairo_font_cache_get_ascent(wctx->font_cache);
+	glyph.index = (gulong)glyph_id;
+	glyph.x = (gdouble)px;
+	glyph.y = (gdouble)(py + ascent);
+
+	cairo_show_glyphs(wctx->cr, &glyph, 1);
+}
+
 /* ===== Static vtable ===== */
 
 static const GstRenderContextOps wayland_ops = {
@@ -334,7 +385,8 @@ static const GstRenderContextOps wayland_ops = {
 	wl_fill_rect_fg,
 	wl_fill_rect_bg,
 	wl_draw_glyph,
-	wl_draw_image
+	wl_draw_image,
+	wl_draw_glyph_id
 };
 
 /**

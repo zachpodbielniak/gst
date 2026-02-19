@@ -415,6 +415,31 @@ gpointer
 gst_module_manager_get_renderer(GstModuleManager *self);
 
 /**
+ * gst_module_manager_set_color_scheme:
+ * @self: A #GstModuleManager
+ * @color_scheme: (type gpointer): The color scheme instance (weak ref)
+ *
+ * Stores a weak reference to the color scheme so modules can
+ * modify palette colors at runtime (e.g. OSC 10/11/12).
+ */
+void
+gst_module_manager_set_color_scheme(
+	GstModuleManager *self,
+	gpointer          color_scheme
+);
+
+/**
+ * gst_module_manager_get_color_scheme:
+ * @self: A #GstModuleManager
+ *
+ * Gets the stored color scheme reference.
+ *
+ * Returns: (transfer none) (nullable): The color scheme, or %NULL
+ */
+gpointer
+gst_module_manager_get_color_scheme(GstModuleManager *self);
+
+/**
  * gst_module_manager_set_backend_type:
  * @self: A #GstModuleManager
  * @backend_type: The active rendering backend type

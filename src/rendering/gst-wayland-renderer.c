@@ -851,6 +851,9 @@ wl_renderer_draw_line_impl(
 			gt_ctx.fg = gt_fg_c;
 			gt_ctx.bg = gt_bg_c;
 			gt_ctx.base.glyph_attr = gt_mode;
+			gt_ctx.base.current_line = line;
+			gt_ctx.base.current_col = x;
+			gt_ctx.base.current_cols = x2;
 
 			if (gst_module_manager_dispatch_glyph_transform(
 				mgr, cur.rune, &gt_ctx.base,

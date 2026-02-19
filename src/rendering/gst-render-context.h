@@ -77,6 +77,17 @@ struct _GstRenderContextOps
 	                   gint src_w, gint src_h, gint src_stride,
 	                   gint dst_x, gint dst_y,
 	                   gint dst_w, gint dst_h);
+
+	/* Draw a glyph by its font-internal glyph ID (for HarfBuzz ligatures).
+	 * @glyph_id: font-internal glyph index (from hb_shape output)
+	 * @style: font style variant
+	 * @px: pixel x position (with x_offset applied by caller)
+	 * @py: pixel y position (with y_offset applied by caller)
+	 *
+	 * May be NULL if the backend does not support glyph-ID rendering.
+	 */
+	void (*draw_glyph_id)(GstRenderContext *ctx, guint32 glyph_id,
+	                      GstFontStyle style, gint px, gint py);
 };
 
 /**
@@ -107,6 +118,9 @@ struct _GstRenderContext
 	GstWinMode    win_mode;
 	guint16       glyph_attr;
 	gdouble       opacity;     /* window opacity (0.0-1.0) for bg alpha */
+	gpointer      current_line;  /* pointer to current GstLine being drawn */
+	gint          current_col;   /* column index of glyph being rendered */
+	gint          current_cols;  /* total columns in the terminal */
 };
 
 /* ===== Inline dispatch helpers ===== */
@@ -262,6 +276,32 @@ gst_render_context_draw_image(
 	if (ctx->ops->draw_image != NULL) {
 		ctx->ops->draw_image(ctx, data, src_w, src_h, src_stride,
 			dst_x, dst_y, dst_w, dst_h);
+	}
+}
+
+/**
+ * gst_render_context_draw_glyph_id:
+ * @ctx: render context
+ * @glyph_id: font-internal glyph index (from HarfBuzz shaping)
+ * @style: font style variant
+ * @px: pixel x position
+ * @py: pixel y position
+ *
+ * Draws a glyph by its font-internal glyph ID rather than by Unicode
+ * codepoint. Used by the ligatures module to render shaped output.
+ * Returns silently if the backend does not support glyph-ID rendering
+ * (draw_glyph_id is %NULL).
+ */
+static inline void
+gst_render_context_draw_glyph_id(
+	GstRenderContext *ctx,
+	guint32           glyph_id,
+	GstFontStyle      style,
+	gint              px,
+	gint              py
+){
+	if (ctx->ops->draw_glyph_id != NULL) {
+		ctx->ops->draw_glyph_id(ctx, glyph_id, style, px, py);
 	}
 }
 
