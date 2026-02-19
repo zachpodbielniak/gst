@@ -998,61 +998,15 @@ sixel_configure(
 ){
 	GstSixelModule *self;
 	GstConfig *cfg;
-	YamlMapping *mod_cfg;
 
 	self = GST_SIXEL_MODULE(base);
 	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(cfg, "sixel");
-	if (mod_cfg == NULL) {
-		g_debug("sixel: no config section, using defaults");
-		return;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "max_width")) {
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "max_width");
-		if (val < 1) val = 1;
-		if (val > 65536) val = 65536;
-		self->max_width = (gint)val;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "max_height")) {
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "max_height");
-		if (val < 1) val = 1;
-		if (val > 65536) val = 65536;
-		self->max_height = (gint)val;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "max_colors")) {
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "max_colors");
-		if (val < 2) val = 2;
-		if (val > 65536) val = 65536;
-		self->max_colors = (gint)val;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "max_total_ram_mb")) {
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "max_total_ram_mb");
-		if (val < 1) val = 1;
-		if (val > 4096) val = 4096;
-		self->max_ram_mb = (gint)val;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "max_placements")) {
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "max_placements");
-		if (val < 1) val = 1;
-		if (val > 65536) val = 65536;
-		self->max_placements = (gint)val;
-	}
+	self->max_width = cfg->modules.sixel.max_width;
+	self->max_height = cfg->modules.sixel.max_height;
+	self->max_colors = cfg->modules.sixel.max_colors;
+	self->max_ram_mb = cfg->modules.sixel.max_total_ram_mb;
+	self->max_placements = cfg->modules.sixel.max_placements;
 
 	g_debug("sixel: configured (max_w=%d, max_h=%d, colors=%d, "
 		"ram=%dMB, placements=%d)",

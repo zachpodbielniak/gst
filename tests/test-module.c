@@ -433,7 +433,7 @@ static const gchar *
 test_config_module_get_name(GstModule *module)
 {
 	(void)module;
-	return "test-config";
+	return "scrollback";
 }
 
 static const gchar *
@@ -989,10 +989,10 @@ test_module_manager_enabled_flag(void)
 	const gchar *yaml_data;
 	gboolean ok;
 
-	/* Write a temp YAML config with enabled: false for test-config */
+	/* Write a temp YAML config with enabled: false for scrollback */
 	yaml_data =
 		"modules:\n"
-		"  test-config:\n"
+		"  scrollback:\n"
 		"    enabled: false\n";
 
 	path = g_build_filename(g_get_tmp_dir(), "gst-test-enabled.yaml", NULL);
@@ -1038,8 +1038,8 @@ test_module_manager_enabled_default(void)
 	/* Write a temp YAML config with module section but no enabled key */
 	yaml_data =
 		"modules:\n"
-		"  test-config:\n"
-		"    some_option: 42\n";
+		"  scrollback:\n"
+		"    lines: 5000\n";
 
 	path = g_build_filename(g_get_tmp_dir(), "gst-test-enabled-default.yaml", NULL);
 	ok = g_file_set_contents(path, yaml_data, -1, &error);

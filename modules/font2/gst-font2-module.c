@@ -85,15 +85,15 @@ gst_font2_module_get_description(GstModule *module)
 /*
  * configure:
  *
- * Reads the font list from module config or falls back to
- * the global font.fallback configuration.
+ * Reads the font list from the config struct. If the module-specific
+ * font list is set, uses that; otherwise falls back to the global
+ * font.fallback list from config.
  */
 static void
 gst_font2_module_configure(GstModule *module, gpointer config)
 {
 	GstFont2Module *self;
 	GstConfig *cfg;
-	YamlMapping *mod_cfg;
 
 	self = GST_FONT2_MODULE(module);
 	cfg = (GstConfig *)config;
@@ -103,31 +103,12 @@ gst_font2_module_configure(GstModule *module, gpointer config)
 	self->fonts = NULL;
 
 	/* Try module-specific font list first */
-	mod_cfg = gst_config_get_module_config(cfg, "font2");
-	if (mod_cfg != NULL && yaml_mapping_has_member(mod_cfg, "fonts"))
+	if (cfg->modules.font2.fonts != NULL &&
+	    cfg->modules.font2.fonts[0] != NULL)
 	{
-		YamlSequence *seq;
-		guint len;
-		guint i;
-
-		seq = yaml_mapping_get_sequence_member(mod_cfg, "fonts");
-		if (seq != NULL)
-		{
-			len = yaml_sequence_get_length(seq);
-			if (len > 0)
-			{
-				self->fonts = g_new0(gchar *, len + 1);
-				for (i = 0; i < len; i++)
-				{
-					self->fonts[i] = g_strdup(
-						yaml_sequence_get_string_element(seq, i));
-				}
-				self->fonts[len] = NULL;
-
-				g_debug("font2: configured %u fonts from module config", len);
-				return;
-			}
-		}
+		self->fonts = g_strdupv(cfg->modules.font2.fonts);
+		g_debug("font2: configured fonts from module config");
+		return;
 	}
 
 	/* Fall back to global font.fallback list */
@@ -137,21 +118,8 @@ gst_font2_module_configure(GstModule *module, gpointer config)
 		fallbacks = gst_config_get_font_fallbacks(cfg);
 		if (fallbacks != NULL && fallbacks[0] != NULL)
 		{
-			guint count;
-			guint i;
-
-			for (count = 0; fallbacks[count] != NULL; count++)
-				;
-
-			self->fonts = g_new0(gchar *, count + 1);
-			for (i = 0; i < count; i++)
-			{
-				self->fonts[i] = g_strdup(fallbacks[i]);
-			}
-			self->fonts[count] = NULL;
-
-			g_debug("font2: configured %u fonts from global fallbacks",
-				count);
+			self->fonts = g_strdupv((gchar **)fallbacks);
+			g_debug("font2: configured fonts from global fallbacks");
 		}
 	}
 }

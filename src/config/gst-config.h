@@ -24,6 +24,7 @@
 #include <gio/gio.h>
 #include "../gst-enums.h"
 #include "gst-keybind.h"
+#include "gst-module-configs.h"
 #include <yaml-glib.h>
 
 G_BEGIN_DECLS
@@ -54,6 +55,71 @@ typedef enum {
 #define GST_TYPE_CONFIG (gst_config_get_type())
 
 G_DECLARE_FINAL_TYPE(GstConfig, gst_config, GST, CONFIG, GObject)
+
+/**
+ * GstConfig:
+ *
+ * Terminal configuration object. The struct is public to allow
+ * direct access to module configuration via the `modules` field:
+ *
+ *   GstConfig *cfg = gst_config_get_default();
+ *   cfg->modules.sixel.enabled    = TRUE;
+ *   cfg->modules.sixel.max_width  = 4096;
+ *   cfg->modules.scrollback.lines = 5000;
+ *
+ * Core config fields (terminal, window, font, colors, cursor,
+ * selection, draw) should be accessed via getters/setters.
+ */
+struct _GstConfig
+{
+	GObject parent_instance;
+
+	/* Terminal */
+	gchar *shell;
+	gchar *term_name;
+	guint tabspaces;
+
+	/* Window */
+	gchar *title;
+	guint default_cols;
+	guint default_rows;
+	guint border_px;
+
+	/* Font */
+	gchar *font_primary;
+	gchar **font_fallbacks;  /* NULL-terminated strv */
+
+	/* Colors */
+	guint fg_index;
+	guint bg_index;
+	guint cursor_fg_index;
+	guint cursor_bg_index;
+	gchar *fg_hex;           /* direct "#RRGGBB" override or NULL */
+	gchar *bg_hex;
+	gchar *cursor_fg_hex;
+	gchar *cursor_bg_hex;
+	gchar **palette_hex;     /* NULL-terminated strv of "#RRGGBB" */
+	guint n_palette;
+
+	/* Cursor */
+	GstCursorShape cursor_shape;
+	gboolean cursor_blink;
+	guint blink_rate;
+
+	/* Selection */
+	gchar *word_delimiters;
+
+	/* Draw latency */
+	guint min_latency;
+	guint max_latency;
+
+	/* Module configs — direct struct access */
+	GstModuleConfigs modules;
+
+	/* Key and mouse bindings */
+	GArray *keybinds;     /* GArray of GstKeybind */
+	GArray *mousebinds;   /* GArray of GstMousebind */
+};
 
 GType
 gst_config_get_type(void) G_GNUC_CONST;
@@ -433,137 +499,6 @@ gst_config_get_min_latency(GstConfig *self);
  */
 guint
 gst_config_get_max_latency(GstConfig *self);
-
-/* ===== Module config ===== */
-
-/**
- * gst_config_get_module_config:
- * @self: A #GstConfig
- * @module_name: The name of the module (e.g. "scrollback")
- *
- * Gets the raw YAML mapping for a module's configuration section.
- * Modules can query their own sub-keys from this mapping.
- *
- * Returns: (transfer none) (nullable): The module's #YamlMapping,
- *          or %NULL if no config exists for @module_name
- */
-YamlMapping *
-gst_config_get_module_config(
-	GstConfig   *self,
-	const gchar *module_name
-);
-
-/* ===== Module config setters ===== */
-
-/**
- * gst_config_set_module_config_string:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "scrollback")
- * @key: Configuration key within the module
- * @value: String value to set
- *
- * Sets a string value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_string(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	const gchar *value
-);
-
-/**
- * gst_config_set_module_config_int:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "scrollback")
- * @key: Configuration key within the module
- * @value: Integer value to set
- *
- * Sets an integer value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_int(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	gint64       value
-);
-
-/**
- * gst_config_set_module_config_double:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "transparency")
- * @key: Configuration key within the module
- * @value: Double value to set
- *
- * Sets a double value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_double(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	gdouble      value
-);
-
-/**
- * gst_config_set_module_config_bool:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "visualbell")
- * @key: Configuration key within the module
- * @value: Boolean value to set
- *
- * Sets a boolean value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_bool(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	gboolean     value
-);
-
-/**
- * gst_config_set_module_config_strv:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "font2")
- * @key: Configuration key within the module
- * @strv: (array zero-terminated=1): NULL-terminated array of strings
- *
- * Sets a string array value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_strv(
-	GstConfig          *self,
-	const gchar        *module_name,
-	const gchar        *key,
-	const gchar *const *strv
-);
-
-/**
- * gst_config_set_module_config_sub_bool:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "mcp")
- * @sub_name: Sub-mapping name (e.g. "tools")
- * @key: Configuration key within the sub-mapping
- * @value: Boolean value to set
- *
- * Sets a boolean value in a sub-mapping within a module's configuration.
- * Creates the module mapping and sub-mapping if they do not exist.
- */
-void
-gst_config_set_module_config_sub_bool(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *sub_name,
-	const gchar *key,
-	gboolean     value
-);
 
 /* ===== Key binding getters ===== */
 

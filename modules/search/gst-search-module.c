@@ -778,72 +778,64 @@ static void
 gst_search_module_configure(GstModule *module, gpointer config)
 {
 	GstSearchModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_SEARCH_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "search");
-	if (mod_cfg == NULL) {
-		g_debug("search: no config section, using defaults");
-		return;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "highlight_color")) {
-		const gchar *val;
+	/* Highlight color */
+	if (cfg->modules.search.highlight_color != NULL) {
 		guint8 r;
 		guint8 g;
 		guint8 b;
 
-		val = yaml_mapping_get_string_member(mod_cfg, "highlight_color");
-		if (parse_hex_color(val, &r, &g, &b)) {
+		if (parse_hex_color(cfg->modules.search.highlight_color,
+			&r, &g, &b))
+		{
 			self->hl_r = r;
 			self->hl_g = g;
 			self->hl_b = b;
 		}
 	}
 
-	if (yaml_mapping_has_member(mod_cfg, "highlight_alpha")) {
-		gint64 val;
+	/* Highlight alpha */
+	{
+		gint val;
 
-		val = yaml_mapping_get_int_member(mod_cfg, "highlight_alpha");
+		val = cfg->modules.search.highlight_alpha;
 		if (val < 0) val = 0;
 		if (val > 255) val = 255;
 		self->hl_a = (guint8)val;
 	}
 
-	if (yaml_mapping_has_member(mod_cfg, "current_color")) {
-		const gchar *val;
+	/* Current match color */
+	if (cfg->modules.search.current_color != NULL) {
 		guint8 r;
 		guint8 g;
 		guint8 b;
 
-		val = yaml_mapping_get_string_member(mod_cfg, "current_color");
-		if (parse_hex_color(val, &r, &g, &b)) {
+		if (parse_hex_color(cfg->modules.search.current_color,
+			&r, &g, &b))
+		{
 			self->cur_r = r;
 			self->cur_g = g;
 			self->cur_b = b;
 		}
 	}
 
-	if (yaml_mapping_has_member(mod_cfg, "current_alpha")) {
-		gint64 val;
+	/* Current match alpha */
+	{
+		gint val;
 
-		val = yaml_mapping_get_int_member(mod_cfg, "current_alpha");
+		val = cfg->modules.search.current_alpha;
 		if (val < 0) val = 0;
 		if (val > 255) val = 255;
 		self->cur_a = (guint8)val;
 	}
 
-	if (yaml_mapping_has_member(mod_cfg, "match_case")) {
-		self->match_case = yaml_mapping_get_boolean_member(
-			mod_cfg, "match_case");
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "regex")) {
-		self->use_regex = yaml_mapping_get_boolean_member(
-			mod_cfg, "regex");
-	}
+	/* Boolean flags */
+	self->match_case = cfg->modules.search.match_case;
+	self->use_regex = cfg->modules.search.regex;
 
 	g_debug("search: configured (case=%s, regex=%s, "
 		"hl=#%02x%02x%02x/%d, cur=#%02x%02x%02x/%d)",

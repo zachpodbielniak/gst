@@ -421,32 +421,19 @@ gst_boxdraw_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Reads boxdraw configuration from the YAML config:
+ * Reads boxdraw configuration from the config struct:
  *  - bold_offset: extra pixel offset for bold lines (typically 0 or 1)
  */
 static void
 gst_boxdraw_module_configure(GstModule *module, gpointer config)
 {
 	GstBoxdrawModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_BOXDRAW_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "boxdraw");
-	if (mod_cfg == NULL)
-	{
-		g_debug("boxdraw: no config section, using defaults");
-		return;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "bold_offset"))
-	{
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "bold_offset");
-		self->bold_offset = (gint)val;
-	}
+	self->bold_offset = cfg->modules.boxdraw.bold_offset;
 
 	g_debug("boxdraw: configured (bold_offset=%d)", self->bold_offset);
 }

@@ -20,49 +20,8 @@
 #include <unistd.h>
 
 #include "../../src/config/gst-config.h"
-#include "../../src/module/gst-module-manager.h"
-#include "../../deps/yaml-glib/src/yaml-mapping.h"
-#include "../../deps/yaml-glib/src/yaml-node.h"
 
 G_DEFINE_TYPE(GstMcpModule, gst_mcp_module, GST_TYPE_MODULE)
-
-/* ===== Helper: read a boolean from YAML mapping with default ===== */
-
-static gboolean
-yaml_get_bool(
-	YamlMapping *map,
-	const gchar *key,
-	gboolean     def
-){
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_boolean_member(map, key);
-}
-
-static const gchar *
-yaml_get_string(
-	YamlMapping *map,
-	const gchar *key,
-	const gchar *def
-){
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_string_member(map, key);
-}
-
-static gint64
-yaml_get_int(
-	YamlMapping *map,
-	const gchar *key,
-	gint64       def
-){
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_int_member(map, key);
-}
 
 /* ===== GstModule vfuncs ===== */
 
@@ -93,25 +52,20 @@ gst_mcp_module_configure(
 ){
 	GstMcpModule *self;
 	GstConfig *cfg;
-	YamlMapping *mod_cfg;
-	YamlMapping *tools_cfg;
-	const gchar *transport;
 
 	self = GST_MCP_MODULE(module);
 	cfg = (GstConfig *)config;
-	mod_cfg = gst_config_get_module_config(cfg, "mcp");
 
 	/* Transport settings */
-	transport = yaml_get_string(mod_cfg, "transport", "unix-socket");
 	g_free(self->transport_type);
-	self->transport_type = g_strdup(transport);
+	self->transport_type = g_strdup(cfg->modules.mcp.transport);
 
-	self->http_port = (guint)yaml_get_int(mod_cfg, "port", 8808);
+	self->http_port = (guint)cfg->modules.mcp.port;
 
 	g_free(self->http_host);
-	self->http_host = g_strdup(yaml_get_string(mod_cfg, "host", "127.0.0.1"));
+	self->http_host = g_strdup(cfg->modules.mcp.host);
 
-	/* Socket name: CLI env var overrides YAML config */
+	/* Socket name: CLI env var overrides config struct */
 	g_free(self->socket_name);
 	{
 		const gchar *env_name;
@@ -120,58 +74,42 @@ gst_mcp_module_configure(
 		if (env_name != NULL && env_name[0] != '\0') {
 			self->socket_name = g_strdup(env_name);
 		} else {
-			const gchar *cfg_name;
-
-			cfg_name = yaml_get_string(mod_cfg, "socket_name", NULL);
-			self->socket_name = (cfg_name != NULL) ? g_strdup(cfg_name) : NULL;
-		}
-	}
-
-	/* Per-tool enable flags from tools: sub-mapping */
-	tools_cfg = NULL;
-	if (mod_cfg != NULL && yaml_mapping_has_member(mod_cfg, "tools")) {
-		YamlNode *tools_node;
-
-		tools_node = yaml_mapping_get_member(mod_cfg, "tools");
-		if (tools_node != NULL &&
-			yaml_node_get_node_type(tools_node) == YAML_NODE_MAPPING)
-		{
-			tools_cfg = yaml_node_get_mapping(tools_node);
+			self->socket_name = g_strdup(cfg->modules.mcp.socket_name);
 		}
 	}
 
 	/* Screen reading tools */
-	self->tool_read_screen = yaml_get_bool(tools_cfg, "read_screen", FALSE);
-	self->tool_read_scrollback = yaml_get_bool(tools_cfg, "read_scrollback", FALSE);
-	self->tool_search_scrollback = yaml_get_bool(tools_cfg, "search_scrollback", FALSE);
-	self->tool_get_cursor_position = yaml_get_bool(tools_cfg, "get_cursor_position", FALSE);
-	self->tool_get_cell_attributes = yaml_get_bool(tools_cfg, "get_cell_attributes", FALSE);
+	self->tool_read_screen = cfg->modules.mcp.tools.read_screen;
+	self->tool_read_scrollback = cfg->modules.mcp.tools.read_scrollback;
+	self->tool_search_scrollback = cfg->modules.mcp.tools.search_scrollback;
+	self->tool_get_cursor_position = cfg->modules.mcp.tools.get_cursor_position;
+	self->tool_get_cell_attributes = cfg->modules.mcp.tools.get_cell_attributes;
 
 	/* Process awareness tools */
-	self->tool_get_foreground_process = yaml_get_bool(tools_cfg, "get_foreground_process", FALSE);
-	self->tool_get_working_directory = yaml_get_bool(tools_cfg, "get_working_directory", FALSE);
-	self->tool_is_shell_idle = yaml_get_bool(tools_cfg, "is_shell_idle", FALSE);
-	self->tool_get_pty_info = yaml_get_bool(tools_cfg, "get_pty_info", FALSE);
+	self->tool_get_foreground_process = cfg->modules.mcp.tools.get_foreground_process;
+	self->tool_get_working_directory = cfg->modules.mcp.tools.get_working_directory;
+	self->tool_is_shell_idle = cfg->modules.mcp.tools.is_shell_idle;
+	self->tool_get_pty_info = cfg->modules.mcp.tools.get_pty_info;
 
 	/* URL detection */
-	self->tool_list_detected_urls = yaml_get_bool(tools_cfg, "list_detected_urls", FALSE);
+	self->tool_list_detected_urls = cfg->modules.mcp.tools.list_detected_urls;
 
 	/* Config / module management */
-	self->tool_get_config = yaml_get_bool(tools_cfg, "get_config", FALSE);
-	self->tool_list_modules = yaml_get_bool(tools_cfg, "list_modules", FALSE);
-	self->tool_set_config = yaml_get_bool(tools_cfg, "set_config", FALSE);
-	self->tool_toggle_module = yaml_get_bool(tools_cfg, "toggle_module", FALSE);
+	self->tool_get_config = cfg->modules.mcp.tools.get_config;
+	self->tool_list_modules = cfg->modules.mcp.tools.list_modules;
+	self->tool_set_config = cfg->modules.mcp.tools.set_config;
+	self->tool_toggle_module = cfg->modules.mcp.tools.toggle_module;
 
 	/* Window management */
-	self->tool_get_window_info = yaml_get_bool(tools_cfg, "get_window_info", FALSE);
-	self->tool_set_window_title = yaml_get_bool(tools_cfg, "set_window_title", FALSE);
+	self->tool_get_window_info = cfg->modules.mcp.tools.get_window_info;
+	self->tool_set_window_title = cfg->modules.mcp.tools.set_window_title;
 
 	/* Input injection */
-	self->tool_send_text = yaml_get_bool(tools_cfg, "send_text", FALSE);
-	self->tool_send_keys = yaml_get_bool(tools_cfg, "send_keys", FALSE);
+	self->tool_send_text = cfg->modules.mcp.tools.send_text;
+	self->tool_send_keys = cfg->modules.mcp.tools.send_keys;
 
 	/* Screenshot capture */
-	self->tool_screenshot = yaml_get_bool(tools_cfg, "screenshot", FALSE);
+	self->tool_screenshot = cfg->modules.mcp.tools.screenshot;
 }
 
 /* ===== Server setup (shared across all transport paths) ===== */

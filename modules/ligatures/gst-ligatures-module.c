@@ -697,56 +697,45 @@ static void
 gst_ligatures_module_configure(GstModule *module, gpointer config)
 {
 	GstLigaturesModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_LIGATURES_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "ligatures");
-	if (mod_cfg == NULL) {
-		g_debug("ligatures: no config section, using defaults");
-		return;
-	}
+	/* Parse feature list from strv */
+	if (cfg->modules.ligatures.features != NULL) {
+		guint n;
+		guint i;
 
-	/* Parse feature list */
-	if (yaml_mapping_has_member(mod_cfg, "features")) {
-		YamlSequence *features_seq;
+		n = g_strv_length(cfg->modules.ligatures.features);
 
-		features_seq = yaml_mapping_get_sequence_member(mod_cfg, "features");
-		if (features_seq != NULL) {
-			guint n;
-			guint i;
+		/* Free previous features if any */
+		g_free(self->features);
+		self->features = g_new0(hb_feature_t, n);
+		self->num_features = 0;
 
-			n = yaml_sequence_get_length(features_seq);
+		for (i = 0; i < n; i++) {
+			const gchar *tag_str;
 
-			/* Free previous features if any */
-			g_free(self->features);
-			self->features = g_new0(hb_feature_t, n);
-			self->num_features = 0;
-
-			for (i = 0; i < n; i++) {
-				const gchar *tag_str;
-
-				tag_str = yaml_sequence_get_string_element(features_seq, i);
-				if (tag_str != NULL) {
-					if (hb_feature_from_string(tag_str, -1,
-					    &self->features[self->num_features]))
-					{
-						self->num_features++;
-					} else {
-						g_warning("ligatures: invalid feature tag '%s'",
-							tag_str);
-					}
+			tag_str = cfg->modules.ligatures.features[i];
+			if (tag_str != NULL) {
+				if (hb_feature_from_string(tag_str, -1,
+				    &self->features[self->num_features]))
+				{
+					self->num_features++;
+				} else {
+					g_warning("ligatures: invalid feature tag '%s'",
+						tag_str);
 				}
 			}
 		}
 	}
 
-	/* Parse cache size */
-	if (yaml_mapping_has_member(mod_cfg, "cache_size")) {
-		gint64 val;
+	/* Cache size */
+	{
+		gint val;
 
-		val = yaml_mapping_get_int_member(mod_cfg, "cache_size");
+		val = cfg->modules.ligatures.cache_size;
 		if (val > 0 && val <= 65536) {
 			self->max_cache_size = (gsize)val;
 		}

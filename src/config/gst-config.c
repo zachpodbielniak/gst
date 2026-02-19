@@ -32,58 +32,7 @@
 
 G_DEFINE_QUARK(gst-config-error-quark, gst_config_error)
 
-/* ===== Private struct ===== */
-
-struct _GstConfig
-{
-	GObject parent_instance;
-
-	/* Terminal */
-	gchar *shell;
-	gchar *term_name;
-	guint tabspaces;
-
-	/* Window */
-	gchar *title;
-	guint default_cols;
-	guint default_rows;
-	guint border_px;
-
-	/* Font */
-	gchar *font_primary;
-	gchar **font_fallbacks;  /* NULL-terminated strv */
-
-	/* Colors */
-	guint fg_index;
-	guint bg_index;
-	guint cursor_fg_index;
-	guint cursor_bg_index;
-	gchar *fg_hex;           /* direct "#RRGGBB" override or NULL */
-	gchar *bg_hex;
-	gchar *cursor_fg_hex;
-	gchar *cursor_bg_hex;
-	gchar **palette_hex;     /* NULL-terminated strv of "#RRGGBB" */
-	guint n_palette;
-
-	/* Cursor */
-	GstCursorShape cursor_shape;
-	gboolean cursor_blink;
-	guint blink_rate;
-
-	/* Selection */
-	gchar *word_delimiters;
-
-	/* Draw latency */
-	guint min_latency;
-	guint max_latency;
-
-	/* Module configs — raw YAML mapping keyed by module name */
-	YamlMapping *module_configs;
-
-	/* Key and mouse bindings */
-	GArray *keybinds;     /* GArray of GstKeybind */
-	GArray *mousebinds;   /* GArray of GstMousebind */
-};
+/* struct _GstConfig is defined in gst-config.h */
 
 G_DEFINE_TYPE(GstConfig, gst_config, G_TYPE_OBJECT)
 
@@ -110,7 +59,32 @@ gst_config_dispose(GObject *object)
 	g_clear_pointer(&self->cursor_bg_hex, g_free);
 	g_clear_pointer(&self->palette_hex, g_strfreev);
 	g_clear_pointer(&self->word_delimiters, g_free);
-	g_clear_pointer(&self->module_configs, yaml_mapping_unref);
+
+	/* Free module config string/strv fields */
+	g_clear_pointer(&self->modules.urlclick.opener, g_free);
+	g_clear_pointer(&self->modules.urlclick.regex, g_free);
+	g_clear_pointer(&self->modules.urlclick.modifiers, g_free);
+	g_clear_pointer(&self->modules.externalpipe.command, g_free);
+	g_clear_pointer(&self->modules.externalpipe.key, g_free);
+	g_clear_pointer(&self->modules.font2.fonts, g_strfreev);
+	g_clear_pointer(&self->modules.keyboard_select.key, g_free);
+	g_clear_pointer(&self->modules.keyboard_select.highlight_color, g_free);
+	g_clear_pointer(&self->modules.keyboard_select.search_color, g_free);
+	g_clear_pointer(&self->modules.webview.host, g_free);
+	g_clear_pointer(&self->modules.webview.auth, g_free);
+	g_clear_pointer(&self->modules.webview.token, g_free);
+	g_clear_pointer(&self->modules.webview.password, g_free);
+	g_clear_pointer(&self->modules.mcp.transport, g_free);
+	g_clear_pointer(&self->modules.mcp.socket_name, g_free);
+	g_clear_pointer(&self->modules.mcp.host, g_free);
+	g_clear_pointer(&self->modules.notify.urgency, g_free);
+	g_clear_pointer(&self->modules.shell_integration.error_color, g_free);
+	g_clear_pointer(&self->modules.hyperlinks.opener, g_free);
+	g_clear_pointer(&self->modules.hyperlinks.modifier, g_free);
+	g_clear_pointer(&self->modules.search.highlight_color, g_free);
+	g_clear_pointer(&self->modules.search.current_color, g_free);
+	g_clear_pointer(&self->modules.ligatures.features, g_strfreev);
+
 	g_clear_pointer(&self->keybinds, g_array_unref);
 	g_clear_pointer(&self->mousebinds, g_array_unref);
 
@@ -181,8 +155,141 @@ gst_config_init(GstConfig *self)
 	self->min_latency = 8;
 	self->max_latency = 33;
 
-	/* No module configs yet */
-	self->module_configs = NULL;
+	/* Module config defaults (match data/default-config.yaml) */
+	memset(&self->modules, 0, sizeof(GstModuleConfigs));
+
+	/* scrollback */
+	self->modules.scrollback.enabled = TRUE;
+	self->modules.scrollback.lines = 10000;
+	self->modules.scrollback.mouse_scroll_lines = 3;
+
+	/* transparency */
+	self->modules.transparency.enabled = FALSE;
+	self->modules.transparency.opacity = 0.9;
+	self->modules.transparency.focus_opacity = 1.0;
+	self->modules.transparency.unfocus_opacity = 0.85;
+
+	/* urlclick */
+	self->modules.urlclick.enabled = TRUE;
+	self->modules.urlclick.opener = g_strdup("xdg-open");
+	self->modules.urlclick.regex = g_strdup(
+		"(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+");
+	self->modules.urlclick.modifiers = g_strdup("Ctrl");
+
+	/* externalpipe */
+	self->modules.externalpipe.enabled = FALSE;
+	self->modules.externalpipe.command = g_strdup("");
+	self->modules.externalpipe.key = g_strdup("Ctrl+Shift+e");
+
+	/* boxdraw */
+	self->modules.boxdraw.enabled = TRUE;
+	self->modules.boxdraw.bold_offset = 1;
+
+	/* visualbell */
+	self->modules.visualbell.enabled = FALSE;
+	self->modules.visualbell.duration = 100;
+
+	/* undercurl */
+	self->modules.undercurl.enabled = TRUE;
+
+	/* clipboard */
+	self->modules.clipboard.enabled = TRUE;
+
+	/* font2 */
+	self->modules.font2.enabled = FALSE;
+	self->modules.font2.fonts = NULL;
+
+	/* keyboard_select */
+	self->modules.keyboard_select.enabled = FALSE;
+	self->modules.keyboard_select.key = g_strdup("Ctrl+Shift+Escape");
+	self->modules.keyboard_select.show_crosshair = TRUE;
+	self->modules.keyboard_select.highlight_color = g_strdup("#ff8800");
+	self->modules.keyboard_select.highlight_alpha = 100;
+	self->modules.keyboard_select.search_color = g_strdup("#ffff00");
+	self->modules.keyboard_select.search_alpha = 150;
+
+	/* kittygfx */
+	self->modules.kittygfx.enabled = FALSE;
+	self->modules.kittygfx.max_total_ram_mb = 256;
+	self->modules.kittygfx.max_single_image_mb = 64;
+	self->modules.kittygfx.max_placements = 4096;
+	self->modules.kittygfx.allow_file_transfer = FALSE;
+	self->modules.kittygfx.allow_shm_transfer = FALSE;
+
+	/* webview */
+	self->modules.webview.enabled = FALSE;
+	self->modules.webview.host = g_strdup("127.0.0.1");
+	self->modules.webview.port = 7681;
+	self->modules.webview.read_only = TRUE;
+	self->modules.webview.auth = g_strdup("none");
+	self->modules.webview.token = g_strdup("");
+	self->modules.webview.password = g_strdup("");
+	self->modules.webview.update_interval = 50;
+	self->modules.webview.max_clients = 10;
+
+	/* mcp */
+	self->modules.mcp.enabled = FALSE;
+	self->modules.mcp.transport = g_strdup("unix-socket");
+	self->modules.mcp.socket_name = NULL;
+	self->modules.mcp.port = 8808;
+	self->modules.mcp.host = g_strdup("127.0.0.1");
+	/* mcp tools: all FALSE by default (memset above) */
+
+	/* notify */
+	self->modules.notify.enabled = FALSE;
+	self->modules.notify.show_title = TRUE;
+	self->modules.notify.urgency = g_strdup("normal");
+	self->modules.notify.timeout = -1;
+	self->modules.notify.suppress_focused = TRUE;
+
+	/* dynamic_colors */
+	self->modules.dynamic_colors.enabled = TRUE;
+	self->modules.dynamic_colors.allow_query = TRUE;
+	self->modules.dynamic_colors.allow_set = TRUE;
+
+	/* osc52 */
+	self->modules.osc52.enabled = FALSE;
+	self->modules.osc52.allow_read = FALSE;
+	self->modules.osc52.allow_write = TRUE;
+	self->modules.osc52.max_bytes = 100000;
+
+	/* sync_update */
+	self->modules.sync_update.enabled = TRUE;
+	self->modules.sync_update.timeout = 150;
+
+	/* shell_integration */
+	self->modules.shell_integration.enabled = FALSE;
+	self->modules.shell_integration.mark_prompts = TRUE;
+	self->modules.shell_integration.show_exit_code = TRUE;
+	self->modules.shell_integration.error_color = g_strdup("#ef2929");
+
+	/* hyperlinks */
+	self->modules.hyperlinks.enabled = FALSE;
+	self->modules.hyperlinks.opener = g_strdup("xdg-open");
+	self->modules.hyperlinks.modifier = g_strdup("Ctrl");
+	self->modules.hyperlinks.underline_hover = TRUE;
+
+	/* search */
+	self->modules.search.enabled = FALSE;
+	self->modules.search.highlight_color = g_strdup("#ffff00");
+	self->modules.search.highlight_alpha = 100;
+	self->modules.search.current_color = g_strdup("#ff8800");
+	self->modules.search.current_alpha = 150;
+	self->modules.search.match_case = FALSE;
+	self->modules.search.regex = FALSE;
+
+	/* sixel */
+	self->modules.sixel.enabled = FALSE;
+	self->modules.sixel.max_width = 4096;
+	self->modules.sixel.max_height = 4096;
+	self->modules.sixel.max_colors = 1024;
+	self->modules.sixel.max_total_ram_mb = 128;
+	self->modules.sixel.max_placements = 256;
+
+	/* ligatures */
+	self->modules.ligatures.enabled = FALSE;
+	self->modules.ligatures.features = NULL;
+	self->modules.ligatures.cache_size = 4096;
 
 	/* Default key bindings (match data/default-config.yaml) */
 	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GstKeybind));
@@ -691,10 +798,336 @@ load_draw_section(
 	return TRUE;
 }
 
+/* ===== Per-module YAML loaders ===== */
+
+/*
+ * Helper macros to reduce repetition in module YAML loaders.
+ * Each reads a typed value from a YamlMapping into a struct field.
+ */
+#define LOAD_MOD_BOOL(map, key, field) \
+	do { \
+		if (yaml_mapping_has_member((map), (key))) \
+			(field) = yaml_mapping_get_boolean_member((map), (key)); \
+	} while (0)
+
+#define LOAD_MOD_INT(map, key, field) \
+	do { \
+		if (yaml_mapping_has_member((map), (key))) \
+			(field) = (gint)yaml_mapping_get_int_member((map), (key)); \
+	} while (0)
+
+#define LOAD_MOD_DOUBLE(map, key, field) \
+	do { \
+		if (yaml_mapping_has_member((map), (key))) \
+			(field) = yaml_mapping_get_double_member((map), (key)); \
+	} while (0)
+
+#define LOAD_MOD_STRING(map, key, field) \
+	do { \
+		if (yaml_mapping_has_member((map), (key))) { \
+			const gchar *_v = yaml_mapping_get_string_member((map), (key)); \
+			if (_v != NULL) { \
+				g_free(field); \
+				(field) = g_strdup(_v); \
+			} \
+		} \
+	} while (0)
+
+#define LOAD_MOD_STRV(map, key, field) \
+	do { \
+		if (yaml_mapping_has_member((map), (key))) { \
+			YamlSequence *_seq; \
+			_seq = yaml_mapping_get_sequence_member((map), (key)); \
+			if (_seq != NULL) { \
+				guint _i, _len; \
+				_len = yaml_sequence_get_length(_seq); \
+				g_strfreev(field); \
+				(field) = g_new0(gchar *, _len + 1); \
+				for (_i = 0; _i < _len; _i++) { \
+					const gchar *_s; \
+					_s = yaml_sequence_get_string_element(_seq, _i); \
+					(field)[_i] = g_strdup((_s != NULL) ? _s : ""); \
+				} \
+				(field)[_len] = NULL; \
+			} \
+		} \
+	} while (0)
+
+static void
+load_mod_scrollback(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.scrollback.enabled);
+	LOAD_MOD_INT(mod, "lines", self->modules.scrollback.lines);
+	LOAD_MOD_INT(mod, "mouse_scroll_lines",
+		self->modules.scrollback.mouse_scroll_lines);
+}
+
+static void
+load_mod_transparency(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.transparency.enabled);
+	LOAD_MOD_DOUBLE(mod, "opacity", self->modules.transparency.opacity);
+	LOAD_MOD_DOUBLE(mod, "focus_opacity",
+		self->modules.transparency.focus_opacity);
+	LOAD_MOD_DOUBLE(mod, "unfocus_opacity",
+		self->modules.transparency.unfocus_opacity);
+}
+
+static void
+load_mod_urlclick(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.urlclick.enabled);
+	LOAD_MOD_STRING(mod, "opener", self->modules.urlclick.opener);
+	LOAD_MOD_STRING(mod, "regex", self->modules.urlclick.regex);
+	LOAD_MOD_STRING(mod, "modifiers", self->modules.urlclick.modifiers);
+}
+
+static void
+load_mod_externalpipe(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.externalpipe.enabled);
+	LOAD_MOD_STRING(mod, "command", self->modules.externalpipe.command);
+	LOAD_MOD_STRING(mod, "key", self->modules.externalpipe.key);
+}
+
+static void
+load_mod_boxdraw(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.boxdraw.enabled);
+	LOAD_MOD_INT(mod, "bold_offset", self->modules.boxdraw.bold_offset);
+}
+
+static void
+load_mod_visualbell(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.visualbell.enabled);
+	LOAD_MOD_INT(mod, "duration", self->modules.visualbell.duration);
+}
+
+static void
+load_mod_undercurl(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.undercurl.enabled);
+}
+
+static void
+load_mod_clipboard(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.clipboard.enabled);
+}
+
+static void
+load_mod_font2(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.font2.enabled);
+	LOAD_MOD_STRV(mod, "fonts", self->modules.font2.fonts);
+}
+
+static void
+load_mod_keyboard_select(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.keyboard_select.enabled);
+	LOAD_MOD_STRING(mod, "key", self->modules.keyboard_select.key);
+	LOAD_MOD_BOOL(mod, "show_crosshair",
+		self->modules.keyboard_select.show_crosshair);
+	LOAD_MOD_STRING(mod, "highlight_color",
+		self->modules.keyboard_select.highlight_color);
+	LOAD_MOD_INT(mod, "highlight_alpha",
+		self->modules.keyboard_select.highlight_alpha);
+	LOAD_MOD_STRING(mod, "search_color",
+		self->modules.keyboard_select.search_color);
+	LOAD_MOD_INT(mod, "search_alpha",
+		self->modules.keyboard_select.search_alpha);
+}
+
+static void
+load_mod_kittygfx(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.kittygfx.enabled);
+	LOAD_MOD_INT(mod, "max_total_ram_mb",
+		self->modules.kittygfx.max_total_ram_mb);
+	LOAD_MOD_INT(mod, "max_single_image_mb",
+		self->modules.kittygfx.max_single_image_mb);
+	LOAD_MOD_INT(mod, "max_placements",
+		self->modules.kittygfx.max_placements);
+	LOAD_MOD_BOOL(mod, "allow_file_transfer",
+		self->modules.kittygfx.allow_file_transfer);
+	LOAD_MOD_BOOL(mod, "allow_shm_transfer",
+		self->modules.kittygfx.allow_shm_transfer);
+}
+
+static void
+load_mod_webview(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.webview.enabled);
+	LOAD_MOD_STRING(mod, "host", self->modules.webview.host);
+	LOAD_MOD_INT(mod, "port", self->modules.webview.port);
+	LOAD_MOD_BOOL(mod, "read_only", self->modules.webview.read_only);
+	LOAD_MOD_STRING(mod, "auth", self->modules.webview.auth);
+	LOAD_MOD_STRING(mod, "token", self->modules.webview.token);
+	LOAD_MOD_STRING(mod, "password", self->modules.webview.password);
+	LOAD_MOD_INT(mod, "update_interval",
+		self->modules.webview.update_interval);
+	LOAD_MOD_INT(mod, "max_clients", self->modules.webview.max_clients);
+}
+
+static void
+load_mod_mcp(GstConfig *self, YamlMapping *mod)
+{
+	YamlMapping *tools;
+
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.mcp.enabled);
+	LOAD_MOD_STRING(mod, "transport", self->modules.mcp.transport);
+	LOAD_MOD_STRING(mod, "socket_name", self->modules.mcp.socket_name);
+	LOAD_MOD_INT(mod, "port", self->modules.mcp.port);
+	LOAD_MOD_STRING(mod, "host", self->modules.mcp.host);
+
+	tools = yaml_mapping_get_mapping_member(mod, "tools");
+	if (tools != NULL) {
+		LOAD_MOD_BOOL(tools, "read_screen",
+			self->modules.mcp.tools.read_screen);
+		LOAD_MOD_BOOL(tools, "read_scrollback",
+			self->modules.mcp.tools.read_scrollback);
+		LOAD_MOD_BOOL(tools, "search_scrollback",
+			self->modules.mcp.tools.search_scrollback);
+		LOAD_MOD_BOOL(tools, "get_cursor_position",
+			self->modules.mcp.tools.get_cursor_position);
+		LOAD_MOD_BOOL(tools, "get_cell_attributes",
+			self->modules.mcp.tools.get_cell_attributes);
+		LOAD_MOD_BOOL(tools, "get_foreground_process",
+			self->modules.mcp.tools.get_foreground_process);
+		LOAD_MOD_BOOL(tools, "get_working_directory",
+			self->modules.mcp.tools.get_working_directory);
+		LOAD_MOD_BOOL(tools, "is_shell_idle",
+			self->modules.mcp.tools.is_shell_idle);
+		LOAD_MOD_BOOL(tools, "get_pty_info",
+			self->modules.mcp.tools.get_pty_info);
+		LOAD_MOD_BOOL(tools, "list_detected_urls",
+			self->modules.mcp.tools.list_detected_urls);
+		LOAD_MOD_BOOL(tools, "get_config",
+			self->modules.mcp.tools.get_config);
+		LOAD_MOD_BOOL(tools, "list_modules",
+			self->modules.mcp.tools.list_modules);
+		LOAD_MOD_BOOL(tools, "set_config",
+			self->modules.mcp.tools.set_config);
+		LOAD_MOD_BOOL(tools, "toggle_module",
+			self->modules.mcp.tools.toggle_module);
+		LOAD_MOD_BOOL(tools, "get_window_info",
+			self->modules.mcp.tools.get_window_info);
+		LOAD_MOD_BOOL(tools, "set_window_title",
+			self->modules.mcp.tools.set_window_title);
+		LOAD_MOD_BOOL(tools, "send_text",
+			self->modules.mcp.tools.send_text);
+		LOAD_MOD_BOOL(tools, "send_keys",
+			self->modules.mcp.tools.send_keys);
+		LOAD_MOD_BOOL(tools, "screenshot",
+			self->modules.mcp.tools.screenshot);
+		LOAD_MOD_BOOL(tools, "save_screenshot",
+			self->modules.mcp.tools.save_screenshot);
+	}
+}
+
+static void
+load_mod_notify(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.notify.enabled);
+	LOAD_MOD_BOOL(mod, "show_title", self->modules.notify.show_title);
+	LOAD_MOD_STRING(mod, "urgency", self->modules.notify.urgency);
+	LOAD_MOD_INT(mod, "timeout", self->modules.notify.timeout);
+	LOAD_MOD_BOOL(mod, "suppress_focused",
+		self->modules.notify.suppress_focused);
+}
+
+static void
+load_mod_dynamic_colors(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.dynamic_colors.enabled);
+	LOAD_MOD_BOOL(mod, "allow_query",
+		self->modules.dynamic_colors.allow_query);
+	LOAD_MOD_BOOL(mod, "allow_set",
+		self->modules.dynamic_colors.allow_set);
+}
+
+static void
+load_mod_osc52(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.osc52.enabled);
+	LOAD_MOD_BOOL(mod, "allow_read", self->modules.osc52.allow_read);
+	LOAD_MOD_BOOL(mod, "allow_write", self->modules.osc52.allow_write);
+	LOAD_MOD_INT(mod, "max_bytes", self->modules.osc52.max_bytes);
+}
+
+static void
+load_mod_sync_update(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.sync_update.enabled);
+	LOAD_MOD_INT(mod, "timeout", self->modules.sync_update.timeout);
+}
+
+static void
+load_mod_shell_integration(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled",
+		self->modules.shell_integration.enabled);
+	LOAD_MOD_BOOL(mod, "mark_prompts",
+		self->modules.shell_integration.mark_prompts);
+	LOAD_MOD_BOOL(mod, "show_exit_code",
+		self->modules.shell_integration.show_exit_code);
+	LOAD_MOD_STRING(mod, "error_color",
+		self->modules.shell_integration.error_color);
+}
+
+static void
+load_mod_hyperlinks(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.hyperlinks.enabled);
+	LOAD_MOD_STRING(mod, "opener", self->modules.hyperlinks.opener);
+	LOAD_MOD_STRING(mod, "modifier", self->modules.hyperlinks.modifier);
+	LOAD_MOD_BOOL(mod, "underline_hover",
+		self->modules.hyperlinks.underline_hover);
+}
+
+static void
+load_mod_search(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.search.enabled);
+	LOAD_MOD_STRING(mod, "highlight_color",
+		self->modules.search.highlight_color);
+	LOAD_MOD_INT(mod, "highlight_alpha",
+		self->modules.search.highlight_alpha);
+	LOAD_MOD_STRING(mod, "current_color",
+		self->modules.search.current_color);
+	LOAD_MOD_INT(mod, "current_alpha",
+		self->modules.search.current_alpha);
+	LOAD_MOD_BOOL(mod, "match_case", self->modules.search.match_case);
+	LOAD_MOD_BOOL(mod, "regex", self->modules.search.regex);
+}
+
+static void
+load_mod_sixel(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.sixel.enabled);
+	LOAD_MOD_INT(mod, "max_width", self->modules.sixel.max_width);
+	LOAD_MOD_INT(mod, "max_height", self->modules.sixel.max_height);
+	LOAD_MOD_INT(mod, "max_colors", self->modules.sixel.max_colors);
+	LOAD_MOD_INT(mod, "max_total_ram_mb",
+		self->modules.sixel.max_total_ram_mb);
+	LOAD_MOD_INT(mod, "max_placements",
+		self->modules.sixel.max_placements);
+}
+
+static void
+load_mod_ligatures(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.ligatures.enabled);
+	LOAD_MOD_STRV(mod, "features", self->modules.ligatures.features);
+	LOAD_MOD_INT(mod, "cache_size", self->modules.ligatures.cache_size);
+}
+
 /*
  * load_modules_section:
  *
- * Store the "modules:" mapping as-is for module system to query.
+ * Parse the "modules:" mapping into typed config structs.
  */
 static gboolean
 load_modules_section(
@@ -702,17 +1135,81 @@ load_modules_section(
 	YamlMapping *root,
 	GError     **error
 ){
-	YamlMapping *section;
+	YamlMapping *modules;
+	YamlMapping *mod;
 
 	(void)error;
 
-	section = yaml_mapping_get_mapping_member(root, "modules");
-	if (section == NULL) {
+	modules = yaml_mapping_get_mapping_member(root, "modules");
+	if (modules == NULL) {
 		return TRUE;
 	}
 
-	g_clear_pointer(&self->module_configs, yaml_mapping_unref);
-	self->module_configs = yaml_mapping_ref(section);
+	mod = yaml_mapping_get_mapping_member(modules, "scrollback");
+	if (mod != NULL) load_mod_scrollback(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "transparency");
+	if (mod != NULL) load_mod_transparency(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "urlclick");
+	if (mod != NULL) load_mod_urlclick(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "externalpipe");
+	if (mod != NULL) load_mod_externalpipe(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "boxdraw");
+	if (mod != NULL) load_mod_boxdraw(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "visualbell");
+	if (mod != NULL) load_mod_visualbell(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "undercurl");
+	if (mod != NULL) load_mod_undercurl(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "clipboard");
+	if (mod != NULL) load_mod_clipboard(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "font2");
+	if (mod != NULL) load_mod_font2(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "keyboard_select");
+	if (mod != NULL) load_mod_keyboard_select(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "kittygfx");
+	if (mod != NULL) load_mod_kittygfx(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "webview");
+	if (mod != NULL) load_mod_webview(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "mcp");
+	if (mod != NULL) load_mod_mcp(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "notify");
+	if (mod != NULL) load_mod_notify(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "dynamic_colors");
+	if (mod != NULL) load_mod_dynamic_colors(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "osc52");
+	if (mod != NULL) load_mod_osc52(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "sync_update");
+	if (mod != NULL) load_mod_sync_update(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "shell_integration");
+	if (mod != NULL) load_mod_shell_integration(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "hyperlinks");
+	if (mod != NULL) load_mod_hyperlinks(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "search");
+	if (mod != NULL) load_mod_search(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "sixel");
+	if (mod != NULL) load_mod_sixel(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "ligatures");
+	if (mod != NULL) load_mod_ligatures(self, mod);
 
 	return TRUE;
 }
@@ -1636,252 +2133,6 @@ gst_config_get_max_latency(GstConfig *self)
 	g_return_val_if_fail(GST_IS_CONFIG(self), 33);
 
 	return self->max_latency;
-}
-
-/**
- * gst_config_get_module_config:
- * @self: A #GstConfig
- * @module_name: The name of the module
- *
- * Gets the raw YAML mapping for a module's config section.
- *
- * Returns: (transfer none) (nullable): The module's #YamlMapping,
- *          or %NULL if no config exists
- */
-YamlMapping *
-gst_config_get_module_config(
-	GstConfig   *self,
-	const gchar *module_name
-){
-	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
-	g_return_val_if_fail(module_name != NULL, NULL);
-
-	if (self->module_configs == NULL) {
-		return NULL;
-	}
-
-	if (!yaml_mapping_has_member(self->module_configs, module_name)) {
-		return NULL;
-	}
-
-	return yaml_mapping_get_mapping_member(
-		self->module_configs, module_name);
-}
-
-/* ===== Module config setters ===== */
-
-/*
- * ensure_module_mapping:
- *
- * Lazily creates the top-level module_configs mapping and the
- * per-module sub-mapping. Returns the per-module YamlMapping.
- */
-static YamlMapping *
-ensure_module_mapping(
-	GstConfig   *self,
-	const gchar *module_name
-){
-	YamlMapping *mod_map;
-
-	/* Create the top-level modules mapping if needed */
-	if (self->module_configs == NULL) {
-		self->module_configs = yaml_mapping_new();
-	}
-
-	/* Create the per-module sub-mapping if needed */
-	if (!yaml_mapping_has_member(self->module_configs, module_name)) {
-		mod_map = yaml_mapping_new();
-		yaml_mapping_set_mapping_member(
-			self->module_configs, module_name, mod_map);
-		yaml_mapping_unref(mod_map);
-	}
-
-	return yaml_mapping_get_mapping_member(
-		self->module_configs, module_name);
-}
-
-/**
- * gst_config_set_module_config_string:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "scrollback")
- * @key: Configuration key within the module
- * @value: String value to set
- *
- * Sets a string value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_string(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	const gchar *value
-){
-	YamlMapping *mod_map;
-
-	g_return_if_fail(GST_IS_CONFIG(self));
-	g_return_if_fail(module_name != NULL);
-	g_return_if_fail(key != NULL);
-
-	mod_map = ensure_module_mapping(self, module_name);
-	yaml_mapping_set_string_member(mod_map, key, value);
-}
-
-/**
- * gst_config_set_module_config_int:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "scrollback")
- * @key: Configuration key within the module
- * @value: Integer value to set
- *
- * Sets an integer value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_int(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	gint64       value
-){
-	YamlMapping *mod_map;
-
-	g_return_if_fail(GST_IS_CONFIG(self));
-	g_return_if_fail(module_name != NULL);
-	g_return_if_fail(key != NULL);
-
-	mod_map = ensure_module_mapping(self, module_name);
-	yaml_mapping_set_int_member(mod_map, key, value);
-}
-
-/**
- * gst_config_set_module_config_double:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "transparency")
- * @key: Configuration key within the module
- * @value: Double value to set
- *
- * Sets a double value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_double(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	gdouble      value
-){
-	YamlMapping *mod_map;
-
-	g_return_if_fail(GST_IS_CONFIG(self));
-	g_return_if_fail(module_name != NULL);
-	g_return_if_fail(key != NULL);
-
-	mod_map = ensure_module_mapping(self, module_name);
-	yaml_mapping_set_double_member(mod_map, key, value);
-}
-
-/**
- * gst_config_set_module_config_bool:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "visualbell")
- * @key: Configuration key within the module
- * @value: Boolean value to set
- *
- * Sets a boolean value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_bool(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *key,
-	gboolean     value
-){
-	YamlMapping *mod_map;
-
-	g_return_if_fail(GST_IS_CONFIG(self));
-	g_return_if_fail(module_name != NULL);
-	g_return_if_fail(key != NULL);
-
-	mod_map = ensure_module_mapping(self, module_name);
-	yaml_mapping_set_boolean_member(mod_map, key, value);
-}
-
-/**
- * gst_config_set_module_config_strv:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "font2")
- * @key: Configuration key within the module
- * @strv: (array zero-terminated=1): NULL-terminated array of strings
- *
- * Sets a string array value in a module's configuration section.
- * Creates the module mapping if it does not exist.
- */
-void
-gst_config_set_module_config_strv(
-	GstConfig          *self,
-	const gchar        *module_name,
-	const gchar        *key,
-	const gchar *const *strv
-){
-	YamlMapping *mod_map;
-	YamlSequence *seq;
-	guint i;
-
-	g_return_if_fail(GST_IS_CONFIG(self));
-	g_return_if_fail(module_name != NULL);
-	g_return_if_fail(key != NULL);
-	g_return_if_fail(strv != NULL);
-
-	mod_map = ensure_module_mapping(self, module_name);
-
-	seq = yaml_sequence_new();
-	for (i = 0; strv[i] != NULL; i++) {
-		yaml_sequence_add_string_element(seq, strv[i]);
-	}
-	yaml_mapping_set_sequence_member(mod_map, key, seq);
-	yaml_sequence_unref(seq);
-}
-
-/**
- * gst_config_set_module_config_sub_bool:
- * @self: A #GstConfig
- * @module_name: Module name (e.g. "mcp")
- * @sub_name: Sub-mapping name (e.g. "tools")
- * @key: Configuration key within the sub-mapping
- * @value: Boolean value to set
- *
- * Sets a boolean value in a sub-mapping within a module's configuration.
- * Creates the module mapping and sub-mapping if they do not exist.
- */
-void
-gst_config_set_module_config_sub_bool(
-	GstConfig   *self,
-	const gchar *module_name,
-	const gchar *sub_name,
-	const gchar *key,
-	gboolean     value
-){
-	YamlMapping *mod_map;
-	YamlMapping *sub_map;
-
-	g_return_if_fail(GST_IS_CONFIG(self));
-	g_return_if_fail(module_name != NULL);
-	g_return_if_fail(sub_name != NULL);
-	g_return_if_fail(key != NULL);
-
-	mod_map = ensure_module_mapping(self, module_name);
-
-	/* Create the sub-mapping if needed */
-	if (!yaml_mapping_has_member(mod_map, sub_name)) {
-		sub_map = yaml_mapping_new();
-		yaml_mapping_set_mapping_member(mod_map, sub_name, sub_map);
-		yaml_mapping_unref(sub_map);
-	}
-	sub_map = yaml_mapping_get_mapping_member(mod_map, sub_name);
-
-	yaml_mapping_set_boolean_member(sub_map, key, value);
 }
 
 /* ===== Key binding getters ===== */

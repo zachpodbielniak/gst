@@ -101,36 +101,21 @@ kittygfx_configure(
 ){
 	GstKittygfxModule *self;
 	GstConfig *cfg;
-	YamlMapping *mod_cfg;
 
 	self = GST_KITTYGFX_MODULE(base);
 	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(cfg, "kittygfx");
-	if (mod_cfg == NULL) {
-		return;
-	}
+	self->max_ram_mb = cfg->modules.kittygfx.max_total_ram_mb;
+	self->max_single_mb = cfg->modules.kittygfx.max_single_image_mb;
+	self->max_placements = cfg->modules.kittygfx.max_placements;
+	self->allow_file_transfer = cfg->modules.kittygfx.allow_file_transfer;
+	self->allow_shm_transfer = cfg->modules.kittygfx.allow_shm_transfer;
 
-	if (yaml_mapping_has_member(mod_cfg, "max_total_ram_mb")) {
-		self->max_ram_mb = (gint)yaml_mapping_get_int_member(
-			mod_cfg, "max_total_ram_mb");
-	}
-	if (yaml_mapping_has_member(mod_cfg, "max_single_image_mb")) {
-		self->max_single_mb = (gint)yaml_mapping_get_int_member(
-			mod_cfg, "max_single_image_mb");
-	}
-	if (yaml_mapping_has_member(mod_cfg, "max_placements")) {
-		self->max_placements = (gint)yaml_mapping_get_int_member(
-			mod_cfg, "max_placements");
-	}
-	if (yaml_mapping_has_member(mod_cfg, "allow_file_transfer")) {
-		self->allow_file_transfer = yaml_mapping_get_boolean_member(
-			mod_cfg, "allow_file_transfer");
-	}
-	if (yaml_mapping_has_member(mod_cfg, "allow_shm_transfer")) {
-		self->allow_shm_transfer = yaml_mapping_get_boolean_member(
-			mod_cfg, "allow_shm_transfer");
-	}
+	g_debug("kittygfx: configured (ram=%dMB, single=%dMB, "
+		"placements=%d, file=%d, shm=%d)",
+		self->max_ram_mb, self->max_single_mb,
+		self->max_placements, self->allow_file_transfer,
+		self->allow_shm_transfer);
 }
 
 /*

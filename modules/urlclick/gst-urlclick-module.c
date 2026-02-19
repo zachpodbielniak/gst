@@ -259,7 +259,7 @@ gst_urlclick_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Reads urlclick configuration from the YAML config:
+ * Reads urlclick configuration from the config struct:
  *  - opener: command to open URLs (e.g. "xdg-open")
  *  - regex: URL detection regex pattern (recompiles on change)
  */
@@ -267,54 +267,35 @@ static void
 gst_urlclick_module_configure(GstModule *module, gpointer config)
 {
 	GstUrlclickModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
+	const gchar *regex_str;
 
 	self = GST_URLCLICK_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "urlclick");
-	if (mod_cfg == NULL)
+	g_free(self->opener);
+	self->opener = g_strdup(cfg->modules.urlclick.opener);
+
+	/* Recompile regex if the config provides one */
+	regex_str = cfg->modules.urlclick.regex;
+	if (regex_str != NULL && regex_str[0] != '\0')
 	{
-		g_debug("urlclick: no config section, using defaults");
-		return;
-	}
+		GRegex *new_regex;
+		GError *error = NULL;
 
-	if (yaml_mapping_has_member(mod_cfg, "opener"))
-	{
-		const gchar *val;
-
-		val = yaml_mapping_get_string_member(mod_cfg, "opener");
-		if (val != NULL && val[0] != '\0')
+		new_regex = g_regex_new(regex_str,
+			G_REGEX_CASELESS | G_REGEX_OPTIMIZE,
+			0, &error);
+		if (new_regex != NULL)
 		{
-			g_free(self->opener);
-			self->opener = g_strdup(val);
+			g_clear_pointer(&self->url_regex, g_regex_unref);
+			self->url_regex = new_regex;
 		}
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "regex"))
-	{
-		const gchar *val;
-
-		val = yaml_mapping_get_string_member(mod_cfg, "regex");
-		if (val != NULL && val[0] != '\0')
+		else
 		{
-			GRegex *new_regex;
-			GError *error = NULL;
-
-			new_regex = g_regex_new(val,
-				G_REGEX_CASELESS | G_REGEX_OPTIMIZE,
-				0, &error);
-			if (new_regex != NULL)
-			{
-				g_clear_pointer(&self->url_regex, g_regex_unref);
-				self->url_regex = new_regex;
-			}
-			else
-			{
-				g_warning("urlclick: invalid regex '%s': %s",
-					val, error->message);
-				g_error_free(error);
-			}
+			g_warning("urlclick: invalid regex '%s': %s",
+				regex_str, error->message);
+			g_error_free(error);
 		}
 	}
 

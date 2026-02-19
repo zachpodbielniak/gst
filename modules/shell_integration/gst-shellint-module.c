@@ -119,36 +119,6 @@ G_DEFINE_TYPE_WITH_CODE(GstShellintModule, gst_shellint_module,
 	G_IMPLEMENT_INTERFACE(GST_TYPE_RENDER_OVERLAY,
 		gst_shellint_module_render_overlay_init))
 
-/* ===== YAML config helpers ===== */
-
-/*
- * cfg_get_bool:
- *
- * Reads a boolean from a YAML mapping with a default fallback.
- */
-static gboolean
-cfg_get_bool(YamlMapping *map, const gchar *key, gboolean def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_boolean_member(map, key);
-}
-
-/*
- * cfg_get_string:
- *
- * Reads a string from a YAML mapping with a default fallback.
- */
-static const gchar *
-cfg_get_string(YamlMapping *map, const gchar *key, const gchar *def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_string_member(map, key);
-}
-
 /* ===== Color parsing ===== */
 
 /*
@@ -815,34 +785,26 @@ static void
 gst_shellint_module_configure(GstModule *module, gpointer config)
 {
 	GstShellintModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_SHELLINT_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "shell_integration");
-	if (mod_cfg == NULL) {
-		g_debug("shell_integration: no config section, "
-			"using defaults");
-		return;
-	}
-
-	self->mark_prompts = cfg_get_bool(mod_cfg,
-		"mark_prompts", DEFAULT_MARK_PROMPTS);
-	self->show_exit_code = cfg_get_bool(mod_cfg,
-		"show_exit_code", DEFAULT_SHOW_EXIT_CODE);
+	self->mark_prompts = cfg->modules.shell_integration.mark_prompts;
+	self->show_exit_code = cfg->modules.shell_integration.show_exit_code;
 
 	/* Parse error_color if provided */
 	{
 		const gchar *color_str;
 
-		color_str = cfg_get_string(mod_cfg,
-			"error_color", "#ef2929");
-		if (!parse_hex_color(color_str,
+		color_str = cfg->modules.shell_integration.error_color;
+		if (color_str == NULL ||
+		    !parse_hex_color(color_str,
 			&self->error_r, &self->error_g, &self->error_b))
 		{
 			g_warning("shell_integration: invalid error_color "
-				"'%s', using default", color_str);
+				"'%s', using default",
+				color_str != NULL ? color_str : "(null)");
 			self->error_r = DEFAULT_ERROR_R;
 			self->error_g = DEFAULT_ERROR_G;
 			self->error_b = DEFAULT_ERROR_B;

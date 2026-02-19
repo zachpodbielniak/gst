@@ -38,48 +38,6 @@ G_DEFINE_TYPE_WITH_CODE(GstOsc52Module, gst_osc52_module,
 	G_IMPLEMENT_INTERFACE(GST_TYPE_ESCAPE_HANDLER,
 		gst_osc52_module_escape_handler_init))
 
-/* ===== YAML config helpers ===== */
-
-/*
- * yaml_get_bool:
- * @map: a #YamlMapping to query
- * @key: the member name to look up
- * @def: default value if @key is not present
- *
- * Convenience wrapper to get a boolean from a #YamlMapping
- * with a fallback default value.
- *
- * Returns: the boolean value, or @def if not found
- */
-static gboolean
-yaml_get_bool(YamlMapping *map, const gchar *key, gboolean def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_boolean_member(map, key);
-}
-
-/*
- * yaml_get_int:
- * @map: a #YamlMapping to query
- * @key: the member name to look up
- * @def: default value if @key is not present
- *
- * Convenience wrapper to get an integer from a #YamlMapping
- * with a fallback default value.
- *
- * Returns: the integer value, or @def if not found
- */
-static gint
-yaml_get_int(YamlMapping *map, const gchar *key, gint def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return (gint)yaml_mapping_get_int_member(map, key);
-}
-
 /* ===== GstModule vfuncs ===== */
 
 static const gchar *
@@ -100,22 +58,14 @@ static void
 gst_osc52_module_configure(GstModule *module, gpointer config)
 {
 	GstOsc52Module *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_OSC52_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "osc52");
-	if (mod_cfg == NULL) {
-		return;
-	}
-
-	self->allow_read = yaml_get_bool(
-		mod_cfg, "allow_read", FALSE);
-	self->allow_write = yaml_get_bool(
-		mod_cfg, "allow_write", TRUE);
-	self->max_bytes = (gsize)yaml_get_int(
-		mod_cfg, "max_bytes", 100000);
+	self->allow_read = cfg->modules.osc52.allow_read;
+	self->allow_write = cfg->modules.osc52.allow_write;
+	self->max_bytes = (gsize)cfg->modules.osc52.max_bytes;
 
 	g_debug("osc52: configured (read=%d, write=%d, max=%zu)",
 		self->allow_read, self->allow_write, self->max_bytes);

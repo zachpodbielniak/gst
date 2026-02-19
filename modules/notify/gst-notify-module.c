@@ -36,35 +36,6 @@ G_DEFINE_TYPE_WITH_CODE(GstNotifyModule, gst_notify_module,
 	G_IMPLEMENT_INTERFACE(GST_TYPE_ESCAPE_HANDLER,
 		gst_notify_module_escape_handler_init))
 
-/* ===== YAML config helpers ===== */
-
-static gboolean
-yaml_get_bool(YamlMapping *map, const gchar *key, gboolean def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_boolean_member(map, key);
-}
-
-static const gchar *
-yaml_get_string(YamlMapping *map, const gchar *key, const gchar *def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_string_member(map, key);
-}
-
-static gint
-yaml_get_int(YamlMapping *map, const gchar *key, gint def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return (gint)yaml_mapping_get_int_member(map, key);
-}
-
 /* ===== Internal helpers ===== */
 
 /*
@@ -150,26 +121,17 @@ static void
 gst_notify_module_configure(GstModule *module, gpointer config)
 {
 	GstNotifyModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_NOTIFY_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "notify");
-	if (mod_cfg == NULL) {
-		return;
-	}
-
-	self->show_title = yaml_get_bool(
-		mod_cfg, "show_title", TRUE);
-	self->suppress_focused = yaml_get_bool(
-		mod_cfg, "suppress_focused", TRUE);
-	self->timeout_secs = yaml_get_int(
-		mod_cfg, "timeout", -1);
+	self->show_title = cfg->modules.notify.show_title;
+	self->suppress_focused = cfg->modules.notify.suppress_focused;
+	self->timeout_secs = cfg->modules.notify.timeout;
 
 	g_free(self->urgency);
-	self->urgency = g_strdup(yaml_get_string(
-		mod_cfg, "urgency", "normal"));
+	self->urgency = g_strdup(cfg->modules.notify.urgency);
 
 	g_debug("notify: configured (urgency=%s, suppress_focused=%d)",
 		self->urgency, self->suppress_focused);

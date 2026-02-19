@@ -1412,17 +1412,66 @@ gst_module_manager_activate_all(GstModuleManager *self)
 		/* Check if module is disabled by config */
 		if (self->config != NULL)
 		{
-			YamlMapping *mod_cfg;
+			GstConfig *cfg;
+			const gchar *name;
+			gboolean enabled;
 
-			mod_cfg = gst_config_get_module_config(
-				(GstConfig *)self->config,
-				gst_module_get_name(module));
-			if (mod_cfg != NULL &&
-				yaml_mapping_has_member(mod_cfg, "enabled") &&
-				!yaml_mapping_get_boolean_member(mod_cfg, "enabled"))
+			cfg = (GstConfig *)self->config;
+			name = gst_module_get_name(module);
+			enabled = TRUE;
+
+			/*
+			 * Map module name to its enabled flag.
+			 * Unknown modules default to enabled.
+			 */
+			if (g_strcmp0(name, "scrollback") == 0)
+				enabled = cfg->modules.scrollback.enabled;
+			else if (g_strcmp0(name, "transparency") == 0)
+				enabled = cfg->modules.transparency.enabled;
+			else if (g_strcmp0(name, "urlclick") == 0)
+				enabled = cfg->modules.urlclick.enabled;
+			else if (g_strcmp0(name, "externalpipe") == 0)
+				enabled = cfg->modules.externalpipe.enabled;
+			else if (g_strcmp0(name, "boxdraw") == 0)
+				enabled = cfg->modules.boxdraw.enabled;
+			else if (g_strcmp0(name, "visualbell") == 0)
+				enabled = cfg->modules.visualbell.enabled;
+			else if (g_strcmp0(name, "undercurl") == 0)
+				enabled = cfg->modules.undercurl.enabled;
+			else if (g_strcmp0(name, "clipboard") == 0)
+				enabled = cfg->modules.clipboard.enabled;
+			else if (g_strcmp0(name, "font2") == 0)
+				enabled = cfg->modules.font2.enabled;
+			else if (g_strcmp0(name, "keyboard_select") == 0)
+				enabled = cfg->modules.keyboard_select.enabled;
+			else if (g_strcmp0(name, "kittygfx") == 0)
+				enabled = cfg->modules.kittygfx.enabled;
+			else if (g_strcmp0(name, "webview") == 0)
+				enabled = cfg->modules.webview.enabled;
+			else if (g_strcmp0(name, "mcp") == 0)
+				enabled = cfg->modules.mcp.enabled;
+			else if (g_strcmp0(name, "notify") == 0)
+				enabled = cfg->modules.notify.enabled;
+			else if (g_strcmp0(name, "dynamic_colors") == 0)
+				enabled = cfg->modules.dynamic_colors.enabled;
+			else if (g_strcmp0(name, "osc52") == 0)
+				enabled = cfg->modules.osc52.enabled;
+			else if (g_strcmp0(name, "sync_update") == 0)
+				enabled = cfg->modules.sync_update.enabled;
+			else if (g_strcmp0(name, "shell_integration") == 0)
+				enabled = cfg->modules.shell_integration.enabled;
+			else if (g_strcmp0(name, "hyperlinks") == 0)
+				enabled = cfg->modules.hyperlinks.enabled;
+			else if (g_strcmp0(name, "search") == 0)
+				enabled = cfg->modules.search.enabled;
+			else if (g_strcmp0(name, "sixel") == 0)
+				enabled = cfg->modules.sixel.enabled;
+			else if (g_strcmp0(name, "ligatures") == 0)
+				enabled = cfg->modules.ligatures.enabled;
+
+			if (!enabled)
 			{
-				g_debug("Module '%s' disabled by config",
-					gst_module_get_name(module));
+				g_debug("Module '%s' disabled by config", name);
 				continue;
 			}
 		}

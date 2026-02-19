@@ -273,36 +273,19 @@ gst_syncupdate_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Reads sync update configuration from the YAML config:
- *  - timeout: safety timeout in milliseconds (clamped to 10-5000)
+ * Reads sync update configuration from the config struct:
+ *  - timeout: safety timeout in milliseconds
  */
 static void
 gst_syncupdate_module_configure(GstModule *module, gpointer config)
 {
 	GstSyncupdateModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_SYNCUPDATE_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "sync_update");
-	if (mod_cfg == NULL) {
-		g_debug("sync_update: no config section, using defaults");
-		return;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "timeout")) {
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "timeout");
-		if (val < GST_SYNCUPDATE_MIN_TIMEOUT) {
-			val = GST_SYNCUPDATE_MIN_TIMEOUT;
-		}
-		if (val > GST_SYNCUPDATE_MAX_TIMEOUT) {
-			val = GST_SYNCUPDATE_MAX_TIMEOUT;
-		}
-		self->timeout_ms = (guint)val;
-	}
+	self->timeout_ms = (guint)cfg->modules.sync_update.timeout;
 
 	g_debug("sync_update: configured (timeout=%u ms)", self->timeout_ms);
 }

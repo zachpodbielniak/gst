@@ -784,72 +784,54 @@ static void
 gst_hyperlinks_module_configure(GstModule *module, gpointer config)
 {
 	GstHyperlinksModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_HYPERLINKS_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "hyperlinks");
-	if (mod_cfg == NULL)
+	/* Opener command */
+	if (cfg->modules.hyperlinks.opener != NULL &&
+	    cfg->modules.hyperlinks.opener[0] != '\0')
 	{
-		g_debug("hyperlinks: no config section, using defaults");
-		return;
+		g_free(self->opener);
+		self->opener = g_strdup(cfg->modules.hyperlinks.opener);
 	}
 
-	if (yaml_mapping_has_member(mod_cfg, "opener"))
-	{
-		const gchar *val;
-
-		val = yaml_mapping_get_string_member(mod_cfg, "opener");
-		if (val != NULL && val[0] != '\0')
-		{
-			g_free(self->opener);
-			self->opener = g_strdup(val);
-		}
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "modifier"))
+	/* Modifier key */
+	if (cfg->modules.hyperlinks.modifier != NULL)
 	{
 		const gchar *val;
 
-		val = yaml_mapping_get_string_member(mod_cfg, "modifier");
-		if (val != NULL)
+		val = cfg->modules.hyperlinks.modifier;
+
+		/*
+		 * Map modifier name to X11 mask value.
+		 * ControlMask = 1<<2 = 4, ShiftMask = 1<<0 = 1,
+		 * Mod1Mask (Alt) = 1<<3 = 8.
+		 */
+		if (g_ascii_strcasecmp(val, "Ctrl") == 0 ||
+		    g_ascii_strcasecmp(val, "Control") == 0)
 		{
-			/*
-			 * Map modifier name to X11 mask value.
-			 * ControlMask = 1<<2 = 4, ShiftMask = 1<<0 = 1,
-			 * Mod1Mask (Alt) = 1<<3 = 8.
-			 */
-			if (g_ascii_strcasecmp(val, "Ctrl") == 0 ||
-			    g_ascii_strcasecmp(val, "Control") == 0)
-			{
-				self->modifier_mask = ControlMask;
-			}
-			else if (g_ascii_strcasecmp(val, "Shift") == 0)
-			{
-				self->modifier_mask = ShiftMask;
-			}
-			else if (g_ascii_strcasecmp(val, "Alt") == 0 ||
-			         g_ascii_strcasecmp(val, "Mod1") == 0)
-			{
-				self->modifier_mask = Mod1Mask;
-			}
-			else
-			{
-				g_warning("hyperlinks: unknown modifier '%s', "
-					"using Ctrl", val);
-			}
+			self->modifier_mask = ControlMask;
+		}
+		else if (g_ascii_strcasecmp(val, "Shift") == 0)
+		{
+			self->modifier_mask = ShiftMask;
+		}
+		else if (g_ascii_strcasecmp(val, "Alt") == 0 ||
+		         g_ascii_strcasecmp(val, "Mod1") == 0)
+		{
+			self->modifier_mask = Mod1Mask;
+		}
+		else
+		{
+			g_warning("hyperlinks: unknown modifier '%s', "
+				"using Ctrl", val);
 		}
 	}
 
-	if (yaml_mapping_has_member(mod_cfg, "underline_hover"))
-	{
-		gboolean val;
-
-		val = yaml_mapping_get_boolean_member(mod_cfg,
-			"underline_hover");
-		self->underline_hover = val;
-	}
+	/* Underline hover */
+	self->underline_hover = cfg->modules.hyperlinks.underline_hover;
 
 	g_debug("hyperlinks: configured (opener=%s, modifier=0x%x, "
 		"underline_hover=%d)",

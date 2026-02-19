@@ -18,48 +18,8 @@
 #include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
 #include "../../src/module/gst-module-manager.h"
-#include "../../deps/yaml-glib/src/yaml-mapping.h"
-#include "../../deps/yaml-glib/src/yaml-node.h"
 
 G_DEFINE_TYPE(GstWebviewModule, gst_webview_module, GST_TYPE_MODULE)
-
-/* ===== YAML config helpers (same pattern as MCP module) ===== */
-
-static gboolean
-yaml_get_bool(
-	YamlMapping *map,
-	const gchar *key,
-	gboolean     def
-){
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_boolean_member(map, key);
-}
-
-static const gchar *
-yaml_get_string(
-	YamlMapping *map,
-	const gchar *key,
-	const gchar *def
-){
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_string_member(map, key);
-}
-
-static gint64
-yaml_get_int(
-	YamlMapping *map,
-	const gchar *key,
-	gint64       def
-){
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_int_member(map, key);
-}
 
 /* ===== GstModule vfuncs ===== */
 
@@ -90,33 +50,31 @@ gst_webview_module_configure(
 ){
 	GstWebviewModule *self;
 	GstConfig *cfg;
-	YamlMapping *mod_cfg;
 
 	self = GST_WEBVIEW_MODULE(module);
 	cfg = (GstConfig *)config;
-	mod_cfg = gst_config_get_module_config(cfg, "webview");
 
 	/* Host and port */
 	g_free(self->host);
-	self->host = g_strdup(yaml_get_string(mod_cfg, "host", "127.0.0.1"));
-	self->port = (guint)yaml_get_int(mod_cfg, "port", 7681);
+	self->host = g_strdup(cfg->modules.webview.host);
+	self->port = (guint)cfg->modules.webview.port;
 
 	/* Access mode */
-	self->read_only = yaml_get_bool(mod_cfg, "read_only", TRUE);
+	self->read_only = cfg->modules.webview.read_only;
 
 	/* Authentication */
 	g_free(self->auth_mode);
-	self->auth_mode = g_strdup(yaml_get_string(mod_cfg, "auth", "none"));
+	self->auth_mode = g_strdup(cfg->modules.webview.auth);
 
 	g_free(self->auth_token);
-	self->auth_token = g_strdup(yaml_get_string(mod_cfg, "token", ""));
+	self->auth_token = g_strdup(cfg->modules.webview.token);
 
 	g_free(self->auth_password);
-	self->auth_password = g_strdup(yaml_get_string(mod_cfg, "password", ""));
+	self->auth_password = g_strdup(cfg->modules.webview.password);
 
 	/* Throttling and limits */
-	self->update_interval = (guint)yaml_get_int(mod_cfg, "update_interval", 50);
-	self->max_clients = (guint)yaml_get_int(mod_cfg, "max_clients", 10);
+	self->update_interval = (guint)cfg->modules.webview.update_interval;
+	self->max_clients = (guint)cfg->modules.webview.max_clients;
 
 	/* Clamp values to sane ranges */
 	if (self->update_interval < 16) {

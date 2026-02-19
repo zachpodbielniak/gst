@@ -48,23 +48,6 @@ G_DEFINE_TYPE_WITH_CODE(GstDyncolorsModule, gst_dyncolors_module,
 	G_IMPLEMENT_INTERFACE(GST_TYPE_ESCAPE_HANDLER,
 		gst_dyncolors_module_escape_handler_init))
 
-/* ===== YAML config helpers ===== */
-
-/*
- * yaml_get_bool:
- *
- * Reads a boolean value from a YamlMapping, returning @def
- * if the mapping is NULL or the key does not exist.
- */
-static gboolean
-yaml_get_bool(YamlMapping *map, const gchar *key, gboolean def)
-{
-	if (map == NULL || !yaml_mapping_has_member(map, key)) {
-		return def;
-	}
-	return yaml_mapping_get_boolean_member(map, key);
-}
-
 /* ===== Color parsing ===== */
 
 /*
@@ -225,20 +208,13 @@ static void
 gst_dyncolors_module_configure(GstModule *module, gpointer config)
 {
 	GstDyncolorsModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_DYNCOLORS_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "dynamic_colors");
-	if (mod_cfg == NULL) {
-		return;
-	}
-
-	self->allow_query = yaml_get_bool(
-		mod_cfg, "allow_query", TRUE);
-	self->allow_set = yaml_get_bool(
-		mod_cfg, "allow_set", TRUE);
+	self->allow_query = cfg->modules.dynamic_colors.allow_query;
+	self->allow_set = cfg->modules.dynamic_colors.allow_set;
 
 	g_debug("dynamic_colors: configured (query=%d, set=%d)",
 		self->allow_query, self->allow_set);

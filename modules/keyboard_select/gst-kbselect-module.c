@@ -1507,57 +1507,39 @@ static void
 gst_kbselect_module_configure(GstModule *module, gpointer config)
 {
 	GstKbselectModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_KBSELECT_MODULE(module);
-
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "keyboard_select");
-	if (mod_cfg == NULL)
-	{
-		return;
-	}
+	cfg = (GstConfig *)config;
 
 	/* Parse trigger key */
-	if (yaml_mapping_has_member(mod_cfg, "key"))
+	if (cfg->modules.keyboard_select.key != NULL)
 	{
-		const gchar *keystr;
-
-		keystr = yaml_mapping_get_string_member(mod_cfg, "key");
-		if (keystr != NULL)
-		{
-			parse_trigger_key(keystr,
-				&self->trigger_keysym,
-				&self->trigger_mods);
-			g_debug("keyboard_select: trigger key set to '%s'",
-				keystr);
-		}
+		parse_trigger_key(cfg->modules.keyboard_select.key,
+			&self->trigger_keysym,
+			&self->trigger_mods);
+		g_debug("keyboard_select: trigger key set to '%s'",
+			cfg->modules.keyboard_select.key);
 	}
 
 	/* Crosshair */
-	if (yaml_mapping_has_member(mod_cfg, "show_crosshair"))
-	{
-		self->show_crosshair = yaml_mapping_get_boolean_member(
-			mod_cfg, "show_crosshair");
-	}
+	self->show_crosshair = cfg->modules.keyboard_select.show_crosshair;
 
 	/* Highlight alpha */
-	if (yaml_mapping_has_member(mod_cfg, "highlight_alpha"))
 	{
-		gint64 val;
+		gint val;
 
-		val = yaml_mapping_get_int_member(mod_cfg, "highlight_alpha");
+		val = cfg->modules.keyboard_select.highlight_alpha;
 		if (val < 0) val = 0;
 		if (val > 255) val = 255;
 		self->highlight_alpha = (guint8)val;
 	}
 
 	/* Search alpha */
-	if (yaml_mapping_has_member(mod_cfg, "search_alpha"))
 	{
-		gint64 val;
+		gint val;
 
-		val = yaml_mapping_get_int_member(mod_cfg, "search_alpha");
+		val = cfg->modules.keyboard_select.search_alpha;
 		if (val < 0) val = 0;
 		if (val > 255) val = 255;
 		self->search_alpha = (guint8)val;

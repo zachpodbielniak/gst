@@ -255,36 +255,20 @@ gst_externalpipe_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Reads externalpipe configuration from the YAML config:
+ * Reads externalpipe configuration from the config struct:
  *  - command: the shell command to pipe terminal content to
  */
 static void
 gst_externalpipe_module_configure(GstModule *module, gpointer config)
 {
 	GstExternalpipeModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_EXTERNALPIPE_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "externalpipe");
-	if (mod_cfg == NULL)
-	{
-		g_debug("externalpipe: no config section, using defaults");
-		return;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "command"))
-	{
-		const gchar *val;
-
-		val = yaml_mapping_get_string_member(mod_cfg, "command");
-		if (val != NULL)
-		{
-			g_free(self->command);
-			self->command = g_strdup(val);
-		}
-	}
+	g_free(self->command);
+	self->command = g_strdup(cfg->modules.externalpipe.command);
 
 	g_debug("externalpipe: configured (command=%s)", self->command);
 }

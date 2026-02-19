@@ -156,62 +156,23 @@ gst_transparency_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Reads transparency configuration from the YAML config:
- *  - opacity: static opacity value (clamped to 0.0-1.0)
- *  - focus_opacity: opacity when window is focused (clamped to 0.0-1.0)
- *  - unfocus_opacity: opacity when window loses focus (clamped to 0.0-1.0)
+ * Reads transparency configuration from the config struct:
+ *  - opacity: static opacity value (0.0-1.0)
+ *  - focus_opacity: opacity when window is focused (0.0-1.0)
+ *  - unfocus_opacity: opacity when window loses focus (0.0-1.0)
  */
 static void
 gst_transparency_module_configure(GstModule *module, gpointer config)
 {
 	GstTransparencyModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_TRANSPARENCY_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "transparency");
-	if (mod_cfg == NULL)
-	{
-		g_debug("transparency: no config section, using defaults");
-		return;
-	}
-
-	/*
-	 * Read base opacity first — it becomes the default for both
-	 * focus_opacity and unfocus_opacity unless they're overridden.
-	 */
-	if (yaml_mapping_has_member(mod_cfg, "opacity"))
-	{
-		gdouble val;
-
-		val = yaml_mapping_get_double_member(mod_cfg, "opacity");
-		if (val < 0.0) val = 0.0;
-		if (val > 1.0) val = 1.0;
-		self->opacity = val;
-		self->focus_opacity = val;
-		self->unfocus_opacity = val;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "focus_opacity"))
-	{
-		gdouble val;
-
-		val = yaml_mapping_get_double_member(mod_cfg, "focus_opacity");
-		if (val < 0.0) val = 0.0;
-		if (val > 1.0) val = 1.0;
-		self->focus_opacity = val;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "unfocus_opacity"))
-	{
-		gdouble val;
-
-		val = yaml_mapping_get_double_member(mod_cfg, "unfocus_opacity");
-		if (val < 0.0) val = 0.0;
-		if (val > 1.0) val = 1.0;
-		self->unfocus_opacity = val;
-	}
+	self->opacity = cfg->modules.transparency.opacity;
+	self->focus_opacity = cfg->modules.transparency.focus_opacity;
+	self->unfocus_opacity = cfg->modules.transparency.unfocus_opacity;
 
 	g_debug("transparency: configured (opacity=%.2f, focus=%.2f, unfocus=%.2f)",
 		self->opacity, self->focus_opacity, self->unfocus_opacity);

@@ -80,7 +80,10 @@ test_config_defaults(void)
 	g_assert_cmpuint(gst_config_get_max_latency(config), ==, 33);
 
 	/* Module config defaults */
-	g_assert_null(gst_config_get_module_config(config, "scrollback"));
+	g_assert_true(config->modules.scrollback.enabled);
+	g_assert_cmpint(config->modules.scrollback.lines, ==, 10000);
+	g_assert_false(config->modules.transparency.enabled);
+	g_assert_false(config->modules.sixel.enabled);
 }
 
 /* ===== Test: Load terminal section ===== */
@@ -469,9 +472,9 @@ test_config_load_full(void)
 		GST_CURSOR_SHAPE_BLOCK);
 	g_assert_false(gst_config_get_cursor_blink(config));
 
-	/* Module config */
-	g_assert_nonnull(gst_config_get_module_config(config, "scrollback"));
-	g_assert_null(gst_config_get_module_config(config, "nonexistent"));
+	/* Module config (direct struct access) */
+	g_assert_true(config->modules.scrollback.enabled);
+	g_assert_cmpint(config->modules.scrollback.lines, ==, 10000);
 
 	g_unlink(path);
 }
@@ -589,7 +592,7 @@ test_color_scheme_defaults(void)
 	g_assert_cmphex(gst_color_scheme_get_color(scheme, 15), ==, 0xFFFFFFFF);
 }
 
-/* ===== Test: Module config access ===== */
+/* ===== Test: Module config access (direct struct) ===== */
 
 static void
 test_config_module_config(void)
@@ -597,7 +600,6 @@ test_config_module_config(void)
 	g_autoptr(GstConfig) config = NULL;
 	g_autofree gchar *path = NULL;
 	GError *error = NULL;
-	YamlMapping *scrollback;
 
 	path = write_temp_yaml(
 		"modules:\n"
@@ -613,15 +615,17 @@ test_config_module_config(void)
 	g_assert_true(gst_config_load_from_path(config, path, &error));
 	g_assert_no_error(error);
 
-	scrollback = gst_config_get_module_config(config, "scrollback");
-	g_assert_nonnull(scrollback);
+	/* Scrollback: enabled + lines overridden from YAML */
+	g_assert_true(config->modules.scrollback.enabled);
+	g_assert_cmpint(config->modules.scrollback.lines, ==, 5000);
 
-	g_assert_true(yaml_mapping_get_boolean_member(scrollback, "enabled"));
-	g_assert_cmpint(yaml_mapping_get_int_member(scrollback, "lines"),
-		==, 5000);
+	/* Transparency: disabled, opacity overridden */
+	g_assert_false(config->modules.transparency.enabled);
+	g_assert_cmpfloat_with_epsilon(
+		config->modules.transparency.opacity, 0.95, 0.001);
 
-	g_assert_nonnull(gst_config_get_module_config(config, "transparency"));
-	g_assert_null(gst_config_get_module_config(config, "nonexistent"));
+	/* Default field not in YAML keeps its init value */
+	g_assert_cmpint(config->modules.scrollback.mouse_scroll_lines, ==, 3);
 
 	g_unlink(path);
 }

@@ -92,34 +92,19 @@ gst_visualbell_module_deactivate(GstModule *module)
 /*
  * configure:
  *
- * Reads visual bell configuration from the YAML config:
- *  - duration: flash duration in milliseconds (clamped to 10-5000)
+ * Reads visual bell configuration from the config struct:
+ *  - duration: flash duration in milliseconds
  */
 static void
 gst_visualbell_module_configure(GstModule *module, gpointer config)
 {
 	GstVisualbellModule *self;
-	YamlMapping *mod_cfg;
+	GstConfig *cfg;
 
 	self = GST_VISUALBELL_MODULE(module);
+	cfg = (GstConfig *)config;
 
-	mod_cfg = gst_config_get_module_config(
-		(GstConfig *)config, "visualbell");
-	if (mod_cfg == NULL)
-	{
-		g_debug("visualbell: no config section, using defaults");
-		return;
-	}
-
-	if (yaml_mapping_has_member(mod_cfg, "duration"))
-	{
-		gint64 val;
-
-		val = yaml_mapping_get_int_member(mod_cfg, "duration");
-		if (val < 10) val = 10;
-		if (val > 5000) val = 5000;
-		self->flash_duration_ms = (guint)val;
-	}
+	self->flash_duration_ms = (guint)cfg->modules.visualbell.duration;
 
 	g_debug("visualbell: configured (duration=%u ms)",
 		self->flash_duration_ms);
