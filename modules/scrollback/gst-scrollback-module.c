@@ -214,10 +214,63 @@ gst_scrollback_module_handle_key_event(
 	return TRUE;
 }
 
+/*
+ * handle_mouse_event:
+ *
+ * Handles mouse wheel scrollback navigation:
+ *  Button4 (scroll up):   scroll up by scroll_lines
+ *  Button5 (scroll down): scroll down by scroll_lines
+ */
+static gboolean
+gst_scrollback_module_handle_mouse_event(
+	GstInputHandler *handler,
+	guint            button,
+	guint            state,
+	gint             col,
+	gint             row
+){
+	GstScrollbackModule *self;
+	gint old_offset;
+
+	(void)state;
+	(void)col;
+	(void)row;
+
+	self = GST_SCROLLBACK_MODULE(handler);
+	old_offset = self->scroll_offset;
+
+	switch (button) {
+	case 4: /* scroll up */
+		self->scroll_offset += self->scroll_lines;
+		break;
+	case 5: /* scroll down */
+		self->scroll_offset -= self->scroll_lines;
+		break;
+	default:
+		return FALSE;
+	}
+
+	/* Clamp scroll offset */
+	if (self->scroll_offset < 0) {
+		self->scroll_offset = 0;
+	}
+	if (self->scroll_offset > self->count) {
+		self->scroll_offset = self->count;
+	}
+
+	/* If offset changed, trigger redraw */
+	if (self->scroll_offset != old_offset) {
+		mark_all_dirty();
+	}
+
+	return TRUE;
+}
+
 static void
 gst_scrollback_module_input_init(GstInputHandlerInterface *iface)
 {
 	iface->handle_key_event = gst_scrollback_module_handle_key_event;
+	iface->handle_mouse_event = gst_scrollback_module_handle_mouse_event;
 }
 
 /* ===== GstRenderOverlay interface ===== */
@@ -264,8 +317,15 @@ gst_scrollback_module_render(
 	/* Clear the drawable with background color (index 257 = default bg) */
 	gst_render_context_fill_rect(ctx, 0, 0, width, height, 257);
 
-	/* Render scrollback lines */
-	for (y = 0; y < rows; y++) {
+	/*
+	 * The viewport is split into two regions:
+	 *  - Top: scrollback history lines (rows 0 .. scroll_offset-1)
+	 *  - Bottom: live terminal lines pushed down (rows scroll_offset .. rows-1)
+	 *    These show live terminal rows 0 .. (rows - scroll_offset - 1).
+	 */
+
+	/* Render scrollback lines in the top region */
+	for (y = 0; y < self->scroll_offset && y < rows; y++) {
 		gint ring_idx;
 		ScrollLine *sl;
 		gint x;
@@ -273,17 +333,10 @@ gst_scrollback_module_render(
 
 		/*
 		 * Map visible row y to ring buffer index.
-		 * Row 0 = oldest visible, row (rows-1) = newest visible.
-		 * The line at head-scroll_offset+y wraps around.
+		 * Row 0 = oldest visible, row (scroll_offset-1) = most recent.
 		 */
 		ring_idx = (self->head - self->scroll_offset + y + self->capacity)
 			% self->capacity;
-
-		/* Check if this index is valid (within stored lines) */
-		if (y >= (gint)self->scroll_offset) {
-			/* This row is in the live terminal area, skip overlay */
-			break;
-		}
 
 		sl = &self->lines[ring_idx];
 		if (sl->glyphs == NULL) {
@@ -299,6 +352,49 @@ gst_scrollback_module_render(
 
 			g = &sl->glyphs[x];
 			if (g->rune == 0) {
+				continue;
+			}
+
+			if (g->attr & GST_GLYPH_ATTR_WDUMMY) {
+				continue;
+			}
+
+			pixel_x = ctx->borderpx + x * ctx->cw;
+
+			/* Draw background */
+			gst_render_context_fill_rect(ctx,
+				pixel_x, pixel_y,
+				ctx->cw, ctx->ch, g->bg);
+
+			/* Draw glyph via abstract dispatch */
+			gst_render_context_draw_glyph(ctx,
+				g->rune, GST_FONT_STYLE_NORMAL,
+				pixel_x, pixel_y,
+				g->fg, g->bg, g->attr);
+		}
+	}
+
+	/* Render live terminal lines in the bottom region */
+	for (y = self->scroll_offset; y < rows; y++) {
+		GstLine *line;
+		gint term_row;
+		gint x;
+		gint pixel_y;
+
+		term_row = y - self->scroll_offset;
+		line = gst_terminal_get_line(term, term_row);
+		if (line == NULL) {
+			continue;
+		}
+
+		pixel_y = ctx->borderpx + y * ctx->ch;
+
+		for (x = 0; x < cols; x++) {
+			GstGlyph *g;
+			gint pixel_x;
+
+			g = gst_line_get_glyph(line, x);
+			if (g == NULL || g->rune == 0) {
 				continue;
 			}
 

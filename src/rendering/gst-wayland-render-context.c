@@ -29,10 +29,30 @@ set_source_from_color(cairo_t *cr, GstColor color)
 }
 
 /*
+ * set_source_with_opacity:
+ * @cr: cairo context
+ * @color: GstColor RGBA value
+ * @opacity: window opacity (0.0-1.0)
+ *
+ * Sets the cairo source color from a GstColor with opacity as alpha.
+ * Used for background fills to respect window transparency.
+ */
+static void
+set_source_with_opacity(cairo_t *cr, GstColor color, gdouble opacity)
+{
+	cairo_set_source_rgba(cr,
+		(gdouble)GST_COLOR_R(color) / 255.0,
+		(gdouble)GST_COLOR_G(color) / 255.0,
+		(gdouble)GST_COLOR_B(color) / 255.0,
+		opacity);
+}
+
+/*
  * wl_fill_rect:
  *
  * Fills a rectangle with a palette color index.
- * Looks up the color from the palette array.
+ * Looks up the color from the palette array and applies
+ * the render context's opacity as alpha for transparency.
  */
 static void
 wl_fill_rect(
@@ -52,14 +72,17 @@ wl_fill_rect(
 	}
 
 	if (color_idx < wctx->num_colors) {
-		set_source_from_color(wctx->cr, wctx->colors[color_idx]);
+		set_source_with_opacity(wctx->cr, wctx->colors[color_idx],
+			ctx->opacity);
 	} else {
-		cairo_set_source_rgb(wctx->cr, 0, 0, 0);
+		cairo_set_source_rgba(wctx->cr, 0, 0, 0, ctx->opacity);
 	}
 
+	cairo_set_operator(wctx->cr, CAIRO_OPERATOR_SOURCE);
 	cairo_rectangle(wctx->cr, (gdouble)x, (gdouble)y,
 		(gdouble)w, (gdouble)h);
 	cairo_fill(wctx->cr);
+	cairo_set_operator(wctx->cr, CAIRO_OPERATOR_OVER);
 }
 
 /*
@@ -129,6 +152,7 @@ wl_fill_rect_fg(
  * wl_fill_rect_bg:
  *
  * Fills a rectangle with the current per-glyph background color.
+ * Applies window opacity as alpha for transparency support.
  */
 static void
 wl_fill_rect_bg(
@@ -146,10 +170,12 @@ wl_fill_rect_bg(
 		return;
 	}
 
-	set_source_from_color(wctx->cr, wctx->bg);
+	set_source_with_opacity(wctx->cr, wctx->bg, ctx->opacity);
+	cairo_set_operator(wctx->cr, CAIRO_OPERATOR_SOURCE);
 	cairo_rectangle(wctx->cr, (gdouble)x, (gdouble)y,
 		(gdouble)w, (gdouble)h);
 	cairo_fill(wctx->cr);
+	cairo_set_operator(wctx->cr, CAIRO_OPERATOR_OVER);
 }
 
 /*

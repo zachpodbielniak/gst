@@ -19,6 +19,7 @@
 
 #include <libsoup/soup.h>
 #include <json-glib/json-glib.h>
+#include <gmodule.h>
 #include <string.h>
 
 #include "../../src/core/gst-terminal.h"
@@ -57,6 +58,14 @@ struct _GstWebviewServer
 	guint32             *row_hashes;
 	gint                 prev_rows;
 	gint                 prev_cols;
+
+	/* Scrollback integration (resolved lazily at runtime) */
+	gboolean             sb_resolved;
+	gpointer             sb_module;       /* GstScrollbackModule*, or NULL */
+	gint (*sb_get_offset)(gpointer);
+	void (*sb_set_offset)(gpointer, gint);
+	gint (*sb_get_count)(gpointer);
+	const GstGlyph * (*sb_get_line_glyphs)(gpointer, gint, gint *);
 };
 
 /* ===== Forward declarations ===== */
@@ -152,6 +161,24 @@ glyph_to_webview_attrs(GstGlyphAttr attr);
 static gboolean
 on_update_tick(gpointer user_data);
 
+static void
+ensure_scrollback_api(GstWebviewServer *srv);
+
+static guint32
+hash_glyph_array(
+	const GstGlyph *glyphs,
+	gint            cols
+);
+
+static void
+serialize_glyph_row_json(
+	GString        *json,
+	const GstGlyph *glyphs,
+	gint            glyph_cols,
+	gint            term_cols,
+	GstColorScheme *scheme
+);
+
 /* ===== Key name to escape sequence (duplicated from gst-mcp-tools-input.c) ===== */
 
 /*
@@ -239,6 +266,64 @@ key_name_to_escape(const gchar *key_name, gchar *buf, gsize buflen)
 	return NULL;
 }
 
+/* ===== Scrollback module integration (runtime-resolved) ===== */
+
+/*
+ * ensure_scrollback_api:
+ *
+ * Lazily resolves the scrollback module's public API functions
+ * from the process global symbol table. This avoids a compile-time
+ * dependency between the webview and scrollback modules.
+ * Both .so files are loaded with RTLD_GLOBAL by GModule, so
+ * symbols are visible across modules at runtime.
+ */
+static void
+ensure_scrollback_api(GstWebviewServer *srv)
+{
+	GstModuleManager *mgr;
+	GstModule *mod;
+	GModule *global;
+
+	if (srv->sb_resolved) {
+		return;
+	}
+	srv->sb_resolved = TRUE;
+	srv->sb_module = NULL;
+
+	mgr = gst_module_manager_get_default();
+	mod = gst_module_manager_get_module(mgr, "scrollback");
+	if (mod == NULL || !gst_module_is_active(mod)) {
+		g_debug("webview: scrollback module not available");
+		return;
+	}
+
+	/* Resolve function pointers from the process global symbol table */
+	global = g_module_open(NULL, 0);
+	if (global == NULL) {
+		return;
+	}
+
+	if (!g_module_symbol(global, "gst_scrollback_module_get_scroll_offset",
+			(gpointer *)&srv->sb_get_offset) ||
+		!g_module_symbol(global, "gst_scrollback_module_set_scroll_offset",
+			(gpointer *)&srv->sb_set_offset) ||
+		!g_module_symbol(global, "gst_scrollback_module_get_count",
+			(gpointer *)&srv->sb_get_count) ||
+		!g_module_symbol(global, "gst_scrollback_module_get_line_glyphs",
+			(gpointer *)&srv->sb_get_line_glyphs))
+	{
+		srv->sb_get_offset = NULL;
+		srv->sb_set_offset = NULL;
+		srv->sb_get_count = NULL;
+		srv->sb_get_line_glyphs = NULL;
+		g_debug("webview: scrollback API symbols not found");
+		return;
+	}
+
+	srv->sb_module = mod;
+	g_debug("webview: scrollback API resolved");
+}
+
 /* ===== Public API ===== */
 
 GstWebviewServer *
@@ -254,6 +339,12 @@ gst_webview_server_new(GstWebviewModule *module)
 	srv->row_hashes = NULL;
 	srv->prev_rows = 0;
 	srv->prev_cols = 0;
+	srv->sb_resolved = FALSE;
+	srv->sb_module = NULL;
+	srv->sb_get_offset = NULL;
+	srv->sb_set_offset = NULL;
+	srv->sb_get_count = NULL;
+	srv->sb_get_line_glyphs = NULL;
 
 	/* Load color scheme from config */
 	{
@@ -607,7 +698,8 @@ on_ws_opened(
  * on_ws_message:
  *
  * Handles incoming WebSocket messages from clients.
- * In read-write mode, processes key events and text input.
+ * Scroll events are processed in both read-only and read-write modes.
+ * Key and text events are only processed in read-write mode.
  */
 static void
 on_ws_message(
@@ -627,11 +719,6 @@ on_ws_message(
 	(void)conn;
 
 	srv = (GstWebviewServer *)user_data;
-
-	/* Read-only mode: silently discard all input */
-	if (srv->module->read_only) {
-		return;
-	}
 
 	if (type != SOUP_WEBSOCKET_DATA_TEXT) {
 		return;
@@ -658,6 +745,49 @@ on_ws_message(
 	}
 
 	msg_type = json_object_get_string_member(obj, "type");
+
+	/* Scroll events work in both read-only and read-write modes */
+	if (g_strcmp0(msg_type, "scroll") == 0) {
+		gint delta;
+		gint current;
+		gchar *full;
+
+		if (!json_object_has_member(obj, "delta")) {
+			g_object_unref(parser);
+			return;
+		}
+
+		ensure_scrollback_api(srv);
+		if (srv->sb_module == NULL) {
+			g_object_unref(parser);
+			return;
+		}
+
+		delta = (gint)json_object_get_int_member(obj, "delta");
+		current = srv->sb_get_offset(srv->sb_module);
+		srv->sb_set_offset(srv->sb_module, current + delta);
+
+		/* Force immediate full screen update with reset hashes */
+		g_free(srv->row_hashes);
+		srv->row_hashes = NULL;
+		srv->prev_rows = 0;
+		srv->prev_cols = 0;
+
+		full = serialize_full_screen(srv);
+		if (full != NULL) {
+			broadcast_text(srv, full);
+			g_free(full);
+		}
+
+		g_object_unref(parser);
+		return;
+	}
+
+	/* Read-only mode: silently discard all other input */
+	if (srv->module->read_only) {
+		g_object_unref(parser);
+		return;
+	}
 
 	if (g_strcmp0(msg_type, "key") == 0) {
 		/* Key event: convert name to escape sequence and write to PTY */
@@ -1008,6 +1138,36 @@ hash_row(
 	return hash;
 }
 
+/*
+ * hash_glyph_array:
+ *
+ * Computes an FNV-1a hash of a glyph array (for scrollback rows).
+ * Used for diff detection when viewing scrollback content.
+ */
+static guint32
+hash_glyph_array(
+	const GstGlyph *glyphs,
+	gint            cols
+){
+	guint32 hash;
+	gint x;
+
+	hash = 2166136261u; /* FNV-1a offset basis */
+
+	if (glyphs == NULL) {
+		return hash;
+	}
+
+	for (x = 0; x < cols; x++) {
+		hash ^= glyphs[x].rune;  hash *= 16777619u;
+		hash ^= glyphs[x].fg;    hash *= 16777619u;
+		hash ^= glyphs[x].bg;    hash *= 16777619u;
+		hash ^= glyphs[x].attr;  hash *= 16777619u;
+	}
+
+	return hash;
+}
+
 /* ===== JSON Serialization ===== */
 
 /*
@@ -1142,6 +1302,49 @@ serialize_row_json(
 }
 
 /*
+ * serialize_glyph_row_json:
+ *
+ * Serializes a row from a glyph array (used for scrollback lines).
+ * Pads to term_cols with empty cells if the glyph array is shorter.
+ */
+static void
+serialize_glyph_row_json(
+	GString        *json,
+	const GstGlyph *glyphs,
+	gint            glyph_cols,
+	gint            term_cols,
+	GstColorScheme *scheme
+){
+	gint x;
+	gboolean first;
+	GstGlyph empty = {' ', GST_GLYPH_ATTR_NONE,
+		GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG};
+
+	g_string_append_c(json, '[');
+	first = TRUE;
+
+	for (x = 0; x < term_cols; x++) {
+		const GstGlyph *glyph;
+
+		if (glyphs != NULL && x < glyph_cols) {
+			glyph = &glyphs[x];
+		} else {
+			glyph = &empty;
+		}
+
+		/* Skip dummy cells (second cell of wide characters) */
+		if (glyph->attr & GST_GLYPH_ATTR_WDUMMY) {
+			continue;
+		}
+
+		append_cell_json(json, glyph, scheme, first);
+		first = FALSE;
+	}
+
+	g_string_append_c(json, ']');
+}
+
+/*
  * serialize_cursor_json:
  *
  * Appends cursor state as a JSON object to the GString.
@@ -1182,7 +1385,9 @@ serialize_cursor_json(
  * serialize_full_screen:
  *
  * Serializes the entire terminal screen as a JSON "full" message.
- * Updates row hashes for subsequent diff detection.
+ * When scrollback is active (scroll_offset > 0), reads from the
+ * scrollback buffer instead of the live terminal. Updates row
+ * hashes for subsequent diff detection.
  *
  * Returns: (transfer full): JSON string, or NULL on error
  */
@@ -1194,6 +1399,8 @@ serialize_full_screen(GstWebviewServer *srv)
 	GString *json;
 	gint cols, rows, y;
 	const gchar *title;
+	gint scroll_offset;
+	gint scroll_count;
 
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
@@ -1203,6 +1410,15 @@ serialize_full_screen(GstWebviewServer *srv)
 
 	gst_terminal_get_size(term, &cols, &rows);
 	title = gst_terminal_get_title(term);
+
+	/* Query scrollback state */
+	ensure_scrollback_api(srv);
+	scroll_offset = 0;
+	scroll_count = 0;
+	if (srv->sb_module != NULL) {
+		scroll_offset = srv->sb_get_offset(srv->sb_module);
+		scroll_count = srv->sb_get_count(srv->sb_module);
+	}
 
 	/* Allocate/reallocate row hash array */
 	if (srv->prev_rows != rows || srv->prev_cols != cols) {
@@ -1230,9 +1446,18 @@ serialize_full_screen(GstWebviewServer *srv)
 	g_string_append_printf(json, ",\"read_only\":%s",
 		srv->module->read_only ? "true" : "false");
 
-	/* Cursor */
+	/* Scrollback state */
+	g_string_append_printf(json, ",\"scroll_offset\":%d,\"scroll_count\":%d",
+		scroll_offset, scroll_count);
+
+	/* Cursor: hide when viewing scrollback */
 	g_string_append(json, ",\"cursor\":");
-	serialize_cursor_json(term, json);
+	if (scroll_offset > 0) {
+		g_string_append(json,
+			"{\"x\":0,\"y\":0,\"shape\":\"block\",\"visible\":false}");
+	} else {
+		serialize_cursor_json(term, json);
+	}
 
 	/* Lines */
 	g_string_append(json, ",\"lines\":[");
@@ -1240,8 +1465,34 @@ serialize_full_screen(GstWebviewServer *srv)
 		if (y > 0) {
 			g_string_append_c(json, ',');
 		}
-		serialize_row_json(json, term, y, cols, srv->color_scheme);
-		srv->row_hashes[y] = hash_row(term, y, cols);
+
+		if (scroll_offset > 0 && y < scroll_offset) {
+			/*
+			 * This row comes from the scrollback buffer.
+			 * Row 0 = oldest visible, row (offset-1) = most recent.
+			 * Public API: index 0 = most recent scrollback line.
+			 */
+			gint line_index;
+			gint sb_cols;
+			const GstGlyph *glyphs;
+
+			line_index = scroll_offset - 1 - y;
+			sb_cols = 0;
+			glyphs = srv->sb_get_line_glyphs(
+				srv->sb_module, line_index, &sb_cols);
+			serialize_glyph_row_json(json, glyphs, sb_cols, cols,
+				srv->color_scheme);
+			srv->row_hashes[y] = hash_glyph_array(glyphs, sb_cols);
+		} else if (scroll_offset > 0) {
+			/* Empty row below scrollback content */
+			serialize_glyph_row_json(json, NULL, 0, cols,
+				srv->color_scheme);
+			srv->row_hashes[y] = 2166136261u;
+		} else {
+			/* Live terminal row */
+			serialize_row_json(json, term, y, cols, srv->color_scheme);
+			srv->row_hashes[y] = hash_row(term, y, cols);
+		}
 	}
 	g_string_append(json, "]}");
 
@@ -1252,7 +1503,9 @@ serialize_full_screen(GstWebviewServer *srv)
  * serialize_diff_screen:
  *
  * Serializes only the changed rows as a JSON "diff" message.
- * Compares current row hashes against cached values.
+ * Compares current row hashes against cached values. When
+ * scrollback is active, hashes and reads from the scrollback
+ * buffer instead of the live terminal.
  *
  * Returns: (transfer full): JSON string, or NULL if no changes
  */
@@ -1264,6 +1517,8 @@ serialize_diff_screen(GstWebviewServer *srv)
 	GString *json;
 	gint cols, rows, y;
 	gboolean any_changed;
+	gint scroll_offset;
+	gint scroll_count;
 
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
@@ -1278,24 +1533,83 @@ serialize_diff_screen(GstWebviewServer *srv)
 		return serialize_full_screen(srv);
 	}
 
+	/* Query scrollback state */
+	ensure_scrollback_api(srv);
+	scroll_offset = 0;
+	scroll_count = 0;
+	if (srv->sb_module != NULL) {
+		scroll_offset = srv->sb_get_offset(srv->sb_module);
+		scroll_count = srv->sb_get_count(srv->sb_module);
+	}
+
 	json = g_string_sized_new(4096);
-	g_string_append(json, "{\"type\":\"diff\",\"cursor\":");
-	serialize_cursor_json(term, json);
+	g_string_append(json, "{\"type\":\"diff\"");
+
+	/* Scrollback state */
+	g_string_append_printf(json, ",\"scroll_offset\":%d,\"scroll_count\":%d",
+		scroll_offset, scroll_count);
+
+	/* Cursor: hide when viewing scrollback */
+	g_string_append(json, ",\"cursor\":");
+	if (scroll_offset > 0) {
+		g_string_append(json,
+			"{\"x\":0,\"y\":0,\"shape\":\"block\",\"visible\":false}");
+	} else {
+		serialize_cursor_json(term, json);
+	}
+
 	g_string_append(json, ",\"rows\":{");
 
 	any_changed = FALSE;
 	for (y = 0; y < rows; y++) {
 		guint32 new_hash;
 
-		new_hash = hash_row(term, y, cols);
-		if (new_hash != srv->row_hashes[y]) {
-			if (any_changed) {
-				g_string_append_c(json, ',');
+		if (scroll_offset > 0 && y < scroll_offset) {
+			/* Row from scrollback buffer */
+			gint line_index;
+			gint sb_cols;
+			const GstGlyph *glyphs;
+
+			line_index = scroll_offset - 1 - y;
+			sb_cols = 0;
+			glyphs = srv->sb_get_line_glyphs(
+				srv->sb_module, line_index, &sb_cols);
+			new_hash = hash_glyph_array(glyphs, sb_cols);
+			if (new_hash != srv->row_hashes[y]) {
+				if (any_changed) {
+					g_string_append_c(json, ',');
+				}
+				g_string_append_printf(json, "\"%d\":", y);
+				serialize_glyph_row_json(json, glyphs, sb_cols, cols,
+					srv->color_scheme);
+				srv->row_hashes[y] = new_hash;
+				any_changed = TRUE;
 			}
-			g_string_append_printf(json, "\"%d\":", y);
-			serialize_row_json(json, term, y, cols, srv->color_scheme);
-			srv->row_hashes[y] = new_hash;
-			any_changed = TRUE;
+		} else if (scroll_offset > 0) {
+			/* Empty row below scrollback */
+			new_hash = 2166136261u;
+			if (new_hash != srv->row_hashes[y]) {
+				if (any_changed) {
+					g_string_append_c(json, ',');
+				}
+				g_string_append_printf(json, "\"%d\":", y);
+				serialize_glyph_row_json(json, NULL, 0, cols,
+					srv->color_scheme);
+				srv->row_hashes[y] = new_hash;
+				any_changed = TRUE;
+			}
+		} else {
+			/* Live terminal row */
+			new_hash = hash_row(term, y, cols);
+			if (new_hash != srv->row_hashes[y]) {
+				if (any_changed) {
+					g_string_append_c(json, ',');
+				}
+				g_string_append_printf(json, "\"%d\":", y);
+				serialize_row_json(json, term, y, cols, srv->color_scheme);
+				srv->row_hashes[y] = new_hash;
+				any_changed = TRUE;
+			}
 		}
 	}
 

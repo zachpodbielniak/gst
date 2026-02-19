@@ -146,6 +146,8 @@ auto_register_hooks(
 	{
 		gst_module_manager_register_hook(self, module,
 			GST_HOOK_KEY_PRESS, priority);
+		gst_module_manager_register_hook(self, module,
+			GST_HOOK_BUTTON_PRESS, priority);
 	}
 
 	if (g_type_is_a(module_type, GST_TYPE_OUTPUT_FILTER))
@@ -644,6 +646,57 @@ gst_module_manager_dispatch_key_event(
 			if (gst_input_handler_handle_key_event(
 				GST_INPUT_HANDLER(entry->module),
 				keyval, keycode, state))
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+/**
+ * gst_module_manager_dispatch_mouse_event:
+ * @self: A #GstModuleManager
+ * @button: The mouse button number (1-9, 4/5 for scroll)
+ * @state: The modifier state
+ * @col: The terminal column at the click position
+ * @row: The terminal row at the click position
+ *
+ * Dispatches a mouse button event to all #GstInputHandler modules
+ * registered at %GST_HOOK_BUTTON_PRESS. Walks the list in priority
+ * order and stops at the first handler that returns %TRUE (consumed).
+ *
+ * Returns: %TRUE if a module consumed the mouse event
+ */
+gboolean
+gst_module_manager_dispatch_mouse_event(
+	GstModuleManager *self,
+	guint             button,
+	guint             state,
+	gint              col,
+	gint              row
+){
+	GList *l;
+
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
+
+	for (l = self->hooks[GST_HOOK_BUTTON_PRESS]; l != NULL; l = l->next)
+	{
+		GstHookEntry *entry;
+
+		entry = (GstHookEntry *)l->data;
+
+		if (!gst_module_is_active(entry->module))
+		{
+			continue;
+		}
+
+		if (GST_IS_INPUT_HANDLER(entry->module))
+		{
+			if (gst_input_handler_handle_mouse_event(
+				GST_INPUT_HANDLER(entry->module),
+				button, state, col, row))
 			{
 				return TRUE;
 			}

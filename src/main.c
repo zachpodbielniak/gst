@@ -1250,6 +1250,14 @@ on_button_press(
 		return;
 	}
 
+	/* Dispatch to modules (scrollback handles Button4/5 here) */
+	if (gst_module_manager_dispatch_mouse_event(
+		gst_module_manager_get_default(), button, state, col, row))
+	{
+		schedule_draw();
+		return;
+	}
+
 	/* Left button starts selection */
 	if (button == Button1) {
 		gst_selection_start(selection, col, row, GST_SELECTION_SNAP_NONE);

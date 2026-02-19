@@ -178,6 +178,28 @@ gst_module_manager_dispatch_key_event(
 );
 
 /**
+ * gst_module_manager_dispatch_mouse_event:
+ * @self: A #GstModuleManager
+ * @button: The mouse button number (1-9, 4/5 for scroll)
+ * @state: The modifier state
+ * @col: The terminal column at the click position
+ * @row: The terminal row at the click position
+ *
+ * Dispatches a mouse event to all #GstInputHandler modules.
+ * Stops at the first handler that returns %TRUE (consumed).
+ *
+ * Returns: %TRUE if a module consumed the mouse event
+ */
+gboolean
+gst_module_manager_dispatch_mouse_event(
+	GstModuleManager *self,
+	guint             button,
+	guint             state,
+	gint              col,
+	gint              row
+);
+
+/**
  * gst_module_manager_dispatch_bell:
  * @self: A #GstModuleManager
  *

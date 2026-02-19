@@ -106,6 +106,7 @@ struct _GstRenderContext
 	gint          win_h;
 	GstWinMode    win_mode;
 	guint16       glyph_attr;
+	gdouble       opacity;     /* window opacity (0.0-1.0) for bg alpha */
 };
 
 /* ===== Inline dispatch helpers ===== */

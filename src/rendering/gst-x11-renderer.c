@@ -230,6 +230,7 @@ x11_fill_render_context(
 	ctx->base.win_h      = self->win_h;
 	ctx->base.win_mode   = self->win_mode;
 	ctx->base.glyph_attr = 0;
+	ctx->base.opacity    = 1.0; /* X11: compositor handles window opacity */
 
 	/* X11-specific fields */
 	ctx->display    = self->display;

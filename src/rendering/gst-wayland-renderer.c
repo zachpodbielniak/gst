@@ -463,6 +463,8 @@ wl_fill_render_context(
 	ctx->base.win_h      = self->win_h;
 	ctx->base.win_mode   = self->win_mode;
 	ctx->base.glyph_attr = 0;
+	ctx->base.opacity    = (self->wl_window != NULL)
+		? gst_wayland_window_get_opacity(self->wl_window) : 1.0;
 
 	/* Wayland/Cairo-specific fields */
 	ctx->cr         = self->cr;
