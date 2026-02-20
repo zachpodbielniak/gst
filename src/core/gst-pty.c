@@ -265,7 +265,7 @@ gst_pty_spawn(
 		}
 
 		/* Set TERM */
-		setenv("TERM", "st-256color", 1);
+		setenv("TERM", "gst-256color", 1);
 
 		unsetenv("COLUMNS");
 		unsetenv("LINES");

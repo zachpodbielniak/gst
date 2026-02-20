@@ -21,6 +21,9 @@
 #include "../../src/window/gst-window.h"
 #include "../../src/util/gst-base64.h"
 
+#include <unistd.h>
+#include <errno.h>
+
 struct _GstOsc52Module
 {
 	GstModule parent_instance;
@@ -82,6 +85,88 @@ static void
 gst_osc52_module_deactivate(GstModule *module)
 {
 	g_debug("osc52: deactivated");
+}
+
+/* ===== Clipboard helpers ===== */
+
+/*
+ * osc52_set_clipboard_external:
+ * @text: The text to place on the clipboard
+ * @len: Length of @text in bytes
+ * @is_clipboard: TRUE for CLIPBOARD, FALSE for PRIMARY
+ *
+ * Sets the system clipboard by piping text to an external tool.
+ * Uses wl-copy on Wayland, xclip on X11. This bypasses the Wayland
+ * input serial requirement for wl_data_device.set_selection, which
+ * silently fails when OSC 52 arrives from programs (e.g., over SSH)
+ * rather than direct user input — the serial from the last keypress
+ * is often invalidated by keyboard repeats or subsequent events
+ * before the OSC 52 response arrives.
+ *
+ * Returns: TRUE if the clipboard was set successfully
+ */
+static gboolean
+osc52_set_clipboard_external(
+	const gchar *text,
+	gsize        len,
+	gboolean     is_clipboard
+){
+	GPtrArray *argv;
+	gint stdin_fd;
+	GError *error;
+	gboolean spawned;
+	gssize written;
+	gsize total;
+
+	argv = g_ptr_array_new();
+
+	if (g_getenv("WAYLAND_DISPLAY") != NULL) {
+		g_ptr_array_add(argv, (gpointer)"wl-copy");
+		if (!is_clipboard) {
+			g_ptr_array_add(argv, (gpointer)"--primary");
+		}
+	} else {
+		g_ptr_array_add(argv, (gpointer)"xclip");
+		g_ptr_array_add(argv, (gpointer)"-selection");
+		g_ptr_array_add(argv,
+			(gpointer)(is_clipboard ? "clipboard" : "primary"));
+	}
+	g_ptr_array_add(argv, NULL);
+
+	error = NULL;
+	spawned = g_spawn_async_with_pipes(
+		NULL,
+		(gchar **)argv->pdata,
+		NULL,
+		G_SPAWN_SEARCH_PATH,
+		NULL, NULL, NULL,
+		&stdin_fd, NULL, NULL,
+		&error);
+
+	g_ptr_array_free(argv, TRUE);
+
+	if (!spawned) {
+		g_debug("osc52: clipboard command failed: %s",
+			error->message);
+		g_error_free(error);
+		return FALSE;
+	}
+
+	/* Write text to stdin, handling partial writes */
+	total = 0;
+	while (total < len) {
+		written = write(stdin_fd, text + total, len - total);
+		if (written < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			break;
+		}
+		total += (gsize)written;
+	}
+	close(stdin_fd);
+
+	return (total == len);
 }
 
 /* ===== GstEscapeHandler interface ===== */
@@ -190,25 +275,42 @@ gst_osc52_module_handle_escape_string(
 		}
 
 		/*
-		 * Set the clipboard via the window.
-		 * gst_window_set_selection() handles both CLIPBOARD
-		 * (is_clipboard=TRUE) and PRIMARY (is_clipboard=FALSE).
+		 * Set the system clipboard. Use an external tool
+		 * (wl-copy on Wayland, xclip on X11) to bypass the
+		 * Wayland serial requirement for set_selection, which
+		 * silently fails for programmatic clipboard sets (e.g.,
+		 * OSC 52 over SSH). Also set via the window API so the
+		 * terminal has the content cached for self-paste.
 		 */
-		mgr = gst_module_manager_get_default();
-		window = gst_module_manager_get_window(mgr);
-		if (window != NULL && GST_IS_WINDOW(window)) {
+		{
 			g_autofree gchar *text = NULL;
+			gboolean ext_ok;
 
 			/* Ensure null-termination */
 			text = g_strndup((const gchar *)decoded,
 				decoded_len);
 
-			gst_window_set_selection(
-				GST_WINDOW(window), text, is_clipboard);
+			ext_ok = osc52_set_clipboard_external(text,
+				decoded_len, is_clipboard);
 
-			g_debug("osc52: set %s (%zu bytes)",
+			/*
+			 * Always set via window API as well. This gives
+			 * the terminal a cached copy for self-paste (the
+			 * Wayland deadlock avoidance path) and acts as a
+			 * fallback if the external tool is missing.
+			 */
+			mgr = gst_module_manager_get_default();
+			window = gst_module_manager_get_window(mgr);
+			if (window != NULL && GST_IS_WINDOW(window)) {
+				gst_window_set_selection(
+					GST_WINDOW(window),
+					text, is_clipboard);
+			}
+
+			g_debug("osc52: set %s (%zu bytes, %s)",
 				is_clipboard ? "clipboard" : "primary",
-				decoded_len);
+				decoded_len,
+				ext_ok ? "external" : "window-api");
 		}
 
 		g_free(decoded);

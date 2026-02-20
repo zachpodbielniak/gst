@@ -200,9 +200,9 @@ clean-all:
 	rm -f deps/crispy/src/crispy-version.h
 
 # Installation rules
-.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop install-gst-mcp
+.PHONY: install install-lib install-bin install-headers install-pc install-gir install-modules install-desktop install-gst-mcp install-terminfo
 
-install: install-lib install-bin install-headers install-pc install-desktop
+install: install-lib install-bin install-headers install-pc install-desktop install-terminfo
 ifeq ($(BUILD_GIR),1)
 install: install-gir
 endif
@@ -282,6 +282,10 @@ install-desktop:
 	$(INSTALL_DATA) data/gst.desktop $(DESTDIR)$(DATADIR)/applications/
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps
 	$(INSTALL_DATA) data/logo-256.png $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
+
+install-terminfo:
+	@echo "Compiling gst-256color terminfo..."
+	tic -sx data/gst-256color.terminfo
 
 # Uninstall
 .PHONY: uninstall

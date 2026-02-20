@@ -1159,9 +1159,13 @@ data_source_cancelled(
 	self = (GstWaylandWindow *)data;
 
 	/* Always destroy the cancelled source to avoid leaks.
-	 * Clear our reference only if this was the active source. */
+	 * Clear our reference and cached text only if this was the
+	 * active source. Once cancelled, the compositor has revoked
+	 * our ownership and no more send callbacks will arrive, so
+	 * the cached text is no longer needed. */
 	if (self->data_source == source) {
 		self->data_source = NULL;
+		g_clear_pointer(&self->clipboard_text, g_free);
 	}
 	wl_data_source_destroy(source);
 }
@@ -1255,9 +1259,12 @@ primary_source_cancelled(
 	self = (GstWaylandWindow *)data;
 
 	/* Always destroy the cancelled source to avoid leaks.
-	 * Clear our reference only if this was the active source. */
+	 * Clear our reference and cached text only if this was the
+	 * active source. Once cancelled, the compositor has revoked
+	 * our ownership and no more send callbacks will arrive. */
 	if (self->primary_source == source) {
 		self->primary_source = NULL;
+		g_clear_pointer(&self->selection_text, g_free);
 	}
 	zwp_primary_selection_source_v1_destroy(source);
 }
@@ -1388,6 +1395,14 @@ gst_wayland_window_paste_clipboard_impl(GstWindow *window)
 	self = GST_WAYLAND_WINDOW(window);
 
 	/*
+	 * Flush any pending Wayland events before checking clipboard
+	 * ownership. This ensures data_source.cancelled events already
+	 * in the client-side queue are processed, so self->data_source
+	 * accurately reflects whether we still own the clipboard.
+	 */
+	wl_display_dispatch_pending(self->display);
+
+	/*
 	 * If we own the clipboard (data_source is set), use our stored
 	 * text directly. Going through the Wayland protocol would deadlock:
 	 * we'd block in read() waiting for data that only our own
@@ -1431,6 +1446,13 @@ gst_wayland_window_paste_primary_impl(GstWindow *window)
 	gchar *text;
 
 	self = GST_WAYLAND_WINDOW(window);
+
+	/*
+	 * Flush any pending Wayland events before checking selection
+	 * ownership. This ensures primary_source.cancelled events
+	 * already in the client-side queue are processed.
+	 */
+	wl_display_dispatch_pending(self->display);
 
 	/*
 	 * If we own the primary selection, use our stored text directly

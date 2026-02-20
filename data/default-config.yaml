@@ -7,7 +7,7 @@
 
 terminal:
   shell: /bin/bash
-  term: st-256color
+  term: gst-256color
   tabspaces: 8
 
 window:

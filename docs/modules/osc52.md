@@ -113,7 +113,19 @@ In your `.tmux.conf`:
 set -g set-clipboard on
 ```
 
-This tells tmux to forward OSC 52 sequences from programs running inside tmux to the outer terminal (GST). Without this, tmux intercepts OSC 52 and the sequences never reach GST.
+`set-clipboard on` tells tmux to forward OSC 52 sequences to the outer terminal. Without this, tmux intercepts OSC 52 and the sequences never reach GST.
+
+GST's default `TERM` is `gst-256color`, which includes the `Ms` terminfo capability that tmux requires for OSC 52 forwarding. Make sure the terminfo entry is installed:
+
+```bash
+make install-terminfo
+```
+
+**Older setups using `st-256color`**: If your `TERM` is still `st-256color` (which lacks the `Ms` capability), either switch to `gst-256color` in your GST config or add this override to `.tmux.conf`:
+
+```
+set -ga terminal-overrides ',st-256color:Ms=\E]52;%p1%s;%p2%s\007'
+```
 
 ## Security
 
@@ -121,11 +133,23 @@ This tells tmux to forward OSC 52 sequences from programs running inside tmux to
 - **`max_bytes` limits payload size** to prevent memory exhaustion from maliciously large base64 payloads.
 - Write access (`allow_write`) is generally safe -- programs can only set the clipboard, not exfiltrate data from it.
 
+## Dependencies
+
+The module uses external clipboard tools to reliably set the system clipboard:
+
+- **Wayland**: `wl-copy` (from `wl-clipboard` package)
+- **X11**: `xclip`
+
+These tools bypass the Wayland input serial requirement for `wl_data_device.set_selection`, which silently fails for programmatic clipboard sets (e.g., OSC 52 arriving over SSH). If neither tool is available, the module falls back to the window's built-in selection API.
+
+On Fedora: `sudo dnf install wl-clipboard xclip`
+
 ## Notes
 
 - The module decodes base64 using `g_base64_decode_inplace()` from GLib.
 - Both CLIPBOARD and PRIMARY selections are supported. The target character determines which selection is modified.
 - When used over SSH, the escape sequence travels through the SSH tunnel and is processed by the local terminal emulator (GST), giving the remote program access to the local clipboard.
+- On Wayland, the module pipes clipboard text to `wl-copy` (or `wl-copy --primary`) to avoid stale serial issues. On X11, it uses `xclip -selection clipboard`.
 
 ## Source Files
 

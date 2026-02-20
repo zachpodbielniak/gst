@@ -46,7 +46,7 @@ gst_config_init(void)
 
 	/* --- Terminal --- */
 	/* gst_config_set_shell(config, "/bin/bash"); */
-	/* gst_config_set_term_name(config, "st-256color"); */
+	/* gst_config_set_term_name(config, "gst-256color"); */
 	/* gst_config_set_tabspaces(config, 8); */
 
 	/* --- Window --- */

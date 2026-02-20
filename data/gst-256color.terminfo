@@ -1,0 +1,15 @@
+# gst-256color terminfo
+#
+# Extends st-256color with capabilities specific to GST:
+#   Ms - tmux clipboard (OSC 52) support
+#
+# Install:
+#   tic -sx data/gst-256color.terminfo
+#   (or: make install-terminfo)
+#
+# The compiled entry goes into ~/.terminfo/ by default,
+# which takes priority over system terminfo databases.
+
+gst-256color|GST terminal with 256 colors,
+	Ms=\E]52;%p1%s;%p2%s\007,
+	use=st-256color,
