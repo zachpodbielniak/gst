@@ -285,7 +285,8 @@ install-desktop:
 
 install-terminfo:
 	@echo "Compiling gst-256color terminfo..."
-	tic -sx data/gst-256color.terminfo
+	$(MKDIR_P) $(DESTDIR)$(DATADIR)/terminfo
+	tic -sx -o $(DESTDIR)$(DATADIR)/terminfo data/gst-256color.terminfo
 
 # Uninstall
 .PHONY: uninstall
