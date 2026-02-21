@@ -139,6 +139,12 @@ modules:
       - "liga"
     cache_size: 4096
 
+  wallpaper:
+    enabled: true
+    image_path: "/var/home/zach/Pictures/clawd/profile-pic-clawd.jpg"
+    scale_mode: fill
+    bg_alpha: 0.9
+
   mcp:
     enabled: true
     transport: unix-socket

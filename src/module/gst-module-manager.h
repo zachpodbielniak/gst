@@ -228,6 +228,24 @@ gst_module_manager_dispatch_render_overlay(
 );
 
 /**
+ * gst_module_manager_dispatch_render_background:
+ * @self: A #GstModuleManager
+ * @render_context: (type gpointer): Opaque rendering context
+ * @width: Width of the render area in pixels
+ * @height: Height of the render area in pixels
+ *
+ * Dispatches a render background event to all #GstBackgroundProvider
+ * modules. Called before line drawing in the render cycle.
+ */
+void
+gst_module_manager_dispatch_render_background(
+	GstModuleManager *self,
+	gpointer          render_context,
+	gint              width,
+	gint              height
+);
+
+/**
  * gst_module_manager_dispatch_escape_string:
  * @self: A #GstModuleManager
  * @str_type: The escape string type character ('_' for APC, 'P' for DCS)

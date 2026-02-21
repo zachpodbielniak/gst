@@ -402,6 +402,22 @@ typedef struct _GstLigaturesConfig
 	gint       cache_size;
 } GstLigaturesConfig;
 
+/**
+ * GstWallpaperConfig:
+ * @enabled: whether the wallpaper module is active
+ * @image_path: filesystem path to the background image (PNG or JPEG)
+ * @scale_mode: scaling mode string ("fill", "fit", "stretch", "center")
+ * @bg_alpha: alpha for default-background cells over the wallpaper
+ *            (0.0 = fully transparent to wallpaper, 1.0 = fully opaque)
+ */
+typedef struct _GstWallpaperConfig
+{
+	gboolean  enabled;
+	gchar    *image_path;
+	gchar    *scale_mode;
+	gdouble   bg_alpha;
+} GstWallpaperConfig;
+
 /* ===== Container struct ===== */
 
 /**
@@ -434,6 +450,7 @@ typedef struct _GstModuleConfigs
 	GstSearchConfig           search;
 	GstSixelConfig            sixel;
 	GstLigaturesConfig        ligatures;
+	GstWallpaperConfig        wallpaper;
 } GstModuleConfigs;
 
 G_END_DECLS

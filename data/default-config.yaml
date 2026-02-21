@@ -243,3 +243,9 @@ modules:
       - "calt"
       - "liga"
     cache_size: 4096
+
+  wallpaper:
+    enabled: false
+    image_path: ""               # path to PNG or JPEG file
+    scale_mode: fill             # fill, fit, stretch, center
+    bg_alpha: 0.3                # cell bg alpha (0.0=transparent, 1.0=opaque)

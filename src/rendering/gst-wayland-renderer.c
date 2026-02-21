@@ -131,6 +131,10 @@ struct _GstWaylandRenderer
 
 	/* Last applied opacity (used to detect changes and trigger full repaint) */
 	gdouble last_opacity;
+
+	/* Wallpaper state (set during RENDER_BACKGROUND dispatch) */
+	gboolean has_wallpaper;
+	gdouble wallpaper_bg_alpha;
 };
 
 G_DEFINE_TYPE(GstWaylandRenderer, gst_wayland_renderer, GST_TYPE_RENDERER)
@@ -631,13 +635,36 @@ wl_draw_glyph_run(
 		wl_clear_rect(self, winx, winy + self->ch, winx + width, self->win_h);
 	}
 
-	/* Fill background with opacity-aware alpha */
-	wl_set_bg_color(self, self->cr, bg);
-	cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
-	cairo_rectangle(self->cr, (gdouble)winx, (gdouble)winy,
-		(gdouble)width, (gdouble)self->ch);
-	cairo_fill(self->cr);
-	cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
+	/* Fill background: when wallpaper is active and the cell uses the
+	 * default background (not reversed), draw with configurable alpha
+	 * so the background image shows through. Cairo supports proper
+	 * alpha compositing via CAIRO_OPERATOR_OVER. */
+	if (self->has_wallpaper
+	    && base->bg == (guint32)self->default_bg
+	    && !(mode & GST_GLYPH_ATTR_REVERSE))
+	{
+		GstColor def_bg;
+
+		def_bg = self->colors[self->default_bg];
+		cairo_set_source_rgba(self->cr,
+			(gdouble)GST_COLOR_R(def_bg) / 255.0,
+			(gdouble)GST_COLOR_G(def_bg) / 255.0,
+			(gdouble)GST_COLOR_B(def_bg) / 255.0,
+			self->wallpaper_bg_alpha);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
+		cairo_rectangle(self->cr, (gdouble)winx, (gdouble)winy,
+			(gdouble)width, (gdouble)self->ch);
+		cairo_fill(self->cr);
+	}
+	else
+	{
+		wl_set_bg_color(self, self->cr, bg);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_SOURCE);
+		cairo_rectangle(self->cr, (gdouble)winx, (gdouble)winy,
+			(gdouble)width, (gdouble)self->ch);
+		cairo_fill(self->cr);
+		cairo_set_operator(self->cr, CAIRO_OPERATOR_OVER);
+	}
 
 	/* Set clipping for glyph rendering */
 	cairo_save(self->cr);
@@ -1066,7 +1093,23 @@ wl_renderer_render_impl(GstRenderer *renderer)
 		}
 	}
 
-	/* Draw dirty lines */
+	/* Dispatch render background to modules (wallpaper draws here) */
+	{
+		GstModuleManager *mgr;
+		GstWaylandRenderContext bg_ctx;
+
+		mgr = gst_module_manager_get_default();
+		wl_fill_render_context(self, &bg_ctx);
+		bg_ctx.base.has_wallpaper = FALSE;
+		bg_ctx.base.wallpaper_bg_alpha = 1.0;
+		gst_module_manager_dispatch_render_background(
+			mgr, &bg_ctx.base, self->win_w, self->win_h);
+		self->has_wallpaper = bg_ctx.base.has_wallpaper;
+		self->wallpaper_bg_alpha = bg_ctx.base.wallpaper_bg_alpha;
+	}
+
+	/* Draw lines: force full redraw when wallpaper is active
+	 * because the background image overwrites the entire surface */
 	for (y = 0; y < rows; y++) {
 		GstLine *line;
 
@@ -1075,7 +1118,7 @@ wl_renderer_render_impl(GstRenderer *renderer)
 			continue;
 		}
 
-		if (gst_line_is_dirty(line)) {
+		if (self->has_wallpaper || gst_line_is_dirty(line)) {
 			wl_renderer_draw_line_impl(renderer, y, 0, cols);
 		}
 	}

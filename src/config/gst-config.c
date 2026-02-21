@@ -84,6 +84,8 @@ gst_config_dispose(GObject *object)
 	g_clear_pointer(&self->modules.search.highlight_color, g_free);
 	g_clear_pointer(&self->modules.search.current_color, g_free);
 	g_clear_pointer(&self->modules.ligatures.features, g_strfreev);
+	g_clear_pointer(&self->modules.wallpaper.image_path, g_free);
+	g_clear_pointer(&self->modules.wallpaper.scale_mode, g_free);
 
 	g_clear_pointer(&self->keybinds, g_array_unref);
 	g_clear_pointer(&self->mousebinds, g_array_unref);
@@ -290,6 +292,12 @@ gst_config_init(GstConfig *self)
 	self->modules.ligatures.enabled = FALSE;
 	self->modules.ligatures.features = NULL;
 	self->modules.ligatures.cache_size = 4096;
+
+	/* wallpaper */
+	self->modules.wallpaper.enabled = FALSE;
+	self->modules.wallpaper.image_path = g_strdup("");
+	self->modules.wallpaper.scale_mode = g_strdup("fill");
+	self->modules.wallpaper.bg_alpha = 0.3;
 
 	/* Default key bindings (match data/default-config.yaml) */
 	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GstKeybind));
@@ -1124,6 +1132,15 @@ load_mod_ligatures(GstConfig *self, YamlMapping *mod)
 	LOAD_MOD_INT(mod, "cache_size", self->modules.ligatures.cache_size);
 }
 
+static void
+load_mod_wallpaper(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.wallpaper.enabled);
+	LOAD_MOD_STRING(mod, "image_path", self->modules.wallpaper.image_path);
+	LOAD_MOD_STRING(mod, "scale_mode", self->modules.wallpaper.scale_mode);
+	LOAD_MOD_DOUBLE(mod, "bg_alpha", self->modules.wallpaper.bg_alpha);
+}
+
 /*
  * load_modules_section:
  *
@@ -1210,6 +1227,9 @@ load_modules_section(
 
 	mod = yaml_mapping_get_mapping_member(modules, "ligatures");
 	if (mod != NULL) load_mod_ligatures(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "wallpaper");
+	if (mod != NULL) load_mod_wallpaper(self, mod);
 
 	return TRUE;
 }

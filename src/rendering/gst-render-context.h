@@ -121,6 +121,8 @@ struct _GstRenderContext
 	gpointer      current_line;  /* pointer to current GstLine being drawn */
 	gint          current_col;   /* column index of glyph being rendered */
 	gint          current_cols;  /* total columns in the terminal */
+	gboolean      has_wallpaper;   /* TRUE when a background provider is active */
+	gdouble       wallpaper_bg_alpha; /* cell bg alpha for default-bg cells */
 };
 
 /* ===== Inline dispatch helpers ===== */

@@ -112,6 +112,10 @@ struct _GstX11Renderer
 
 	/* Selection (for checking selected cells) */
 	GstSelection *selection;
+
+	/* Wallpaper state (set during RENDER_BACKGROUND dispatch) */
+	gboolean has_wallpaper;
+	gdouble wallpaper_bg_alpha;
 };
 
 G_DEFINE_TYPE(GstX11Renderer, gst_x11_renderer, GST_TYPE_RENDERER)
@@ -477,8 +481,19 @@ x11_draw_glyph_specs(
 		x11_clear_rect(self, winx, winy + self->ch, winx + width, self->win_h);
 	}
 
-	/* Fill background */
-	XftDrawRect(self->draw, bg, winx, winy, (guint)width, (guint)self->ch);
+	/* Fill background: skip for default-bg cells when wallpaper is active
+	 * so the background image shows through. X11 XftDrawRect cannot do
+	 * alpha blending on a Pixmap, so we skip entirely rather than tinting. */
+	if (self->has_wallpaper
+	    && bg_idx == (guint32)self->default_bg
+	    && !(mode & GST_GLYPH_ATTR_REVERSE))
+	{
+		/* wallpaper is already painted underneath; leave it visible */
+	}
+	else
+	{
+		XftDrawRect(self->draw, bg, winx, winy, (guint)width, (guint)self->ch);
+	}
 
 	/* Set clipping for glyph rendering */
 	r.x = 0;
@@ -908,7 +923,23 @@ x11_renderer_render_impl(GstRenderer *renderer)
 	cx = cursor->x;
 	cy = cursor->y;
 
-	/* Draw dirty lines */
+	/* Dispatch render background to modules (wallpaper draws here) */
+	{
+		GstModuleManager *mgr;
+		GstX11RenderContext bg_ctx;
+
+		mgr = gst_module_manager_get_default();
+		x11_fill_render_context(self, &bg_ctx);
+		bg_ctx.base.has_wallpaper = FALSE;
+		bg_ctx.base.wallpaper_bg_alpha = 1.0;
+		gst_module_manager_dispatch_render_background(
+			mgr, &bg_ctx.base, self->win_w, self->win_h);
+		self->has_wallpaper = bg_ctx.base.has_wallpaper;
+		self->wallpaper_bg_alpha = bg_ctx.base.wallpaper_bg_alpha;
+	}
+
+	/* Draw lines: force full redraw when wallpaper is active
+	 * because the background image overwrites the entire pixmap */
 	for (y = 0; y < rows; y++) {
 		GstLine *line;
 
@@ -917,7 +948,7 @@ x11_renderer_render_impl(GstRenderer *renderer)
 			continue;
 		}
 
-		if (gst_line_is_dirty(line)) {
+		if (self->has_wallpaper || gst_line_is_dirty(line)) {
 			x11_renderer_draw_line_impl(renderer, y, 0, cols);
 		}
 	}

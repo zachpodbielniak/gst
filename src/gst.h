@@ -59,6 +59,7 @@
 #include "interfaces/gst-input-handler.h"
 #include "interfaces/gst-output-filter.h"
 #include "interfaces/gst-render-overlay.h"
+#include "interfaces/gst-background-provider.h"
 #include "interfaces/gst-font-provider.h"
 #include "interfaces/gst-url-handler.h"
 #include "interfaces/gst-glyph-transformer.h"

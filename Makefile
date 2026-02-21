@@ -54,6 +54,7 @@ LIB_SRCS := \
 	src/interfaces/gst-input-handler.c \
 	src/interfaces/gst-output-filter.c \
 	src/interfaces/gst-render-overlay.c \
+	src/interfaces/gst-background-provider.c \
 	src/interfaces/gst-font-provider.c \
 	src/interfaces/gst-url-handler.c \
 	src/interfaces/gst-glyph-transformer.c \

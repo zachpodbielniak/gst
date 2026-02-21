@@ -13,6 +13,7 @@
 #include "../interfaces/gst-output-filter.h"
 #include "../interfaces/gst-bell-handler.h"
 #include "../interfaces/gst-render-overlay.h"
+#include "../interfaces/gst-background-provider.h"
 #include "../interfaces/gst-glyph-transformer.h"
 #include "../interfaces/gst-external-pipe.h"
 #include "../interfaces/gst-url-handler.h"
@@ -167,6 +168,12 @@ auto_register_hooks(
 	{
 		gst_module_manager_register_hook(self, module,
 			GST_HOOK_RENDER_OVERLAY, priority);
+	}
+
+	if (g_type_is_a(module_type, GST_TYPE_BACKGROUND_PROVIDER))
+	{
+		gst_module_manager_register_hook(self, module,
+			GST_HOOK_RENDER_BACKGROUND, priority);
 	}
 
 	if (g_type_is_a(module_type, GST_TYPE_GLYPH_TRANSFORMER))
@@ -781,6 +788,48 @@ gst_module_manager_dispatch_render_overlay(
 		{
 			gst_render_overlay_render(
 				GST_RENDER_OVERLAY(entry->module),
+				render_context, width, height);
+		}
+	}
+}
+
+/**
+ * gst_module_manager_dispatch_render_background:
+ * @self: A #GstModuleManager
+ * @render_context: (type gpointer): Opaque rendering context
+ * @width: Width of the render area in pixels
+ * @height: Height of the render area in pixels
+ *
+ * Dispatches a render background event to all #GstBackgroundProvider
+ * modules. Called before line drawing so backgrounds are painted
+ * underneath terminal text. All handlers are called (non-consumable).
+ */
+void
+gst_module_manager_dispatch_render_background(
+	GstModuleManager *self,
+	gpointer          render_context,
+	gint              width,
+	gint              height
+){
+	GList *l;
+
+	g_return_if_fail(GST_IS_MODULE_MANAGER(self));
+
+	for (l = self->hooks[GST_HOOK_RENDER_BACKGROUND]; l != NULL; l = l->next)
+	{
+		GstHookEntry *entry;
+
+		entry = (GstHookEntry *)l->data;
+
+		if (!gst_module_is_active(entry->module))
+		{
+			continue;
+		}
+
+		if (GST_IS_BACKGROUND_PROVIDER(entry->module))
+		{
+			gst_background_provider_render_background(
+				GST_BACKGROUND_PROVIDER(entry->module),
 				render_context, width, height);
 		}
 	}
@@ -1468,6 +1517,8 @@ gst_module_manager_activate_all(GstModuleManager *self)
 				enabled = cfg->modules.sixel.enabled;
 			else if (g_strcmp0(name, "ligatures") == 0)
 				enabled = cfg->modules.ligatures.enabled;
+			else if (g_strcmp0(name, "wallpaper") == 0)
+				enabled = cfg->modules.wallpaper.enabled;
 
 			if (!enabled)
 			{
