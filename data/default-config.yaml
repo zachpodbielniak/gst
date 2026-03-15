@@ -202,7 +202,7 @@ modules:
     enabled: false
     allow_read: false              # allow apps to read clipboard (security risk)
     allow_write: true              # allow apps to write clipboard
-    max_bytes: 100000              # max decoded payload size
+    max_bytes: 786432              # max decoded payload size (~768KB)
 
   sync_update:
     enabled: true

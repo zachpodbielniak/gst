@@ -1341,6 +1341,11 @@ gst_module_manager_dispatch_escape_string(
 		break;
 	}
 
+	g_debug("dispatch_escape_string: type='%c' hook=%d "
+		"handlers=%u",
+		str_type, (gint)hook,
+		g_list_length(self->hooks[hook]));
+
 	for (l = self->hooks[hook]; l != NULL; l = l->next)
 	{
 		GstHookEntry *entry;
@@ -1349,20 +1354,30 @@ gst_module_manager_dispatch_escape_string(
 
 		if (!gst_module_is_active(entry->module))
 		{
+			g_debug("dispatch_escape_string: skip '%s' "
+				"(inactive)",
+				gst_module_get_name(entry->module));
 			continue;
 		}
 
 		if (GST_IS_ESCAPE_HANDLER(entry->module))
 		{
+			g_debug("dispatch_escape_string: trying '%s'",
+				gst_module_get_name(entry->module));
 			if (gst_escape_handler_handle_escape_string(
 				GST_ESCAPE_HANDLER(entry->module),
 				str_type, buf, len, terminal))
 			{
+				g_debug("dispatch_escape_string: "
+					"consumed by '%s'",
+					gst_module_get_name(
+						entry->module));
 				return TRUE;
 			}
 		}
 	}
 
+	g_debug("dispatch_escape_string: not consumed");
 	return FALSE;
 }
 

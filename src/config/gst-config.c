@@ -253,7 +253,7 @@ gst_config_init(GstConfig *self)
 	self->modules.osc52.enabled = FALSE;
 	self->modules.osc52.allow_read = FALSE;
 	self->modules.osc52.allow_write = TRUE;
-	self->modules.osc52.max_bytes = 100000;
+	self->modules.osc52.max_bytes = 786432;
 
 	/* sync_update */
 	self->modules.sync_update.enabled = TRUE;

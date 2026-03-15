@@ -1234,6 +1234,9 @@ on_terminal_escape_string(
 
 	(void)user_data;
 
+	g_debug("on_terminal_escape_string: type='%c' len=%lu",
+		str_type, len);
+
 	mgr = gst_module_manager_get_default();
 	gst_module_manager_dispatch_escape_string(mgr, str_type, buf,
 		(gsize)len, (gpointer)term);
@@ -1296,6 +1299,7 @@ on_key_press(
 		}
 		return;
 	case GST_ACTION_CLIPBOARD_PASTE:
+		g_debug("keybind: clipboard paste requested");
 		gst_window_paste_clipboard(window);
 		return;
 	case GST_ACTION_PASTE_PRIMARY:
@@ -1655,18 +1659,33 @@ on_selection_notify(
 	gpointer    user_data
 ){
 	if (data == NULL || len <= 0) {
+		g_debug("on_selection_notify: no data (data=%p len=%d)",
+			(void *)data, len);
 		return;
 	}
 
-	/* Wrap in bracketed paste if enabled */
-	if (gst_terminal_has_mode(terminal, GST_MODE_BRCKTPASTE)) {
-		gst_pty_write(pty, "\033[200~", 6);
-	}
-
-	gst_pty_write(pty, data, (gssize)len);
+	g_debug("on_selection_notify: pasting %d bytes, bracketed=%d",
+		len, gst_terminal_has_mode(terminal, GST_MODE_BRCKTPASTE));
 
 	if (gst_terminal_has_mode(terminal, GST_MODE_BRCKTPASTE)) {
-		gst_pty_write(pty, "\033[201~", 6);
+		/*
+		 * Combine bracketed paste markers and data into a single
+		 * write. Three separate writes can fragment through SSH,
+		 * causing remote tmux to misparse the bracketed paste
+		 * (the end marker arrives in a separate TCP segment).
+		 */
+		gchar *buf;
+		gssize total;
+
+		total = 6 + (gssize)len + 6;
+		buf = g_malloc(total);
+		memcpy(buf, "\033[200~", 6);
+		memcpy(buf + 6, data, len);
+		memcpy(buf + 6 + len, "\033[201~", 6);
+		gst_pty_write(pty, buf, total);
+		g_free(buf);
+	} else {
+		gst_pty_write(pty, data, (gssize)len);
 	}
 }
 

@@ -13,6 +13,11 @@
  * If base64 data is "?", the terminal should respond with the
  * current selection contents. This is disabled by default for
  * security (allow_read = FALSE).
+ *
+ * Also handles DCS tmux passthrough:
+ *   ESC P tmux; ESC <doubled-inner> ESC \
+ * When tmux wraps OSC 52 in DCS passthrough, the inner sequence
+ * is extracted, un-doubled, and re-dispatched.
  */
 
 #include "gst-osc52-module.h"
@@ -23,6 +28,7 @@
 
 #include <unistd.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 struct _GstOsc52Module
 {
@@ -35,6 +41,16 @@ struct _GstOsc52Module
 
 static void
 gst_osc52_module_escape_handler_init(GstEscapeHandlerInterface *iface);
+
+/* Forward declaration for recursive dispatch */
+static gboolean
+gst_osc52_module_handle_escape_string(
+	GstEscapeHandler *handler,
+	gchar             str_type,
+	const gchar      *buf,
+	gsize             len,
+	gpointer          terminal
+);
 
 G_DEFINE_TYPE_WITH_CODE(GstOsc52Module, gst_osc52_module,
 	GST_TYPE_MODULE,
@@ -112,20 +128,25 @@ osc52_set_clipboard_external(
 	gboolean     is_clipboard
 ){
 	GPtrArray *argv;
+	GPid child_pid;
 	gint stdin_fd;
 	GError *error;
 	gboolean spawned;
 	gssize written;
 	gsize total;
+	gint child_status;
+	const gchar *tool_name;
 
 	argv = g_ptr_array_new();
 
 	if (g_getenv("WAYLAND_DISPLAY") != NULL) {
+		tool_name = "wl-copy";
 		g_ptr_array_add(argv, (gpointer)"wl-copy");
 		if (!is_clipboard) {
 			g_ptr_array_add(argv, (gpointer)"--primary");
 		}
 	} else {
+		tool_name = "xclip";
 		g_ptr_array_add(argv, (gpointer)"xclip");
 		g_ptr_array_add(argv, (gpointer)"-selection");
 		g_ptr_array_add(argv,
@@ -138,19 +159,24 @@ osc52_set_clipboard_external(
 		NULL,
 		(gchar **)argv->pdata,
 		NULL,
-		G_SPAWN_SEARCH_PATH,
-		NULL, NULL, NULL,
+		G_SPAWN_SEARCH_PATH | G_SPAWN_STDERR_TO_DEV_NULL
+			| G_SPAWN_DO_NOT_REAP_CHILD,
+		NULL, NULL, &child_pid,
 		&stdin_fd, NULL, NULL,
 		&error);
 
 	g_ptr_array_free(argv, TRUE);
 
 	if (!spawned) {
-		g_debug("osc52: clipboard command failed: %s",
-			error->message);
+		g_warning("osc52: failed to spawn %s: %s",
+			tool_name, error->message);
 		g_error_free(error);
 		return FALSE;
 	}
+
+	g_debug("osc52: spawned %s (pid=%d) for %s, writing %zu bytes",
+		tool_name, (gint)child_pid,
+		is_clipboard ? "clipboard" : "primary", len);
 
 	/* Write text to stdin, handling partial writes */
 	total = 0;
@@ -160,13 +186,123 @@ osc52_set_clipboard_external(
 			if (errno == EINTR) {
 				continue;
 			}
+			g_warning("osc52: write to %s stdin failed: %s",
+				tool_name, g_strerror(errno));
 			break;
 		}
 		total += (gsize)written;
 	}
 	close(stdin_fd);
 
+	/* Wait for child to finish and check exit status */
+	if (waitpid(child_pid, &child_status, 0) > 0) {
+		if (WIFEXITED(child_status) && WEXITSTATUS(child_status) != 0) {
+			g_warning("osc52: %s exited with status %d",
+				tool_name, WEXITSTATUS(child_status));
+			g_spawn_close_pid(child_pid);
+			return FALSE;
+		} else if (WIFSIGNALED(child_status)) {
+			g_warning("osc52: %s killed by signal %d",
+				tool_name, WTERMSIG(child_status));
+			g_spawn_close_pid(child_pid);
+			return FALSE;
+		}
+	}
+	g_spawn_close_pid(child_pid);
+
+	g_debug("osc52: %s completed successfully (%zu bytes written)",
+		tool_name, total);
+
 	return (total == len);
+}
+
+/* ===== DCS tmux passthrough ===== */
+
+/*
+ * osc52_handle_tmux_passthrough:
+ * @self: The OSC 52 module instance
+ * @buf: Buffer starting after "tmux;" prefix
+ * @len: Length of remaining buffer
+ * @terminal: The terminal instance
+ *
+ * Extracts the inner escape from a DCS tmux passthrough sequence.
+ * tmux doubles all ESC bytes in the inner content, so \e\e becomes \e.
+ * If the inner sequence is OSC (ESC ]), re-dispatches to the main handler.
+ *
+ * DCS passthrough format: ESC P tmux; ESC <doubled-inner> ESC \
+ * The buffer we receive starts after "tmux;" and contains the
+ * doubled inner content.
+ *
+ * Returns: TRUE if the sequence was handled
+ */
+static gboolean
+osc52_handle_tmux_passthrough(
+	GstOsc52Module *self,
+	const gchar    *buf,
+	gsize           len,
+	gpointer        terminal
+){
+	g_autofree gchar *inner = NULL;
+	gsize inner_len;
+	gsize i;
+	gsize j;
+
+	g_debug("osc52: DCS tmux passthrough detected (len=%zu)", len);
+
+	if (len < 2) {
+		g_debug("osc52: tmux passthrough too short");
+		return FALSE;
+	}
+
+	/* First byte should be ESC (0x1b) */
+	if ((guchar)buf[0] != 0x1b) {
+		g_debug("osc52: tmux passthrough inner doesn't start "
+			"with ESC (got 0x%02x)", (guchar)buf[0]);
+		return FALSE;
+	}
+
+	/* Second byte is the sequence type: ']' for OSC */
+	if (buf[1] != ']') {
+		g_debug("osc52: tmux passthrough inner is not OSC "
+			"(type='%c')", buf[1]);
+		return FALSE;
+	}
+
+	/*
+	 * Un-double ESC bytes: tmux doubles ESC in passthrough
+	 * so \e\e becomes \e in the original sequence.
+	 */
+	inner = g_malloc(len);
+	j = 0;
+	for (i = 0; i < len; i++) {
+		inner[j++] = buf[i];
+		/* Skip the doubled ESC */
+		if ((guchar)buf[i] == 0x1b && i + 1 < len &&
+		    (guchar)buf[i + 1] == 0x1b)
+		{
+			i++;
+		}
+	}
+	inner_len = j;
+
+	/* Skip the leading ESC ] to get the OSC content */
+	if (inner_len <= 2) {
+		g_debug("osc52: tmux passthrough inner too short "
+			"after un-doubling");
+		return FALSE;
+	}
+
+	g_debug("osc52: tmux passthrough extracted OSC "
+		"(inner_len=%zu, first 40: %.40s)",
+		inner_len - 2, inner + 2);
+
+	/* Re-dispatch as OSC with the extracted content (skip ESC ]) */
+	return gst_osc52_module_handle_escape_string(
+		GST_ESCAPE_HANDLER(self),
+		']',
+		inner + 2,
+		inner_len - 2,
+		terminal);
 }
 
 /* ===== GstEscapeHandler interface ===== */
@@ -179,6 +315,8 @@ osc52_set_clipboard_external(
  *
  * The raw buffer contains "52;<sel>;<base64data>" with semicolons
  * intact (dispatched before term_strparse corrupts them).
+ *
+ * Also handles DCS tmux passthrough wrapping OSC 52.
  */
 static gboolean
 gst_osc52_module_handle_escape_string(
@@ -200,6 +338,24 @@ gst_osc52_module_handle_escape_string(
 
 	self = GST_OSC52_MODULE(handler);
 
+	g_debug("osc52: handle_escape_string type='%c' len=%zu "
+		"buf=%.60s",
+		str_type, len,
+		(buf != NULL && len > 0) ? buf : "(null)");
+
+	/*
+	 * Handle DCS tmux passthrough:
+	 * tmux wraps escape sequences as: ESC P tmux; ESC <inner> ESC \
+	 * The buffer contains "tmux;\e..." after the DCS prefix.
+	 */
+	if (str_type == 'P') {
+		if (len > 6 && memcmp(buf, "tmux;", 5) == 0) {
+			return osc52_handle_tmux_passthrough(
+				self, buf + 5, len - 5, terminal);
+		}
+		return FALSE;
+	}
+
 	/* Only handle OSC sequences */
 	if (str_type != ']') {
 		return FALSE;
@@ -211,8 +367,11 @@ gst_osc52_module_handle_escape_string(
 		return FALSE;
 	}
 
+	g_debug("osc52: OSC 52 sequence detected");
+
 	/* Skip semicolon after "52" */
 	if (*endptr != ';') {
+		g_debug("osc52: missing semicolon after '52'");
 		return FALSE;
 	}
 	sel_start = endptr + 1;
@@ -220,6 +379,7 @@ gst_osc52_module_handle_escape_string(
 	/* Parse selection character (c, p, s, 0, etc.) */
 	data_start = strchr(sel_start, ';');
 	if (data_start == NULL) {
+		g_debug("osc52: missing data semicolon");
 		return FALSE;
 	}
 
@@ -227,8 +387,20 @@ gst_osc52_module_handle_escape_string(
 	sel_char = sel_start[0];
 	data_start++; /* skip the semicolon */
 
-	/* Determine target clipboard */
-	is_clipboard = (sel_char == 'c' || sel_char == 's');
+	/*
+	 * Determine target clipboard.
+	 * Only 'p' and '0'-'7' explicitly target PRIMARY selection.
+	 * Everything else — 'c', 's', empty field (tmux sends "52;;"),
+	 * or unknown — targets CLIPBOARD. An empty selection field is
+	 * common from tmux and defaults to clipboard per xterm convention.
+	 */
+	is_clipboard = !(sel_char == 'p' ||
+		(sel_char >= '0' && sel_char <= '7'));
+
+	g_debug("osc52: sel='%c' target=%s data_offset=%zu",
+		sel_char,
+		is_clipboard ? "clipboard" : "primary",
+		(gsize)(data_start - buf));
 
 	/* Check for query ("?") */
 	if (data_start[0] == '?' && (data_start[1] == '\0' ||
@@ -256,14 +428,19 @@ gst_osc52_module_handle_escape_string(
 
 		data_len = len - (gsize)(data_start - buf);
 
+		g_debug("osc52: decoding base64 (%zu bytes)", data_len);
+
 		decoded = g_base64_decode_inplace(
 			g_strndup(data_start, data_len),
 			&decoded_len);
 
 		if (decoded == NULL || decoded_len == 0) {
+			g_debug("osc52: base64 decode failed or empty");
 			g_free(decoded);
 			return TRUE;
 		}
+
+		g_debug("osc52: decoded %zu bytes", decoded_len);
 
 		/* Enforce size limit */
 		if (decoded_len > self->max_bytes) {
@@ -305,12 +482,18 @@ gst_osc52_module_handle_escape_string(
 				gst_window_set_selection(
 					GST_WINDOW(window),
 					text, is_clipboard);
+				g_debug("osc52: window API set_selection "
+					"called");
+			} else {
+				g_debug("osc52: no window available for "
+					"set_selection");
 			}
 
 			g_debug("osc52: set %s (%zu bytes, %s)",
 				is_clipboard ? "clipboard" : "primary",
 				decoded_len,
-				ext_ok ? "external" : "window-api");
+				ext_ok ? "external+window"
+				       : "window-api-only");
 		}
 
 		g_free(decoded);
@@ -346,7 +529,7 @@ gst_osc52_module_init(GstOsc52Module *self)
 {
 	self->allow_read = FALSE;
 	self->allow_write = TRUE;
-	self->max_bytes = 100000;
+	self->max_bytes = 786432;
 }
 
 /* ===== Module entry point ===== */

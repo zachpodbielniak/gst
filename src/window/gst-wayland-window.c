@@ -1409,7 +1409,15 @@ gst_wayland_window_paste_clipboard_impl(GstWindow *window)
 	 * data_source.send callback can provide, but that callback can't
 	 * fire while we're blocked.
 	 */
+	g_debug("paste_clipboard: data_source=%p clipboard_text=%p "
+		"data_offer=%p",
+		(void *)self->data_source,
+		(void *)self->clipboard_text,
+		(void *)self->data_offer);
+
 	if (self->data_source != NULL && self->clipboard_text != NULL) {
+		g_debug("paste_clipboard: using stored text (%d bytes)",
+			(gint)strlen(self->clipboard_text));
 		g_signal_emit_by_name(self, "selection-notify",
 			self->clipboard_text,
 			(gint)strlen(self->clipboard_text));
@@ -1417,6 +1425,7 @@ gst_wayland_window_paste_clipboard_impl(GstWindow *window)
 	}
 
 	if (self->data_offer == NULL) {
+		g_debug("paste_clipboard: no data_offer, nothing to paste");
 		return;
 	}
 

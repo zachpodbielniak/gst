@@ -2067,6 +2067,11 @@ term_strhandle(GstTerminal *term)
 
 	priv->esc &= ~(GST_ESC_STR_END | GST_ESC_STR);
 
+	g_debug("term_strhandle: type='%c' len=%zu buf=%.40s",
+		priv->str_type, priv->str_len,
+		(priv->str_buf && priv->str_len > 0)
+			? priv->str_buf : "(empty)");
+
 	/*
 	 * APC and DCS sequences must be dispatched with the raw buffer
 	 * intact. term_strparse() replaces ';' with '\0' which corrupts
@@ -2076,6 +2081,9 @@ term_strhandle(GstTerminal *term)
 	if (priv->str_type == '_' || priv->str_type == 'P') {
 		if (priv->str_buf != NULL && priv->str_len > 0) {
 			priv->str_buf[priv->str_len] = '\0';
+			g_debug("term_strhandle: dispatching %s (len=%zu)",
+				priv->str_type == 'P' ? "DCS" : "APC",
+				priv->str_len);
 			g_signal_emit(term, signals[SIGNAL_ESCAPE_STRING], 0,
 				priv->str_type, priv->str_buf,
 				(gulong)priv->str_len);
@@ -2132,6 +2140,9 @@ term_strhandle(GstTerminal *term)
 				break;
 			default:
 				/* Dispatch unhandled OSC to modules */
+				g_debug("term_strhandle: OSC %d unhandled, "
+					"dispatching to modules (raw_len=%zu)",
+					par, raw_len);
 				if (raw_buf != NULL) {
 					g_signal_emit(term,
 						signals[SIGNAL_ESCAPE_STRING], 0,
@@ -2552,6 +2563,13 @@ gst_terminal_put_char(
 				priv->str_buf = g_realloc(priv->str_buf, priv->str_siz);
 			}
 			priv->str_buf[priv->str_len++] = (gchar)rune;
+		} else if (priv->str_buf != NULL &&
+			   priv->str_len == GST_MAX_STR_LEN)
+		{
+			g_warning("escape string buffer overflow "
+				"(%d bytes, type='%c')",
+				GST_MAX_STR_LEN, priv->str_type);
+			priv->str_len++; /* prevent repeated warnings */
 		}
 		return;
 	}

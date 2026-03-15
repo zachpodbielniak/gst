@@ -97,7 +97,7 @@ modules:
     enabled: true
     allow_read: true
     allow_write: true
-    max_bytes: 100000
+    max_bytes: 786432
 
   sync_update:
     enabled: true
