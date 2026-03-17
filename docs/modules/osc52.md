@@ -142,6 +142,8 @@ The module uses external clipboard tools to reliably set the system clipboard:
 
 These tools bypass the Wayland input serial requirement for `wl_data_device.set_selection`, which silently fails for programmatic clipboard sets (e.g., OSC 52 arriving over SSH). If neither tool is available, the module falls back to the window's built-in selection API.
 
+**Important:** The module intentionally does not also claim clipboard ownership via the internal window API when an external tool succeeds. Doing so would make GST hold a `wl_data_source` with a cached copy of the OSC 52 content. If you then copied from another app, Wayland would send a `cancelled` event asynchronously — but if you pasted before that event was processed, GST would return the stale OSC 52 content instead of the new clipboard. The external tool holds the clipboard; GST reads it back through the normal `data_offer` path.
+
 On Fedora: `sudo dnf install wl-clipboard xclip`
 
 ## Notes

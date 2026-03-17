@@ -471,29 +471,37 @@ gst_osc52_module_handle_escape_string(
 				decoded_len, is_clipboard);
 
 			/*
-			 * Always set via window API as well. This gives
-			 * the terminal a cached copy for self-paste (the
-			 * Wayland deadlock avoidance path) and acts as a
-			 * fallback if the external tool is missing.
+			 * Only use the window API as a fallback when the
+			 * external tool is unavailable. Calling
+			 * gst_window_set_selection on success would make
+			 * GST claim Wayland clipboard ownership (setting
+			 * data_source + clipboard_text). That causes the
+			 * paste fast-path to return stale OSC 52 content
+			 * when the user subsequently copies from another
+			 * app and pastes before the async cancelled event
+			 * is processed.
 			 */
-			mgr = gst_module_manager_get_default();
-			window = gst_module_manager_get_window(mgr);
-			if (window != NULL && GST_IS_WINDOW(window)) {
-				gst_window_set_selection(
-					GST_WINDOW(window),
-					text, is_clipboard);
-				g_debug("osc52: window API set_selection "
-					"called");
-			} else {
-				g_debug("osc52: no window available for "
-					"set_selection");
+			if (!ext_ok) {
+				mgr = gst_module_manager_get_default();
+				window = gst_module_manager_get_window(mgr);
+				if (window != NULL && GST_IS_WINDOW(window)) {
+					gst_window_set_selection(
+						GST_WINDOW(window),
+						text, is_clipboard);
+					g_debug("osc52: window API "
+						"set_selection called "
+						"(fallback)");
+				} else {
+					g_debug("osc52: no window available "
+						"for set_selection fallback");
+				}
 			}
 
 			g_debug("osc52: set %s (%zu bytes, %s)",
 				is_clipboard ? "clipboard" : "primary",
 				decoded_len,
-				ext_ok ? "external+window"
-				       : "window-api-only");
+				ext_ok ? "external-only"
+				       : "window-api-fallback");
 		}
 
 		g_free(decoded);
