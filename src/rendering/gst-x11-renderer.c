@@ -911,12 +911,17 @@ x11_renderer_draw_cursor_impl(
 
 	/* Erase old cursor by redrawing the entire line (matches st behavior).
 	 * Single-cell erase is insufficient: Xft anti-aliased glyph edges
-	 * from the cursor's inverted-color block bleed into adjacent cells. */
+	 * from the cursor's inverted-color block bleed into adjacent cells.
+	 * Also redraw the new cursor line when it differs from the old one,
+	 * so the cursor is always drawn on freshly rendered content. */
 	{
 		gint erase_cols;
 
 		gst_terminal_get_size(term, &erase_cols, NULL);
 		x11_renderer_draw_line_impl(renderer, oy, 0, erase_cols);
+		if (cy != oy) {
+			x11_renderer_draw_line_impl(renderer, cy, 0, erase_cols);
+		}
 	}
 
 	/* Check if cursor is hidden */

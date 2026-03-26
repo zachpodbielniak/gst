@@ -949,8 +949,20 @@ wl_renderer_draw_cursor_impl(
 		return;
 	}
 
-	/* Erase old cursor by redrawing that cell */
-	wl_renderer_draw_line_impl(renderer, oy, ox, ox + 1);
+	/* Erase old cursor by redrawing the entire line. Single-cell erase
+	 * is insufficient: anti-aliased glyph edges from the cursor's
+	 * inverted-color block bleed into adjacent cells. Also redraw the
+	 * new cursor line when it differs, so the cursor is always drawn
+	 * on freshly rendered content. */
+	{
+		gint erase_cols;
+
+		gst_terminal_get_size(term, &erase_cols, NULL);
+		wl_renderer_draw_line_impl(renderer, oy, 0, erase_cols);
+		if (cy != oy) {
+			wl_renderer_draw_line_impl(renderer, cy, 0, erase_cols);
+		}
+	}
 
 	/* Check if cursor is hidden */
 	if (gst_terminal_has_mode(term, GST_MODE_HIDE)) {
