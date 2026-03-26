@@ -2364,8 +2364,9 @@ skip_c_config:
 	g_main_loop_unref(main_loop);
 	g_object_unref(renderer);
 	g_object_unref(pty);
-	g_object_unref(window);
 
+	/* Unload fonts before destroying the window/display —
+	 * XftFontClose() needs a live Display connection */
 	if (font_cache != NULL) {
 		gst_font_cache_unload_fonts(font_cache);
 		g_object_unref(font_cache);
@@ -2376,6 +2377,8 @@ skip_c_config:
 		g_object_unref(cairo_font_cache);
 	}
 #endif
+
+	g_object_unref(window);
 
 	g_object_unref(selection);
 	g_object_unref(terminal);
