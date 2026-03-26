@@ -1813,7 +1813,8 @@ init_x11_backend(
 
 	x11_renderer = gst_x11_renderer_new(
 		terminal, display, xid, visual, colormap,
-		screen, font_cache, (gint)cfg_border_px);
+		screen, gst_x11_window_get_depth(x11_win),
+		x11_win, font_cache, (gint)cfg_border_px);
 	renderer = GST_RENDERER(x11_renderer);
 
 	/* Load colors from config */

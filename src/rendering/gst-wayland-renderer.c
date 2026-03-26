@@ -1139,14 +1139,7 @@ wl_renderer_render_impl(GstRenderer *renderer)
 			mgr, &ctx.base, self->win_w, self->win_h);
 	}
 
-	/* Flush Cairo surface and commit to Wayland */
-	cairo_surface_flush(self->cairo_surface);
-	wl_surface_attach(self->wl_surface, self->buffer, 0, 0);
-	wl_surface_damage_buffer(self->wl_surface, 0, 0,
-		self->win_w, self->win_h);
-	wl_surface_commit(self->wl_surface);
-
-	/* Clear terminal dirty flags */
+	/* Clear terminal dirty flags (finish_draw presents the buffer) */
 	gst_terminal_clear_dirty(term);
 }
 

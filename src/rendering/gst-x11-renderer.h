@@ -21,8 +21,9 @@
 #include "../config/gst-config.h"
 #include "../gst-types.h"
 
-/* Forward declaration to avoid circular includes */
+/* Forward declarations to avoid circular includes */
 typedef struct _GstSelection GstSelection;
+typedef struct _GstX11Window GstX11Window;
 
 G_BEGIN_DECLS
 
@@ -41,6 +42,8 @@ gst_x11_renderer_get_type(void) G_GNUC_CONST;
  * @visual: X11 visual
  * @colormap: X11 colormap
  * @screen: X11 screen number
+ * @depth: window depth (32 for ARGB visual, else DefaultDepth)
+ * @x11_window: (transfer none): the X11 window object (for opacity reads)
  * @font_cache: the font cache to use
  * @borderpx: border padding in pixels
  *
@@ -57,6 +60,8 @@ gst_x11_renderer_new(
 	Visual          *visual,
 	Colormap        colormap,
 	gint            screen,
+	gint            depth,
+	GstX11Window    *x11_window,
 	GstFontCache    *font_cache,
 	gint            borderpx
 );

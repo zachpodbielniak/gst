@@ -106,6 +106,30 @@ gst_x11_window_get_colormap(GstX11Window *self);
 gint
 gst_x11_window_get_screen(GstX11Window *self);
 
+/**
+ * gst_x11_window_get_depth:
+ * @self: A #GstX11Window
+ *
+ * Gets the window depth (32 for ARGB visual, else default).
+ *
+ * Returns: the window depth in bits
+ */
+gint
+gst_x11_window_get_depth(GstX11Window *self);
+
+/**
+ * gst_x11_window_get_opacity:
+ * @self: A #GstX11Window
+ *
+ * Gets the current opacity value. The X11 renderer uses
+ * this to paint backgrounds with alpha transparency when
+ * an ARGB visual is available.
+ *
+ * Returns: opacity between 0.0 (fully transparent) and 1.0 (opaque)
+ */
+gdouble
+gst_x11_window_get_opacity(GstX11Window *self);
+
 G_END_DECLS
 
 #endif /* GST_X11_WINDOW_H */

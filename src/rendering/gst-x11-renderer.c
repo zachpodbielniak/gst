@@ -20,6 +20,8 @@
 #include "../boxed/gst-cursor.h"
 #include "../selection/gst-selection.h"
 #include "../module/gst-module-manager.h"
+#include "../window/gst-x11-window.h"
+#include <X11/extensions/Xrender.h>
 #include <string.h>
 #include <math.h>
 
@@ -116,6 +118,11 @@ struct _GstX11Renderer
 	/* Wallpaper state (set during RENDER_BACKGROUND dispatch) */
 	gboolean has_wallpaper;
 	gdouble wallpaper_bg_alpha;
+
+	/* ARGB transparency support */
+	gint depth;              /* 32 for ARGB visual, else DefaultDepth */
+	GstX11Window *x11_window; /* for reading opacity (not owned) */
+	gdouble last_opacity;    /* last rendered opacity for change detection */
 };
 
 G_DEFINE_TYPE(GstX11Renderer, gst_x11_renderer, GST_TYPE_RENDERER)
@@ -189,6 +196,61 @@ load_single_color(
 }
 
 /*
+ * x11_get_opacity:
+ * @self: the renderer
+ *
+ * Returns the current opacity from the X11 window, or 1.0 if
+ * no ARGB visual is active or no window is set.
+ *
+ * Returns: opacity between 0.0 and 1.0
+ */
+static gdouble
+x11_get_opacity(GstX11Renderer *self)
+{
+	if (self->depth == 32 && self->x11_window != NULL) {
+		return gst_x11_window_get_opacity(self->x11_window);
+	}
+	return 1.0;
+}
+
+/*
+ * x11_fill_rect_alpha:
+ * @self: the renderer
+ * @x: left edge
+ * @y: top edge
+ * @w: width
+ * @h: height
+ * @base_color: the color to draw (will be premultiplied with alpha)
+ * @alpha: opacity (0.0-1.0)
+ *
+ * Fills a rectangle with a premultiplied-alpha color on a 32-bit
+ * ARGB pixmap. XRender requires premultiplied alpha: each color
+ * component is scaled by alpha before compositing.
+ */
+static void
+x11_fill_rect_alpha(
+	GstX11Renderer  *self,
+	gint            x,
+	gint            y,
+	guint           w,
+	guint           h,
+	XftColor        *base_color,
+	gdouble         alpha
+){
+	XftColor col;
+	XRenderColor rc;
+
+	rc.red   = (guint16)((gdouble)base_color->color.red   * alpha);
+	rc.green = (guint16)((gdouble)base_color->color.green * alpha);
+	rc.blue  = (guint16)((gdouble)base_color->color.blue  * alpha);
+	rc.alpha = (guint16)(alpha * (gdouble)0xFFFF);
+
+	XftColorAllocValue(self->display, self->vis, self->cmap, &rc, &col);
+	XftDrawRect(self->draw, &col, x, y, w, h);
+	XftColorFree(self->display, self->vis, self->cmap, &col);
+}
+
+/*
  * x11_clear_rect:
  * @self: the renderer
  * @x1: left edge
@@ -197,6 +259,7 @@ load_single_color(
  * @y2: bottom edge (exclusive)
  *
  * Clears a rectangle on the pixmap with the background color.
+ * Uses premultiplied alpha when a 32-bit ARGB visual is active.
  */
 static void
 x11_clear_rect(
@@ -206,8 +269,18 @@ x11_clear_rect(
 	gint            x2,
 	gint            y2
 ){
-	XftDrawRect(self->draw, &self->colors[self->default_bg],
-		x1, y1, (guint)(x2 - x1), (guint)(y2 - y1));
+	gdouble opacity;
+
+	opacity = x11_get_opacity(self);
+
+	if (self->depth == 32 && opacity < 1.0) {
+		x11_fill_rect_alpha(self, x1, y1,
+			(guint)(x2 - x1), (guint)(y2 - y1),
+			&self->colors[self->default_bg], opacity);
+	} else {
+		XftDrawRect(self->draw, &self->colors[self->default_bg],
+			x1, y1, (guint)(x2 - x1), (guint)(y2 - y1));
+	}
 }
 
 /*
@@ -234,7 +307,7 @@ x11_fill_render_context(
 	ctx->base.win_h      = self->win_h;
 	ctx->base.win_mode   = self->win_mode;
 	ctx->base.glyph_attr = 0;
-	ctx->base.opacity    = 1.0; /* X11: compositor handles window opacity */
+	ctx->base.opacity    = x11_get_opacity(self);
 
 	/* X11-specific fields */
 	ctx->display    = self->display;
@@ -482,13 +555,29 @@ x11_draw_glyph_specs(
 	}
 
 	/* Fill background: skip for default-bg cells when wallpaper is active
-	 * so the background image shows through. X11 XftDrawRect cannot do
-	 * alpha blending on a Pixmap, so we skip entirely rather than tinting. */
+	 * so the background image shows through.
+	 * For ARGB transparency: default-bg cells use premultiplied alpha
+	 * so the desktop shows through; non-default cells stay fully opaque. */
 	if (self->has_wallpaper
 	    && bg_idx == (guint32)self->default_bg
 	    && !(mode & GST_GLYPH_ATTR_REVERSE))
 	{
 		/* wallpaper is already painted underneath; leave it visible */
+	}
+	else if (self->depth == 32
+	         && bg_idx == (guint32)self->default_bg
+	         && !(mode & GST_GLYPH_ATTR_REVERSE))
+	{
+		gdouble opacity;
+
+		opacity = x11_get_opacity(self);
+		if (opacity < 1.0) {
+			x11_fill_rect_alpha(self, winx, winy,
+				(guint)width, (guint)self->ch, bg, opacity);
+		} else {
+			XftDrawRect(self->draw, bg, winx, winy,
+				(guint)width, (guint)self->ch);
+		}
 	}
 	else
 	{
@@ -820,8 +909,15 @@ x11_renderer_draw_cursor_impl(
 		return;
 	}
 
-	/* Erase old cursor by redrawing that cell */
-	x11_renderer_draw_line_impl(renderer, oy, ox, ox + 1);
+	/* Erase old cursor by redrawing the entire line (matches st behavior).
+	 * Single-cell erase is insufficient: Xft anti-aliased glyph edges
+	 * from the cursor's inverted-color block bleed into adjacent cells. */
+	{
+		gint erase_cols;
+
+		gst_terminal_get_size(term, &erase_cols, NULL);
+		x11_renderer_draw_line_impl(renderer, oy, 0, erase_cols);
+	}
 
 	/* Check if cursor is hidden */
 	if (gst_terminal_has_mode(term, GST_MODE_HIDE)) {
@@ -923,6 +1019,22 @@ x11_renderer_render_impl(GstRenderer *renderer)
 	cx = cursor->x;
 	cy = cursor->y;
 
+	/* Detect opacity changes: when transparency changes, repaint
+	 * the entire pixmap background and mark all lines dirty so
+	 * every cell gets redrawn with the new alpha value. */
+	if (self->depth == 32) {
+		gdouble cur_opacity;
+
+		cur_opacity = x11_get_opacity(self);
+		if (cur_opacity != self->last_opacity) {
+			self->last_opacity = cur_opacity;
+			x11_clear_rect(self, 0, 0, self->win_w, self->win_h);
+			for (y = 0; y < rows; y++) {
+				gst_terminal_mark_dirty(term, y);
+			}
+		}
+	}
+
 	/* Dispatch render background to modules (wallpaper draws here) */
 	{
 		GstModuleManager *mgr;
@@ -969,13 +1081,7 @@ x11_renderer_render_impl(GstRenderer *renderer)
 			mgr, &ctx.base, self->win_w, self->win_h);
 	}
 
-	/* Copy pixmap to window (double-buffer flip) */
-	XCopyArea(self->display, self->buf, self->xwindow, self->gc,
-		0, 0, (guint)self->win_w, (guint)self->win_h, 0, 0);
-	XSetForeground(self->display, self->gc,
-		self->colors[self->default_bg].pixel);
-
-	/* Clear terminal dirty flags */
+	/* Clear terminal dirty flags (finish_draw presents the buffer) */
 	gst_terminal_clear_dirty(term);
 }
 
@@ -1016,13 +1122,13 @@ x11_renderer_resize_impl(
 		self->th = rows * self->ch;
 	}
 
-	/* Recreate pixmap */
+	/* Recreate pixmap (use ARGB depth if available) */
 	if (self->buf != 0) {
 		XFreePixmap(self->display, self->buf);
 	}
 	self->buf = XCreatePixmap(self->display, self->xwindow,
 		(guint)self->win_w, (guint)self->win_h,
-		(guint)DefaultDepth(self->display, self->screen));
+		(guint)self->depth);
 
 	/* Recreate XftDraw */
 	if (self->draw != NULL) {
@@ -1212,7 +1318,9 @@ x11_renderer_capture_screenshot_impl(
 			dst[0] = (guint8)((pixel >> 16) & 0xFF); /* R */
 			dst[1] = (guint8)((pixel >>  8) & 0xFF); /* G */
 			dst[2] = (guint8)((pixel      ) & 0xFF); /* B */
-			dst[3] = 0xFF;                            /* A (opaque) */
+			dst[3] = (self->depth == 32)
+				? (guint8)((pixel >> 24) & 0xFF)
+				: (guint8)0xFF;                   /* A */
 		}
 	}
 
@@ -1276,6 +1384,9 @@ gst_x11_renderer_init(GstX11Renderer *self)
 	self->default_cs = GST_COLOR_CURSOR_BG;
 	self->default_rcs = GST_COLOR_REVERSE_BG;
 	self->selection = NULL;
+	self->depth = 0;
+	self->x11_window = NULL;
+	self->last_opacity = 1.0;
 }
 
 /* ===== Public API ===== */
@@ -1304,6 +1415,8 @@ gst_x11_renderer_new(
 	Visual          *visual,
 	Colormap        colormap,
 	gint            screen,
+	gint            depth,
+	GstX11Window    *x11_window,
 	GstFontCache    *font_cache,
 	gint            borderpx
 ){
@@ -1321,6 +1434,8 @@ gst_x11_renderer_new(
 	self->vis = visual;
 	self->cmap = colormap;
 	self->screen = screen;
+	self->depth = depth;
+	self->x11_window = x11_window;
 	self->font_cache = font_cache;
 	self->borderpx = borderpx;
 
@@ -1340,10 +1455,10 @@ gst_x11_renderer_new(
 	gcvalues.graphics_exposures = False;
 	self->gc = XCreateGC(display, xwindow, GCGraphicsExposures, &gcvalues);
 
-	/* Create pixmap for double buffering */
+	/* Create pixmap for double buffering (use ARGB depth if available) */
 	self->buf = XCreatePixmap(display, xwindow,
 		(guint)self->win_w, (guint)self->win_h,
-		(guint)DefaultDepth(display, screen));
+		(guint)self->depth);
 
 	/* Create Xft draw context on pixmap */
 	self->draw = XftDrawCreate(display, self->buf, visual, colormap);

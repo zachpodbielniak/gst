@@ -11,6 +11,7 @@
 
 #include "gst-x11-window.h"
 #include <X11/Xft/Xft.h>
+#include <X11/extensions/Xrender.h>
 #include <X11/cursorfont.h>
 #include <string.h>
 #include <unistd.h>
@@ -38,6 +39,11 @@ struct _GstX11Window
 	Colormap colormap;
 	Visual *visual;
 	gint screen;
+	gint depth;
+	gboolean owns_colormap;
+
+	/* Opacity (stored for renderer to read when using ARGB visual) */
+	gdouble opacity;
 
 	/* X atoms */
 	Atom xembed;
@@ -496,12 +502,8 @@ gst_x11_window_set_opacity_impl(
 	gdouble    opacity
 ){
 	GstX11Window *self;
-	Atom atom;
-	guint32 val;
 
 	self = GST_X11_WINDOW(window);
-
-	atom = XInternAtom(self->display, "_NET_WM_WINDOW_OPACITY", False);
 
 	/* Clamp opacity to [0.0, 1.0] */
 	if (opacity < 0.0) {
@@ -510,12 +512,24 @@ gst_x11_window_set_opacity_impl(
 		opacity = 1.0;
 	}
 
-	val = (guint32)(opacity * (gdouble)0xFFFFFFFF);
+	/* Store for renderer to read (used by ARGB path) */
+	self->opacity = opacity;
 
-	XChangeProperty(self->display, self->xwindow, atom,
-		XA_CARDINAL, 32, PropModeReplace,
-		(guchar *)&val, 1);
-	XSync(self->display, False);
+	/* When using a 32-bit ARGB visual, the renderer handles per-pixel
+	 * alpha compositing directly — no need for the compositor hint.
+	 * Fall back to _NET_WM_WINDOW_OPACITY for non-ARGB visuals. */
+	if (self->depth != 32) {
+		Atom atom;
+		guint32 val;
+
+		atom = XInternAtom(self->display,
+			"_NET_WM_WINDOW_OPACITY", False);
+		val = (guint32)(opacity * (gdouble)0xFFFFFFFF);
+		XChangeProperty(self->display, self->xwindow, atom,
+			XA_CARDINAL, 32, PropModeReplace,
+			(guchar *)&val, 1);
+		XSync(self->display, False);
+	}
 }
 
 /*
@@ -670,6 +684,14 @@ gst_x11_window_finalize(GObject *object)
 		self->xwindow = 0;
 	}
 
+	/* Free custom colormap (only if we created one for ARGB visual) */
+	if (self->owns_colormap && self->colormap != 0
+	    && self->display != NULL)
+	{
+		XFreeColormap(self->display, self->colormap);
+		self->colormap = 0;
+	}
+
 	/* Close display */
 	if (self->display != NULL) {
 		XCloseDisplay(self->display);
@@ -713,6 +735,9 @@ gst_x11_window_init(GstX11Window *self)
 	self->colormap = 0;
 	self->visual = NULL;
 	self->screen = 0;
+	self->depth = 0;
+	self->owns_colormap = FALSE;
+	self->opacity = 1.0;
 	self->xembed = 0;
 	self->wmdeletewin = 0;
 	self->netwmname = 0;
@@ -772,17 +797,68 @@ gst_x11_window_new(
 	self = (GstX11Window *)g_object_new(GST_TYPE_X11_WINDOW, NULL);
 	self->display = dpy;
 	self->screen = XDefaultScreen(dpy);
-	self->visual = XDefaultVisual(dpy, self->screen);
-	self->colormap = XDefaultColormap(dpy, self->screen);
+
+	/* Try to find a 32-bit ARGB visual for per-pixel alpha compositing.
+	 * This enables proper transparency where background is translucent
+	 * but text remains fully opaque (the st alpha patch approach). */
+	{
+		XVisualInfo tpl;
+		XVisualInfo *vi_list;
+		int nvis;
+		int i;
+
+		memset(&tpl, 0, sizeof(tpl));
+		tpl.screen = self->screen;
+		tpl.depth = 32;
+		tpl.class = TrueColor;
+
+		vi_list = XGetVisualInfo(dpy,
+			VisualScreenMask | VisualDepthMask | VisualClassMask,
+			&tpl, &nvis);
+
+		self->visual = NULL;
+		for (i = 0; vi_list != NULL && i < nvis; i++) {
+			XRenderPictFormat *fmt;
+
+			fmt = XRenderFindVisualFormat(dpy, vi_list[i].visual);
+			if (fmt != NULL && fmt->type == PictTypeDirect
+			    && fmt->direct.alphaMask != 0)
+			{
+				self->visual = vi_list[i].visual;
+				self->depth = 32;
+				self->colormap = XCreateColormap(dpy,
+					RootWindow(dpy, self->screen),
+					self->visual, AllocNone);
+				self->owns_colormap = TRUE;
+				break;
+			}
+		}
+
+		if (vi_list != NULL) {
+			XFree(vi_list);
+		}
+	}
+
+	/* Fall back to default visual if no ARGB visual was found */
+	if (self->visual == NULL) {
+		self->visual = XDefaultVisual(dpy, self->screen);
+		self->depth = XDefaultDepth(dpy, self->screen);
+		self->colormap = XDefaultColormap(dpy, self->screen);
+		self->owns_colormap = FALSE;
+	}
 
 	/* Calculate window size */
 	self->width = (guint)(2 * borderpx + cols * cw);
 	self->height = (guint)(2 * borderpx + rows * ch);
 
-	/* Set up window attributes */
+	/* Set up window attributes.
+	 * When using a 32-bit ARGB visual, use transparent black (0) for
+	 * background/border pixels so the alpha channel starts clear. */
 	memset(&attrs, 0, sizeof(attrs));
-	attrs.background_pixel = BlackPixel(dpy, self->screen);
-	attrs.border_pixel = BlackPixel(dpy, self->screen);
+	attrs.background_pixel = (self->depth == 32)
+		? 0 : BlackPixel(dpy, self->screen);
+	attrs.border_pixel = (self->depth == 32)
+		? 0 : BlackPixel(dpy, self->screen);
 	attrs.bit_gravity = NorthWestGravity;
 	attrs.event_mask = FocusChangeMask | KeyPressMask | KeyReleaseMask
 		| ExposureMask | VisibilityChangeMask | StructureNotifyMask
@@ -796,7 +872,7 @@ gst_x11_window_new(
 	/* Create window */
 	self->xwindow = XCreateWindow(dpy, parent, 0, 0,
 		self->width, self->height, 0,
-		XDefaultDepth(dpy, self->screen),
+		self->depth,
 		InputOutput, self->visual,
 		CWBackPixel | CWBorderPixel | CWBitGravity
 			| CWEventMask | CWColormap,
@@ -893,4 +969,20 @@ gst_x11_window_get_screen(GstX11Window *self)
 	g_return_val_if_fail(GST_IS_X11_WINDOW(self), 0);
 
 	return self->screen;
+}
+
+gint
+gst_x11_window_get_depth(GstX11Window *self)
+{
+	g_return_val_if_fail(GST_IS_X11_WINDOW(self), 0);
+
+	return self->depth;
+}
+
+gdouble
+gst_x11_window_get_opacity(GstX11Window *self)
+{
+	g_return_val_if_fail(GST_IS_X11_WINDOW(self), 1.0);
+
+	return self->opacity;
 }
