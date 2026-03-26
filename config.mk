@@ -206,7 +206,31 @@ show-config:
 	@echo "WEBVIEW:$(WEBVIEW)"
 	@echo "WEBVIEW_AVAILABLE:$(WEBVIEW_AVAILABLE)"
 
-# Fedora package names for dependencies
+# Distro auto-detection via /etc/os-release
+# Override with: make DISTRO=fedora install-deps
+DISTRO_ID := $(shell . /etc/os-release 2>/dev/null && echo $$ID)
+DISTRO_ID_LIKE := $(shell . /etc/os-release 2>/dev/null && echo $$ID_LIKE)
+
+# Map ID_LIKE fallbacks to a canonical distro family
+ifeq ($(DISTRO),)
+    ifneq ($(filter fedora,$(DISTRO_ID)),)
+        DISTRO := fedora
+    else ifneq ($(filter rhel centos,$(DISTRO_ID)),)
+        DISTRO := fedora
+    else ifneq ($(filter debian ubuntu,$(DISTRO_ID)),)
+        DISTRO := debian
+    else ifneq ($(filter arch,$(DISTRO_ID)),)
+        DISTRO := arch
+    else ifneq ($(filter fedora rhel centos,$(DISTRO_ID_LIKE)),)
+        DISTRO := fedora
+    else ifneq ($(filter debian ubuntu,$(DISTRO_ID_LIKE)),)
+        DISTRO := debian
+    else ifneq ($(filter arch,$(DISTRO_ID_LIKE)),)
+        DISTRO := arch
+    endif
+endif
+
+# Fedora / RHEL / CentOS (dnf)
 FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
 FEDORA_DEPS_REQUIRED := glib2-devel libX11-devel libXft-devel \
     fontconfig-devel libyaml-devel json-glib-devel
@@ -215,10 +239,45 @@ FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-dev
 FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel libpng-devel
 FEDORA_DEPS_WEBVIEW := libsoup3-devel json-glib-devel
 
-# Install build dependencies (Fedora/dnf)
+# Debian / Ubuntu (apt)
+DEBIAN_DEPS_TOOLS := gcc make pkg-config
+DEBIAN_DEPS_REQUIRED := libglib2.0-dev libx11-dev libxft-dev \
+    libfontconfig-dev libyaml-dev libjson-glib-dev
+DEBIAN_DEPS_GIR := gobject-introspection libgirepository1.0-dev
+DEBIAN_DEPS_WAYLAND := libwayland-dev libxkbcommon-dev libcairo2-dev libdecor-0-dev
+DEBIAN_DEPS_MCP := libsoup-3.0-dev libjson-glib-dev libpng-dev
+DEBIAN_DEPS_WEBVIEW := libsoup-3.0-dev libjson-glib-dev
+
+# Arch Linux (pacman)
+ARCH_DEPS_TOOLS := gcc make pkgconf
+ARCH_DEPS_REQUIRED := glib2 libx11 libxft fontconfig libyaml json-glib
+ARCH_DEPS_GIR := gobject-introspection
+ARCH_DEPS_WAYLAND := wayland libxkbcommon cairo libdecor
+ARCH_DEPS_MCP := libsoup3 libdex json-glib libpng
+ARCH_DEPS_WEBVIEW := libsoup3 json-glib
+
+# Install build dependencies (auto-detects distro)
 .PHONY: install-deps
 install-deps:
+ifeq ($(DISTRO),fedora)
 	sudo dnf install -y $(FEDORA_DEPS_TOOLS) $(FEDORA_DEPS_REQUIRED) \
 		$(if $(filter 1,$(BUILD_GIR)),$(FEDORA_DEPS_GIR)) \
 		$(if $(filter 1,$(BUILD_WAYLAND)),$(FEDORA_DEPS_WAYLAND)) \
-		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP))
+		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP)) \
+		$(if $(filter 1,$(WEBVIEW)),$(FEDORA_DEPS_WEBVIEW))
+else ifeq ($(DISTRO),debian)
+	sudo apt-get update
+	sudo apt-get install -y $(DEBIAN_DEPS_TOOLS) $(DEBIAN_DEPS_REQUIRED) \
+		$(if $(filter 1,$(BUILD_GIR)),$(DEBIAN_DEPS_GIR)) \
+		$(if $(filter 1,$(BUILD_WAYLAND)),$(DEBIAN_DEPS_WAYLAND)) \
+		$(if $(filter 1,$(MCP)),$(DEBIAN_DEPS_MCP)) \
+		$(if $(filter 1,$(WEBVIEW)),$(DEBIAN_DEPS_WEBVIEW))
+else ifeq ($(DISTRO),arch)
+	sudo pacman -S --needed --noconfirm $(ARCH_DEPS_TOOLS) $(ARCH_DEPS_REQUIRED) \
+		$(if $(filter 1,$(BUILD_GIR)),$(ARCH_DEPS_GIR)) \
+		$(if $(filter 1,$(BUILD_WAYLAND)),$(ARCH_DEPS_WAYLAND)) \
+		$(if $(filter 1,$(MCP)),$(ARCH_DEPS_MCP)) \
+		$(if $(filter 1,$(WEBVIEW)),$(ARCH_DEPS_WEBVIEW))
+else
+	$(error Unsupported distro "$(DISTRO_ID)". Override with: make DISTRO=fedora|debian|arch install-deps)
+endif

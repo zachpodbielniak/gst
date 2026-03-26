@@ -312,7 +312,7 @@ help:
 	@echo "  BUILD_TESTS=0 - Disable test building"
 	@echo ""
 	@echo "Utility targets:"
-	@echo "  install-deps     - Install build dependencies (Fedora/dnf)"
+	@echo "  install-deps     - Install build dependencies (auto-detects distro)"
 	@echo "  install-terminfo - Compile gst-256color terminfo entry"
 	@echo "  check-deps       - Check for required dependencies"
 	@echo "  show-config      - Show current build configuration"
