@@ -285,8 +285,8 @@ install-desktop:
 
 install-terminfo:
 	@echo "Compiling gst-256color terminfo..."
-	$(MKDIR_P) $(DESTDIR)$(DATADIR)/terminfo
-	tic -sx -o $(DESTDIR)$(DATADIR)/terminfo data/gst-256color.terminfo
+	$(MKDIR_P) $(DESTDIR)/usr/share/terminfo
+	tic -sx -o $(DESTDIR)/usr/share/terminfo data/gst-256color.terminfo
 
 # Uninstall
 .PHONY: uninstall
@@ -304,3 +304,4 @@ uninstall:
 	rm -rf $(DESTDIR)$(MODULEDIR)
 	rm -f $(DESTDIR)$(DATADIR)/applications/gst.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
+	rm -f $(DESTDIR)/usr/share/terminfo/g/gst-256color
