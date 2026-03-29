@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #include <wayland-client.h>
 #include <wayland-cursor.h>
@@ -1070,30 +1071,83 @@ registry_global_remove(
 
 /*
  * read_fd_to_string:
- * @fd: file descriptor to read from
+ * @fd: file descriptor to read from (closed on return)
+ * @timeout_ms: maximum wait in milliseconds, or -1 for no limit
  *
- * Reads all data from a file descriptor into a string.
- * Closes the fd when done.
+ * Reads all available data from @fd into a heap-allocated string.
+ * Uses non-blocking I/O with poll() so the caller is never blocked
+ * longer than @timeout_ms, preventing a hung clipboard source from
+ * freezing the event loop.
  *
- * Returns: (transfer full): the data as a string, or NULL
+ * Returns: (transfer full): the data as a NUL-terminated string
  */
 static gchar *
-read_fd_to_string(gint fd)
+read_fd_to_string(gint fd, gint timeout_ms)
 {
 	GString *buf;
 	gchar tmp[4096];
 	gssize n;
+	gint flags;
+	gint64 deadline;
+	struct pollfd pfd;
+
+	/* Set non-blocking so read() never stalls after poll() */
+	flags = fcntl(fd, F_GETFL, 0);
+	if (flags >= 0) {
+		fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	}
 
 	buf = g_string_new(NULL);
 
+	deadline = (timeout_ms >= 0)
+		? g_get_monotonic_time() + (gint64)timeout_ms * 1000
+		: G_MAXINT64;
+
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+
 	while (TRUE) {
+		gint remaining_ms;
+		gint ret;
+
+		if (timeout_ms >= 0) {
+			gint64 now;
+
+			now = g_get_monotonic_time();
+			if (now >= deadline) {
+				g_debug("read_fd_to_string: timeout after "
+					"%d ms (%zu bytes read)",
+					timeout_ms, buf->len);
+				break;
+			}
+			remaining_ms = (gint)((deadline - now) / 1000);
+			if (remaining_ms <= 0) {
+				remaining_ms = 1;
+			}
+		} else {
+			remaining_ms = -1;
+		}
+
+		ret = poll(&pfd, 1, remaining_ms);
+		if (ret < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			break;
+		}
+		if (ret == 0) {
+			g_debug("read_fd_to_string: poll timeout "
+				"(%zu bytes read)", buf->len);
+			break;
+		}
+
 		n = read(fd, tmp, sizeof(tmp));
 		if (n > 0) {
 			g_string_append_len(buf, tmp, n);
 		} else if (n == 0) {
 			break;
 		} else {
-			if (errno == EINTR) {
+			if (errno == EINTR || errno == EAGAIN) {
 				continue;
 			}
 			break;
@@ -1438,8 +1492,8 @@ gst_wayland_window_paste_clipboard_impl(GstWindow *window)
 	close(fds[1]);
 	wl_display_flush(self->display);
 
-	/* Read synchronously (small amount of data for paste) */
-	text = read_fd_to_string(fds[0]);
+	/* Read with timeout to avoid blocking if source app is hung */
+	text = read_fd_to_string(fds[0], 1500);
 	if (text != NULL && text[0] != '\0') {
 		g_signal_emit_by_name(self, "selection-notify",
 			text, (gint)strlen(text));
@@ -1487,7 +1541,7 @@ gst_wayland_window_paste_primary_impl(GstWindow *window)
 	close(fds[1]);
 	wl_display_flush(self->display);
 
-	text = read_fd_to_string(fds[0]);
+	text = read_fd_to_string(fds[0], 1500);
 	if (text != NULL && text[0] != '\0') {
 		g_signal_emit_by_name(self, "selection-notify",
 			text, (gint)strlen(text));

@@ -39,6 +39,16 @@ struct _GstOsc52Module
 	gsize     max_bytes;
 };
 
+/*
+ * ChildWatchData:
+ *
+ * Context carried to the async child-watch callback.
+ * Heap-allocated so it outlives the spawning function.
+ */
+typedef struct {
+	gchar *tool_name;
+} ChildWatchData;
+
 static void
 gst_osc52_module_escape_handler_init(GstEscapeHandlerInterface *iface);
 
@@ -106,6 +116,44 @@ gst_osc52_module_deactivate(GstModule *module)
 /* ===== Clipboard helpers ===== */
 
 /*
+ * osc52_child_watch_cb:
+ * @pid: child process ID
+ * @status: exit status (waitpid format)
+ * @user_data: (transfer full): a #ChildWatchData
+ *
+ * Async callback invoked by the GLib main loop when the external
+ * clipboard tool (wl-copy, xclip) exits.  Reaps the child process
+ * and logs any failure.  On Wayland, wl-copy stays running until
+ * another app claims the clipboard, so this fires lazily rather
+ * than blocking the event loop.
+ */
+static void
+osc52_child_watch_cb(
+	GPid     pid,
+	gint     status,
+	gpointer user_data
+){
+	ChildWatchData *ctx;
+
+	ctx = (ChildWatchData *)user_data;
+
+	if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+		g_warning("osc52: %s (pid=%d) exited with status %d",
+			ctx->tool_name, (gint)pid, WEXITSTATUS(status));
+	} else if (WIFSIGNALED(status)) {
+		g_warning("osc52: %s (pid=%d) killed by signal %d",
+			ctx->tool_name, (gint)pid, WTERMSIG(status));
+	} else {
+		g_debug("osc52: %s (pid=%d) exited normally",
+			ctx->tool_name, (gint)pid);
+	}
+
+	g_spawn_close_pid(pid);
+	g_free(ctx->tool_name);
+	g_free(ctx);
+}
+
+/*
  * osc52_set_clipboard_external:
  * @text: The text to place on the clipboard
  * @len: Length of @text in bytes
@@ -134,7 +182,6 @@ osc52_set_clipboard_external(
 	gboolean spawned;
 	gssize written;
 	gsize total;
-	gint child_status;
 	const gchar *tool_name;
 
 	argv = g_ptr_array_new();
@@ -194,24 +241,26 @@ osc52_set_clipboard_external(
 	}
 	close(stdin_fd);
 
-	/* Wait for child to finish and check exit status */
-	if (waitpid(child_pid, &child_status, 0) > 0) {
-		if (WIFEXITED(child_status) && WEXITSTATUS(child_status) != 0) {
-			g_warning("osc52: %s exited with status %d",
-				tool_name, WEXITSTATUS(child_status));
-			g_spawn_close_pid(child_pid);
-			return FALSE;
-		} else if (WIFSIGNALED(child_status)) {
-			g_warning("osc52: %s killed by signal %d",
-				tool_name, WTERMSIG(child_status));
-			g_spawn_close_pid(child_pid);
-			return FALSE;
-		}
-	}
-	g_spawn_close_pid(child_pid);
+	/*
+	 * Reap the child asynchronously via the GLib main loop.
+	 * On Wayland, wl-copy stays running to serve clipboard content
+	 * until another app claims the clipboard, so a synchronous
+	 * waitpid() would block the event loop indefinitely.  The child
+	 * watch fires when the process eventually exits, logging any
+	 * failure and reaping the zombie.
+	 */
+	{
+		ChildWatchData *ctx;
 
-	g_debug("osc52: %s completed successfully (%zu bytes written)",
-		tool_name, total);
+		ctx = g_new0(ChildWatchData, 1);
+		ctx->tool_name = g_strdup(tool_name);
+
+		g_child_watch_add(child_pid, osc52_child_watch_cb, ctx);
+	}
+
+	g_debug("osc52: %s (pid=%d) data written (%zu bytes), "
+		"child watch installed",
+		tool_name, (gint)child_pid, total);
 
 	return (total == len);
 }
