@@ -1,0 +1,67 @@
+name: Release AppImage
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: linux-amd64
+    container:
+      image: git.podbielniak.com/zachpodbielniak/build-container:43
+      options: --privileged
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch submodules
+        run: |
+          git config --global url."https://git.podbielniak.com/".insteadOf "git@git-ssh.podbielniak.com:"
+          git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
+          git submodule update --init --recursive
+
+      - name: Install dependencies
+        run: |
+          dnf install -y \
+            libX11-devel libXft-devel libXrender-devel fontconfig-devel \
+            wayland-devel libxkbcommon-devel cairo-devel libdecor-devel \
+            libdex-devel libpng-devel
+
+      - name: Download appimagetool
+        run: |
+          curl -L -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x /usr/local/bin/appimagetool
+
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          make MCP=1 WEBVIEW=1 appimage
+
+      - name: Create release
+        env:
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          APPIMAGE="build/gst-${VERSION}-x86_64.AppImage"
+          API="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+
+          RELEASE_ID=$(curl -sf -X POST \
+            "${API}/releases" \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"tag_name\": \"${TAG}\",
+              \"name\": \"GST ${TAG}\",
+              \"body\": \"Release ${TAG}\",
+              \"draft\": false,
+              \"prerelease\": false
+            }" | jq -r '.id')
+
+          curl -sf -X POST \
+            "${API}/releases/${RELEASE_ID}/assets?name=$(basename ${APPIMAGE})" \
+            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -F "attachment=@${APPIMAGE}"
