@@ -303,6 +303,7 @@ help:
 	@echo "  uninstall  - Remove installed files"
 	@echo "  clean      - Remove build artifacts"
 	@echo "  clean-all  - Remove all build directories"
+	@echo "  appimage   - Build AppImage (requires linuxdeploy)"
 	@echo ""
 	@echo "Build options (set on command line):"
 	@echo "  DEBUG=1       - Enable debug build"
@@ -316,6 +317,7 @@ help:
 	@echo "  install-terminfo - Compile gst-256color terminfo entry"
 	@echo "  check-deps       - Check for required dependencies"
 	@echo "  show-config      - Show current build configuration"
+	@echo "  clean-appimage   - Remove AppImage build artifacts"
 	@echo "  help             - Show this help message"
 
 # Dependency tracking (optional, for incremental builds)

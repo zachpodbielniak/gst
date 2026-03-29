@@ -9,7 +9,7 @@
 # Version
 VERSION_MAJOR := 0
 VERSION_MINOR := 3
-VERSION_MICRO := 5
+VERSION_MICRO := 6
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
@@ -65,6 +65,10 @@ INSTALL := install
 INSTALL_PROGRAM := $(INSTALL) -m 755
 INSTALL_DATA := $(INSTALL) -m 644
 MKDIR_P := mkdir -p
+
+# AppImage tool (override: make APPIMAGETOOL=/path/to/appimagetool appimage)
+APPIMAGETOOL ?= appimagetool-x86_64.AppImage
+APPDIR := $(BUILDDIR)/AppDir
 
 # C standard and dialect
 CSTD := -std=gnu89

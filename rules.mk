@@ -305,3 +305,47 @@ uninstall:
 	rm -f $(DESTDIR)$(DATADIR)/applications/gst.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
 	rm -f $(DESTDIR)/usr/share/terminfo/g/gst-256color
+
+# AppImage packaging
+# Bundles shared libraries manually (linuxdeploy's patchelf is too old for
+# modern ELF .relr.dyn sections), then packages with appimagetool.
+.PHONY: appimage clean-appimage
+
+appimage:
+	@echo "=== Building GST AppImage $(VERSION) ==="
+	rm -rf $(APPDIR)
+	$(MAKE) DEBUG=0 BUILD_MODULES=1 MCP=$(MCP) WEBVIEW=$(WEBVIEW) all install \
+		DESTDIR=$(abspath $(APPDIR)) PREFIX=/usr SYSCONFDIR=/etc \
+		MODULEDIR=/usr/lib/gst-appimage/modules
+	@echo "  BUNDLE  shared libraries"
+	@$(MKDIR_P) $(APPDIR)/usr/lib
+	@for bin in $(APPDIR)/usr/bin/gst $(APPDIR)/usr/$(LIBDIR_SUFFIX)/libgst.so.* \
+		$(APPDIR)/usr/$(LIBDIR_SUFFIX)/gst/modules/*.so; do \
+		[ -f "$$bin" ] || continue; \
+		ldd "$$bin" 2>/dev/null | grep '=> /' | awk '{print $$3}' | \
+		while read lib; do \
+			base=$$(basename "$$lib"); \
+			case "$$base" in \
+				ld-linux*|libc.so*|libm.so*|libdl.so*|librt.so*|libpthread.so*) \
+					continue ;; \
+			esac; \
+			[ -f "$(APPDIR)/usr/lib/$$base" ] && continue; \
+			cp -L "$$lib" "$(APPDIR)/usr/lib/$$base"; \
+		done; \
+	done
+	@echo "  GEN     $(APPDIR)/AppRun"
+	@printf '#!/bin/sh\n\
+APPDIR="$$(dirname "$$(readlink -f "$$0")")"\n\
+export GST_MODULE_PATH="$$APPDIR/usr/$(LIBDIR_SUFFIX)/gst/modules"\n\
+export TERMINFO_DIRS="$$APPDIR/usr/share/terminfo$${TERMINFO_DIRS:+:$$TERMINFO_DIRS}"\n\
+export LD_LIBRARY_PATH="$$APPDIR/usr/lib:$$APPDIR/usr/$(LIBDIR_SUFFIX)$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"\n\
+exec "$$APPDIR/usr/bin/gst" "$$@"\n' > $(APPDIR)/AppRun
+	chmod 755 $(APPDIR)/AppRun
+	ln -sf usr/share/applications/gst.desktop $(APPDIR)/gst.desktop
+	ln -sf usr/share/icons/hicolor/256x256/apps/gst.png $(APPDIR)/gst.png
+	VERSION=$(VERSION) $(APPIMAGETOOL) $(APPDIR) $(BUILDDIR)/gst-$(VERSION)-x86_64.AppImage
+	@echo "=== Built: $(BUILDDIR)/gst-$(VERSION)-x86_64.AppImage ==="
+
+clean-appimage:
+	rm -rf $(APPDIR)
+	rm -f $(BUILDDIR)/gst-*-x86_64.AppImage
