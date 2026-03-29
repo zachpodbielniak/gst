@@ -38,7 +38,7 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          make MCP=1 WEBVIEW=1 appimage
+          make MCP=1 WEBVIEW=1 APPIMAGETOOL=appimagetool appimage
 
       - name: Create release
         env:
