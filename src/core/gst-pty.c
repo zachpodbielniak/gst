@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 
@@ -29,6 +30,8 @@ typedef struct {
 	GIOChannel *io_channel;
 	guint io_watch_id;
 	guint child_watch_id;
+	GByteArray *out_buf;
+	guint out_watch_id;
 	gint cols;
 	gint rows;
 } GstPtyPrivate;
@@ -46,7 +49,14 @@ G_DEFINE_TYPE_WITH_PRIVATE(GstPty, gst_pty, G_TYPE_OBJECT)
 /* Forward declarations */
 static gboolean pty_io_callback(GIOChannel *source, GIOCondition condition,
                                 gpointer user_data);
+static gboolean pty_out_callback(GIOChannel *source, GIOCondition condition,
+                                 gpointer user_data);
 static void pty_child_watch(GPid pid, gint status, gpointer user_data);
+static gssize pty_try_write(gint fd, const gchar *data, gssize len);
+static gboolean pty_write_sync(gint fd, const gchar *data, gssize len,
+                               gint timeout_ms);
+static void pty_ensure_out_watch(GstPty *pty);
+static void pty_clear_out_watch(GstPtyPrivate *priv);
 
 static void
 gst_pty_finalize(GObject *object)
@@ -67,6 +77,13 @@ gst_pty_finalize(GObject *object)
 			g_source_remove(priv->child_watch_id);
 		}
 		priv->child_watch_id = 0;
+	}
+
+	pty_clear_out_watch(priv);
+
+	if (priv->out_buf != NULL) {
+		g_byte_array_unref(priv->out_buf);
+		priv->out_buf = NULL;
 	}
 
 	if (priv->io_channel != NULL) {
@@ -132,6 +149,8 @@ gst_pty_init(GstPty *pty)
 	priv->io_channel = NULL;
 	priv->io_watch_id = 0;
 	priv->child_watch_id = 0;
+	priv->out_buf = NULL;
+	priv->out_watch_id = 0;
 	priv->cols = 80;
 	priv->rows = 24;
 }
@@ -173,6 +192,139 @@ pty_io_callback(
 }
 
 /*
+ * pty_try_write:
+ *
+ * Writes as much of @data as the kernel will accept right now, retrying
+ * on EINTR. The master fd is non-blocking, so a full input buffer yields
+ * EAGAIN; we stop there and report how many bytes were taken rather than
+ * dropping the rest. Returns the number of bytes accepted (possibly 0),
+ * or -1 on a hard error.
+ */
+static gssize
+pty_try_write(
+    gint        fd,
+    const gchar *data,
+    gssize      len
+){
+	gssize total;
+
+	total = 0;
+	while (total < len) {
+		gssize written;
+
+		written = write(fd, data + total, len - total);
+		if (written < 0) {
+			if (errno == EINTR) {
+				continue;
+			}
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				break;
+			}
+			return -1;
+		}
+		if (written == 0) {
+			break;
+		}
+		total += written;
+	}
+
+	return total;
+}
+
+/*
+ * pty_clear_out_watch:
+ *
+ * Removes the pending-output G_IO_OUT watch if installed. Safe to call
+ * when no watch is active.
+ */
+static void
+pty_clear_out_watch(GstPtyPrivate *priv)
+{
+	if (priv->out_watch_id > 0) {
+		if (g_main_context_find_source_by_id(NULL,
+		    priv->out_watch_id) != NULL) {
+			g_source_remove(priv->out_watch_id);
+		}
+		priv->out_watch_id = 0;
+	}
+}
+
+/*
+ * pty_out_callback:
+ *
+ * GIOChannel watch fired when the PTY master becomes writable while we
+ * still have queued output. Drains as much of out_buf as the kernel
+ * accepts; uninstalls itself once the queue empties. This is what keeps
+ * a large paste from being truncated: the unwritten tail (including the
+ * trailing bracketed-paste ESC[201~ marker) is delivered here instead of
+ * being dropped.
+ */
+static gboolean
+pty_out_callback(
+    GIOChannel      *source,
+    GIOCondition    condition,
+    gpointer        user_data
+){
+	GstPty *pty = GST_PTY(user_data);
+	GstPtyPrivate *priv = gst_pty_get_instance_private(pty);
+	gssize accepted;
+
+	(void)source;
+
+	if (condition & (G_IO_HUP | G_IO_ERR)) {
+		priv->out_watch_id = 0;
+		return FALSE;
+	}
+
+	if (priv->out_buf == NULL || priv->out_buf->len == 0) {
+		priv->out_watch_id = 0;
+		return FALSE;
+	}
+
+	accepted = pty_try_write(priv->master_fd,
+	    (const gchar *)priv->out_buf->data,
+	    (gssize)priv->out_buf->len);
+
+	if (accepted < 0) {
+		/* Hard error: nothing more we can do with this queue. */
+		g_byte_array_set_size(priv->out_buf, 0);
+		priv->out_watch_id = 0;
+		return FALSE;
+	}
+
+	if (accepted > 0) {
+		g_byte_array_remove_range(priv->out_buf, 0, (guint)accepted);
+	}
+
+	if (priv->out_buf->len == 0) {
+		/* Fully drained: stop watching for writability. */
+		priv->out_watch_id = 0;
+		return FALSE;
+	}
+
+	/* Still pending (EAGAIN again); keep the watch installed. */
+	return TRUE;
+}
+
+/*
+ * pty_ensure_out_watch:
+ *
+ * Installs the G_IO_OUT drain watch if it is not already active. Called
+ * whenever bytes are queued in out_buf.
+ */
+static void
+pty_ensure_out_watch(GstPty *pty)
+{
+	GstPtyPrivate *priv = gst_pty_get_instance_private(pty);
+
+	if (priv->out_watch_id == 0 && priv->io_channel != NULL) {
+		priv->out_watch_id = g_io_add_watch(priv->io_channel,
+		    G_IO_OUT | G_IO_ERR | G_IO_HUP,
+		    pty_out_callback, pty);
+	}
+}
+
+/*
  * pty_child_watch:
  *
  * Called when the child process exits. Emits the "child-exited" signal.
@@ -188,6 +340,12 @@ pty_child_watch(
 
 	priv->running = FALSE;
 	priv->child_watch_id = 0;
+
+	/* The child is gone; there is nothing left to drain to it. */
+	pty_clear_out_watch(priv);
+	if (priv->out_buf != NULL) {
+		g_byte_array_set_size(priv->out_buf, 0);
+	}
 
 	g_spawn_close_pid(pid);
 	g_signal_emit(pty, signals[SIGNAL_CHILD_EXITED], 0, status);
@@ -283,6 +441,11 @@ gst_pty_spawn(
 	priv->child_pid = pid;
 	priv->running = TRUE;
 
+	/* Output queue for writes the kernel can't accept immediately */
+	if (priv->out_buf == NULL) {
+		priv->out_buf = g_byte_array_new();
+	}
+
 	/* Set up non-blocking I/O channel for reading */
 	priv->io_channel = g_io_channel_unix_new(priv->master_fd);
 	g_io_channel_set_encoding(priv->io_channel, NULL, NULL);
@@ -317,8 +480,7 @@ gst_pty_write(
     gssize      len
 ){
 	GstPtyPrivate *priv;
-	gssize written;
-	gssize total;
+	gssize accepted;
 
 	g_return_if_fail(GST_IS_PTY(pty));
 	g_return_if_fail(data != NULL);
@@ -333,17 +495,109 @@ gst_pty_write(
 		len = (gssize)strlen(data);
 	}
 
+	if (len == 0) {
+		return;
+	}
+
+	/*
+	 * If a previous write is still draining, append to the queue to
+	 * preserve byte order. Writing directly now would race ahead of
+	 * the bytes already waiting in out_buf.
+	 */
+	if (priv->out_buf != NULL && priv->out_buf->len > 0) {
+		g_byte_array_append(priv->out_buf, (const guint8 *)data,
+		                    (guint)len);
+		pty_ensure_out_watch(pty);
+		return;
+	}
+
+	accepted = pty_try_write(priv->master_fd, data, len);
+	if (accepted < 0) {
+		return;
+	}
+
+	if (accepted < len) {
+		/*
+		 * The kernel input buffer (~4 KB) is full. Queue the rest and
+		 * drain it from a G_IO_OUT watch instead of dropping it. This
+		 * is the fix for large pastes being truncated: every byte —
+		 * including the closing bracketed-paste ESC[201~ marker — is
+		 * delivered, and the main loop is never blocked, so the read
+		 * side keeps draining the child's output (no deadlock).
+		 */
+		if (priv->out_buf == NULL) {
+			priv->out_buf = g_byte_array_new();
+		}
+		g_byte_array_append(priv->out_buf,
+		                    (const guint8 *)(data + accepted),
+		                    (guint)(len - accepted));
+		pty_ensure_out_watch(pty);
+	}
+}
+
+/*
+ * pty_write_sync:
+ *
+ * Writes all @len bytes to @fd, using poll() to wait for writability
+ * when the (non-blocking) fd reports EAGAIN, bounded by @timeout_ms.
+ * Used only for small control replies that must complete synchronously
+ * so ECHO can be safely toggled around them; it deliberately does NOT
+ * use the async out_buf queue, whose bytes drain later with ECHO back
+ * on. Returns %TRUE if every byte was written.
+ */
+static gboolean
+pty_write_sync(
+    gint        fd,
+    const gchar *data,
+    gssize      len,
+    gint        timeout_ms
+){
+	gssize total;
+	gint64 deadline;
+
 	total = 0;
+	deadline = g_get_monotonic_time() + (gint64)timeout_ms * 1000;
+
 	while (total < len) {
-		written = write(priv->master_fd, data + total, len - total);
-		if (written < 0) {
-			if (errno == EINTR) {
-				continue;
-			}
+		gssize written;
+
+		written = write(fd, data + total, len - total);
+		if (written > 0) {
+			total += written;
+			continue;
+		}
+		if (written == 0) {
 			break;
 		}
-		total += written;
+		if (errno == EINTR) {
+			continue;
+		}
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			struct pollfd pfd;
+			gint64 now;
+			gint remaining;
+
+			now = g_get_monotonic_time();
+			if (now >= deadline) {
+				break;
+			}
+			remaining = (gint)((deadline - now) / 1000);
+			if (remaining <= 0) {
+				remaining = 1;
+			}
+
+			pfd.fd = fd;
+			pfd.events = POLLOUT;
+			if (poll(&pfd, 1, remaining) < 0 && errno != EINTR) {
+				break;
+			}
+			continue;
+		}
+		/* Hard error. */
+		break;
 	}
+
+	return total == len;
 }
 
 /**
@@ -380,6 +634,13 @@ gst_pty_write_no_echo(
 		return;
 	}
 
+	if (len < 0) {
+		len = (gssize)strlen(data);
+	}
+	if (len == 0) {
+		return;
+	}
+
 	/* Suppress echo for this write */
 	restored = FALSE;
 	if (tcgetattr(priv->master_fd, &tio) == 0) {
@@ -391,7 +652,12 @@ gst_pty_write_no_echo(
 		}
 	}
 
-	gst_pty_write(pty, data, len);
+	/*
+	 * Write synchronously (not via the async queue): the tcdrain() +
+	 * echo restore below must apply to these exact bytes. Control
+	 * replies are tiny and effectively never block.
+	 */
+	pty_write_sync(priv->master_fd, data, len, 1000);
 
 	/*
 	 * Restore echo only after the line discipline has finished

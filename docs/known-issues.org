@@ -8,6 +8,19 @@ No critical known issues at this time.
 :PROPERTIES:
 :CUSTOM_ID: resolved-issues
 :END:
+*** Large paste truncated, leaving tmux stuck in bracketed-paste mode (RESOLVED)
+:PROPERTIES:
+:CUSTOM_ID: large-paste-truncated-resolved
+:END:
+*Status:* Fixed in 0.3.8
+*Affects:* Core PTY I/O (=GstPty=), all backends
+
+Pasting a large block (300+ lines) into a program running under the terminal -- for example from one tmux pane to another -- truncated the paste to roughly the first ~4 KB (~190 lines). Afterwards the receiving application was left broken: the tmux prefix key (=C-b=) stopped responding, and further keystrokes appeared as stray escape sequences in other panes.
+
+The PTY master fd is non-blocking (=G_IO_FLAG_NONBLOCK= is applied to the underlying fd, not just the =GIOChannel= wrapper). =gst_pty_write()= looped on partial writes but treated =EAGAIN= as a fatal error and =break='d out of the loop, silently discarding every unwritten byte. Once a paste overflowed the slave tty's ~4 KB input buffer, the next =write()= returned =EAGAIN= and the remainder -- including the closing bracketed-paste =ESC[201~= marker appended in =on_selection_notify()= -- was dropped. With the terminator missing, the receiving application stayed in bracketed-paste mode and consumed all subsequent input as paste body.
+
+/Fix:/ =gst_pty_write()= now queues any bytes the kernel cannot accept immediately into an output buffer and drains them from a =G_IO_OUT= watch as the fd becomes writable, rather than dropping them. The entire paste (including the =ESC[201~= terminator) is always delivered, the main loop is never blocked, and the existing read watch keeps draining the child's output so the two directions cannot deadlock. =gst_pty_write_no_echo()= stays synchronous for small control replies so its =tcdrain()= / echo-restore semantics are unchanged. Covered by =tests/test-pty.c=.
+
 *** Yazi image preview broken with kittygfx module (RESOLVED)
 :PROPERTIES:
 :CUSTOM_ID: yazi-image-preview-broken-with-kittygfx-module-resolved
