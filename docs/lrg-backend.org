@@ -1,0 +1,113 @@
+#+TITLE: libregnum (LRG) Backend
+#+OPTIONS: toc:2 num:nil
+
+* Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+
+GST has a third, optional display backend alongside X11 (Xft) and Wayland
+(Cairo): the *libregnum (LRG)* backend. It renders the terminal grid through
+[[https://www.raylib.com/][raylib]] (via *graylib*, raylib's GObject wrapper,
+vendored under =deps/libregnum=) in an OpenGL window. It is the same mechanism
+used by the author's other projects (cmacs's =--lrg= terminal, gsurf's =--lrg=
+view).
+
+The backend draws in flat *2D* today. The render mode is selectable so that 3D
+and 3D-VR presentations can be added later; only =2d= is implemented now.
+
+Glyphs are rasterized with *cairo-ft* — the same path the Wayland backend uses
+(=GstCairoFontCache=) — and cached as graylib textures, so on-screen text
+(metrics, hinting, antialiasing, fontconfig fallback) is identical to the X11
+and Wayland backends. This mirrors cmacs's lrgterm.
+
+Unlike the X11/Wayland backends — which are event-driven off the display file
+descriptor — the LRG backend runs a ~60fps render-loop timer on the GLib main
+loop. Each tick polls raylib input, forwards it as the usual =GstWindow=
+signals, and redraws the whole grid (raylib is immediate-mode and clears the
+framebuffer every frame).
+
+* Building
+:PROPERTIES:
+:CUSTOM_ID: building
+:END:
+
+The backend is compiled in only when requested:
+
+#+begin_src sh
+# Release build with the LRG backend
+make LRG_BACKEND=1
+
+# Debug build
+make LRG_BACKEND=1 DEBUG=1
+#+endsrc
+
+graylib and raylib are built as static archives from the vendored
+=deps/libregnum= submodule on first build (no system packages required beyond
+the OpenGL development headers; =libX11= is already a GST dependency). Install
+the extra dependency with:
+
+#+begin_src sh
+make LRG_BACKEND=1 install-deps     # adds mesa GL dev headers
+#+endsrc
+
+Confirm the backend was enabled:
+
+#+begin_src sh
+make LRG_BACKEND=1 show-config | grep LRG
+# LRG_BACKEND:1
+# LRG_AVAILABLE:1
+#+endsrc
+
+A build without =LRG_BACKEND=1= contains no LRG code and no =--lrg= flag.
+
+* Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+
+#+begin_src sh
+gst --lrg            # libregnum backend, 2D mode (the default)
+gst --lrg=2d         # explicit 2D
+gst --lrg=3d         # reserved -> error: "not yet implemented"
+gst --lrg=3dvr       # reserved -> error
+#+endsrc
+
+=--lrg= takes precedence over =--x11=, =--wayland=, and =$WAYLAND_DISPLAY=.
+Everything the X11/Wayland backends do works here: 16/256/true-color rendering,
+bold/italic/underline/strikethrough/undercurl, the block/bar/underline cursor,
+keyboard input (modifiers, control bytes, function/navigation keys with
+auto-repeat), mouse selection and scrolling, clipboard copy/paste, live
+resize/reflow, and module overlays (scrollback, boxdraw, transparency, …) drawn
+through the shared =GstRenderContext=.
+
+* Render modes
+:PROPERTIES:
+:CUSTOM_ID: render-modes
+:END:
+
+| Mode    | =--lrg= value | Status                          |
+|---------+---------------+---------------------------------|
+| 2D      | =2d= (default) | Implemented                    |
+| 3D      | =3d=          | Reserved (rejected at startup)  |
+| 3D-VR   | =3dvr=        | Reserved (rejected at startup)  |
+
+* Limitations
+:PROPERTIES:
+:CUSTOM_ID: limitations
+:END:
+
+- Opens a separate raylib/OpenGL window; it does not embed via =--windid=.
+- raylib/GLFW exposes a single system clipboard, so =PRIMARY= selection maps to
+  the clipboard (middle-click paste returns the last copied/selected text).
+- Window transparency is applied at the window level (=grl_window_set_opacity=),
+  not per-cell.
+- The window repaints at ~60fps while open.
+
+* See also
+:PROPERTIES:
+:CUSTOM_ID: see-also
+:END:
+
+- [[file:cli.org][Command-Line Interface]] — the =--lrg= flag
+- [[file:known-issues.org][Known Issues]]

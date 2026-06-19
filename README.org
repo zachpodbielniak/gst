@@ -18,6 +18,7 @@ A GObject-based terminal emulator with modular extensibility. GST is a reimpleme
 - *Module System*: GModule-based plugins with well-defined hook points (replacing st's patches)
 - *Dual Configuration*: YAML files for simple config, compiled C for advanced customization
 - *X11 and Wayland*: Both backends supported with runtime auto-detection
+- *libregnum (LRG) backend*: Optional 2D rendering through the libregnum/raylib game engine (=--lrg=, build with =LRG_BACKEND=1=) — see [[file:docs/lrg-backend.org][LRG Backend]]
 - *GObject Introspection*: Full GIR support for language bindings
 
 ** Building
@@ -60,7 +61,11 @@ make modules      # Build all modules
 make test         # Run the test suite
 make install      # Install to PREFIX
 make DEBUG=1      # Build with debug symbols
+make LRG_BACKEND=1 # Build with the libregnum (LRG) 2D backend (--lrg)
 #+end_src
+
+Optional build flags: =BUILD_WAYLAND=0= (X11-only), =LRG_BACKEND=1=
+([[file:docs/lrg-backend.org][libregnum backend]]), =MCP=1=, =WEBVIEW=1=.
 
 ** Usage
 :PROPERTIES:
@@ -74,6 +79,7 @@ gst -f 'JetBrains Mono:14'   # Use specific font
 gst -c ~/.config/gst/my.yaml # Use custom config
 gst --x11                    # Force X11 backend
 gst --wayland                # Force Wayland backend
+gst --lrg                    # libregnum (LRG) 2D backend (LRG_BACKEND=1 build)
 #+end_src
 
 See [[file:docs/cli.org]] for the complete CLI reference.
@@ -145,8 +151,8 @@ See [[file:docs/modules/module-system.org]] for the module development guide.
 gst/
 ├── src/
 │   ├── core/           # Terminal emulation
-│   ├── rendering/      # Abstract renderer + X11 implementation
-│   ├── window/         # Abstract window + X11 implementation
+│   ├── rendering/      # Abstract renderer + X11/Wayland/LRG implementations
+│   ├── window/         # Abstract window + X11/Wayland/LRG implementations
 │   ├── config/         # YAML configuration
 │   ├── module/         # Module system
 │   ├── selection/      # Selection and clipboard

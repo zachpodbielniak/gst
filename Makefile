@@ -65,13 +65,33 @@ LIB_SRCS := \
 	src/util/gst-utf8.c \
 	src/util/gst-base64.c
 
+# The cairo-ft font cache is shared by the Wayland and LRG backends.
+GST_NEED_CAIRO_FONT := 0
+ifeq ($(WAYLAND_AVAILABLE),1)
+GST_NEED_CAIRO_FONT := 1
+endif
+ifeq ($(LRG_AVAILABLE),1)
+GST_NEED_CAIRO_FONT := 1
+endif
+ifeq ($(GST_NEED_CAIRO_FONT),1)
+LIB_SRCS += src/rendering/gst-cairo-font-cache.c
+endif
+
 # Wayland/Cairo sources (conditional)
 ifeq ($(WAYLAND_AVAILABLE),1)
 LIB_SRCS += \
-	src/rendering/gst-cairo-font-cache.c \
 	src/rendering/gst-wayland-renderer.c \
 	src/rendering/gst-wayland-render-context.c \
 	src/window/gst-wayland-window.c
+endif
+
+# libregnum (LRG) backend sources (conditional)
+ifeq ($(LRG_AVAILABLE),1)
+LIB_SRCS += \
+	src/rendering/gst-grl-font-cache.c \
+	src/rendering/gst-lrg-render-context.c \
+	src/rendering/gst-lrg-renderer.c \
+	src/window/gst-lrg-window.c
 endif
 
 # Header files (for GIR scanner and installation)
@@ -116,13 +136,34 @@ LIB_HDRS := \
 	src/util/gst-utf8.h \
 	src/util/gst-base64.h
 
+# cairo-ft font cache header (shared by Wayland and LRG)
+ifeq ($(GST_NEED_CAIRO_FONT),1)
+LIB_HDRS += src/rendering/gst-cairo-font-cache.h
+endif
+
 # Wayland/Cairo headers (conditional)
 ifeq ($(WAYLAND_AVAILABLE),1)
 LIB_HDRS += \
-	src/rendering/gst-cairo-font-cache.h \
 	src/rendering/gst-wayland-renderer.h \
 	src/rendering/gst-wayland-render-context.h \
 	src/window/gst-wayland-window.h
+endif
+
+# libregnum (LRG) backend headers (conditional)
+ifeq ($(LRG_AVAILABLE),1)
+LIB_HDRS += \
+	src/rendering/gst-grl-font-cache.h \
+	src/rendering/gst-lrg-render-context.h \
+	src/rendering/gst-lrg-renderer.h \
+	src/window/gst-lrg-window.h
+
+# Build the vendored graylib + raylib static archives on demand (the recipe
+# has no prerequisites, so it runs only when an archive is MISSING, never to
+# "update" a prebuilt copy). The shared library links them, so make it depend
+# on their presence; the gst binary links the shared library in turn.
+$(LRG_GRAYLIB_LIB) $(LRG_RAYLIB_LIB):
+	$(MAKE) -C $(GRAYLIB_DIR) lib
+$(OUTDIR)/$(LIB_SHARED_FULL): $(LRG_GRAYLIB_LIB) $(LRG_RAYLIB_LIB)
 endif
 
 # yaml-glib sources (built-in dependency)

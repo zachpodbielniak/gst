@@ -29,7 +29,7 @@
 #include "../../src/gst-enums.h"
 #include "../../src/rendering/gst-font-cache.h"
 
-#ifdef GST_HAVE_WAYLAND
+#if defined(GST_HAVE_WAYLAND) || defined(GST_HAVE_LRG_BACKEND)
 #include "../../src/rendering/gst-cairo-font-cache.h"
 #endif
 
@@ -162,8 +162,10 @@ gst_font2_module_activate(GstModule *module)
 			GST_FONT_CACHE(cache),
 			(const gchar **)self->fonts);
 	}
-#ifdef GST_HAVE_WAYLAND
-	else if (backend_type == GST_BACKEND_WAYLAND)
+#if defined(GST_HAVE_WAYLAND) || defined(GST_HAVE_LRG_BACKEND)
+	/* The Wayland and LRG backends both use a cairo-ft font cache. */
+	else if (backend_type == GST_BACKEND_WAYLAND
+	         || backend_type == GST_BACKEND_LRG)
 	{
 		gst_cairo_font_cache_load_spare_fonts(
 			GST_CAIRO_FONT_CACHE(cache),

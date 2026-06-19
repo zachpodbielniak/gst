@@ -654,6 +654,7 @@ gst_backend_type_get_type(void)
         static const GEnumValue values[] = {
             { GST_BACKEND_X11, "GST_BACKEND_X11", "x11" },
             { GST_BACKEND_WAYLAND, "GST_BACKEND_WAYLAND", "wayland" },
+            { GST_BACKEND_LRG, "GST_BACKEND_LRG", "lrg" },
             { 0, NULL, NULL }
         };
 
@@ -662,4 +663,108 @@ gst_backend_type_get_type(void)
     }
 
     return type;
+}
+
+/*
+ * gst_lrg_render_mode_get_type:
+ *
+ * Registers the GstLrgRenderMode enumeration type.
+ *
+ * Returns: the GType for GstLrgRenderMode
+ */
+GType
+gst_lrg_render_mode_get_type(void)
+{
+    static GType type = 0;
+
+    if (g_once_init_enter(&type)) {
+        static const GEnumValue values[] = {
+            { GST_LRG_RENDER_MODE_2D, "GST_LRG_RENDER_MODE_2D", "2d" },
+            { GST_LRG_RENDER_MODE_3D, "GST_LRG_RENDER_MODE_3D", "3d" },
+            { GST_LRG_RENDER_MODE_3DVR, "GST_LRG_RENDER_MODE_3DVR", "3dvr" },
+            { 0, NULL, NULL }
+        };
+
+        GType new_type = g_enum_register_static("GstLrgRenderMode", values);
+        g_once_init_leave(&type, new_type);
+    }
+
+    return type;
+}
+
+/*
+ * gst_lrg_render_mode_from_string:
+ * @str: (nullable): mode string ("2d", "3d", "3dvr"), or NULL/"" for 2D
+ * @out_mode: (out): location for the parsed #GstLrgRenderMode
+ *
+ * Parses a --lrg[=MODE] value. A NULL or empty string yields
+ * %GST_LRG_RENDER_MODE_2D (the default), matching emacs --lrg.
+ *
+ * Returns: TRUE on a recognised mode (or bare --lrg), FALSE otherwise.
+ */
+gboolean
+gst_lrg_render_mode_from_string(
+    const gchar         *str,
+    GstLrgRenderMode    *out_mode
+){
+    GEnumClass *klass;
+    GEnumValue *value;
+    gchar *lower;
+    gboolean found = FALSE;
+
+    if (out_mode != NULL)
+        *out_mode = GST_LRG_RENDER_MODE_2D;
+
+    /* Bare --lrg (NULL/empty) means the default 2D mode, like emacs --lrg. */
+    if (str == NULL || *str == '\0')
+        return TRUE;
+
+    lower = g_ascii_strdown(str, -1);
+
+    klass = g_type_class_ref(GST_TYPE_LRG_RENDER_MODE);
+    value = g_enum_get_value_by_nick(klass, lower);
+    if (value != NULL) {
+        if (out_mode != NULL)
+            *out_mode = (GstLrgRenderMode)value->value;
+        found = TRUE;
+    }
+    g_type_class_unref(klass);
+
+    g_free(lower);
+    return found;
+}
+
+/*
+ * gst_lrg_render_mode_to_string:
+ * @mode: a #GstLrgRenderMode
+ *
+ * Returns: (nullable): the canonical nick ("2d", "3d", "3dvr"), or NULL.
+ */
+const gchar *
+gst_lrg_render_mode_to_string(GstLrgRenderMode mode)
+{
+    GEnumClass *klass;
+    GEnumValue *value;
+    const gchar *nick = NULL;
+
+    klass = g_type_class_ref(GST_TYPE_LRG_RENDER_MODE);
+    value = g_enum_get_value(klass, mode);
+    if (value != NULL)
+        nick = value->value_nick;
+    g_type_class_unref(klass);
+
+    return nick;
+}
+
+/*
+ * gst_lrg_render_mode_is_implemented:
+ * @mode: a #GstLrgRenderMode
+ *
+ * Returns: TRUE if @mode is implemented today (only 2D).
+ */
+gboolean
+gst_lrg_render_mode_is_implemented(GstLrgRenderMode mode)
+{
+    /* Only 2D is implemented today; 3D / 3D-VR are reserved. */
+    return mode == GST_LRG_RENDER_MODE_2D;
 }

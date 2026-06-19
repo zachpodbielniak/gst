@@ -42,12 +42,15 @@ gst [options] [-e command [args]]
 :PROPERTIES:
 :CUSTOM_ID: backend
 :END:
-| Flag        | Description                                   |
-|-------------+-----------------------------------------------|
-| =--x11=     | Force X11 backend (ignore =$WAYLAND_DISPLAY=) |
-| =--wayland= | Force Wayland backend                         |
+| Flag         | Argument | Description                                              |
+|--------------+----------+----------------------------------------------------------|
+| =--x11=      |          | Force X11 backend (ignore =$WAYLAND_DISPLAY=)            |
+| =--wayland=  |          | Force Wayland backend                                    |
+| =--lrg=      | =MODE=   | Use the libregnum/raylib backend (=MODE=: =2d= default)  |
 
-Without these flags, GST auto-detects: if =$WAYLAND_DISPLAY= is set, Wayland is used; otherwise X11.
+Without these flags, GST auto-detects: if =$WAYLAND_DISPLAY= is set, Wayland is used; otherwise X11. =--lrg= takes precedence over both and over =$WAYLAND_DISPLAY=.
+
+The =--lrg= flag renders the terminal through [[file:lrg-backend.org][libregnum]] (a GObject game engine) in a raylib/OpenGL window. The argument is optional: bare =--lrg= (or =--lrg=2d=) selects the flat 2D mode, the only one implemented today; =--lrg=3d= and =--lrg=3dvr= are reserved and currently rejected. The flag is only present in builds compiled with =make LRG_BACKEND=1=.
 
 *** Configuration
 :PROPERTIES:
@@ -103,6 +106,9 @@ gst -c ~/my-gst-config.yaml
 
 # Force X11 backend
 gst --x11
+
+# Use the libregnum (LRG) 2D backend (requires a LRG_BACKEND=1 build)
+gst --lrg
 
 # Generate config with selected modules
 gst --generate-yaml-config --modules scrollback,transparency,urlclick > ~/.config/gst/config.yaml

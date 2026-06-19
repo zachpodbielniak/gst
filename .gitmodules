@@ -7,3 +7,6 @@
 [submodule "deps/crispy"]
 	path = deps/crispy
 	url = git@gitlab.com:zachpodbielniak/crispy.git
+[submodule "deps/libregnum"]
+	path = deps/libregnum
+	url = git@gitlab.com:copyleft-games/libregnum.git

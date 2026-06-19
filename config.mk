@@ -8,8 +8,8 @@
 
 # Version
 VERSION_MAJOR := 0
-VERSION_MINOR := 3
-VERSION_MICRO := 8
+VERSION_MINOR := 4
+VERSION_MICRO := 0
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
@@ -43,6 +43,7 @@ BUILD_TESTS ?= 1
 BUILD_MODULES ?= 1
 BUILD_WAYLAND ?= 1
 MCP ?= 0
+LRG_BACKEND ?= 0
 
 # Select build directories based on DEBUG
 ifeq ($(DEBUG),1)
@@ -125,6 +126,25 @@ else
 WEBVIEW_AVAILABLE := 0
 endif
 
+# Optional libregnum (LRG) backend: render the terminal in a raylib/OpenGL
+# window via graylib (the raylib GObject wrapper vendored under deps/libregnum).
+# Selected at runtime with --lrg (defaults to 2D); 3D/3D-VR are reserved.
+# graylib + raylib are vendored static archives, so only GL/X11 dev libs are
+# needed (X11 is already required above). Build with: make LRG_BACKEND=1
+LIBREGNUM_DIR     := $(CURDIR)/deps/libregnum
+GRAYLIB_DIR       := $(LIBREGNUM_DIR)/deps/graylib
+LRG_GRAYLIB_INC   := $(GRAYLIB_DIR)/src
+LRG_LIBREGNUM_INC := $(LIBREGNUM_DIR)/src
+LRG_GRAYLIB_LIB   := $(GRAYLIB_DIR)/build/lib/libgraylib.a
+LRG_RAYLIB_LIB    := $(GRAYLIB_DIR)/deps/raylib/src/libraylib.a
+LRG_PLATFORM_LIBS := -lGL -lm -lpthread -ldl -lrt -lX11
+
+ifeq ($(LRG_BACKEND),1)
+LRG_AVAILABLE := $(shell test -f $(LRG_GRAYLIB_INC)/graylib.h && echo 1 || echo 0)
+else
+LRG_AVAILABLE := 0
+endif
+
 # Check for required dependencies
 define check_dep
 $(if $(shell $(PKG_CONFIG) --exists $(1) && echo yes),,$(error Missing dependency: $(1)))
@@ -140,6 +160,19 @@ ifeq ($(WAYLAND_AVAILABLE),1)
     CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags wayland-client wayland-cursor xkbcommon cairo cairo-ft libdecor-0 2>/dev/null)
     LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs wayland-client wayland-cursor xkbcommon cairo cairo-ft libdecor-0 2>/dev/null)
     LDFLAGS_DEPS += -lrt
+endif
+
+# Add libregnum (LRG) backend flags if available. graylib calls raylib, so
+# libgraylib.a must precede libraylib.a on the link line. Headers come in via
+# -isystem so graylib's own headers don't trip -Wall -Wextra.
+ifeq ($(LRG_AVAILABLE),1)
+    CFLAGS_BASE += -DGST_HAVE_LRG_BACKEND=1
+    CFLAGS_DEPS += -isystem $(LRG_GRAYLIB_INC) -isystem $(LRG_LIBREGNUM_INC)
+    # The LRG backend rasterizes glyphs with cairo-ft (shared with the Wayland
+    # backend's GstCairoFontCache) so text matches the other backends exactly.
+    CFLAGS_DEPS += $(shell $(PKG_CONFIG) --cflags cairo cairo-ft 2>/dev/null)
+    LDFLAGS_DEPS += $(LRG_GRAYLIB_LIB) $(LRG_RAYLIB_LIB) $(LRG_PLATFORM_LIBS)
+    LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs cairo cairo-ft 2>/dev/null)
 endif
 
 # Include paths
@@ -209,6 +242,8 @@ show-config:
 	@echo "MCP_AVAILABLE:$(MCP_AVAILABLE)"
 	@echo "WEBVIEW:$(WEBVIEW)"
 	@echo "WEBVIEW_AVAILABLE:$(WEBVIEW_AVAILABLE)"
+	@echo "LRG_BACKEND:$(LRG_BACKEND)"
+	@echo "LRG_AVAILABLE:$(LRG_AVAILABLE)"
 
 # Distro auto-detection via /etc/os-release
 # Override with: make DISTRO=fedora install-deps
@@ -242,6 +277,9 @@ FEDORA_DEPS_GIR := gobject-introspection-devel
 FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-devel
 FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel libpng-devel
 FEDORA_DEPS_WEBVIEW := libsoup3-devel json-glib-devel
+# graylib/raylib are vendored; the LRG backend only needs OpenGL dev headers
+# (libX11 is already in FEDORA_DEPS_REQUIRED).
+FEDORA_DEPS_LRG := mesa-libGL-devel
 
 # Debian / Ubuntu (apt)
 DEBIAN_DEPS_TOOLS := gcc make pkg-config
@@ -251,6 +289,7 @@ DEBIAN_DEPS_GIR := gobject-introspection libgirepository1.0-dev
 DEBIAN_DEPS_WAYLAND := libwayland-dev libxkbcommon-dev libcairo2-dev libdecor-0-dev
 DEBIAN_DEPS_MCP := libsoup-3.0-dev libjson-glib-dev libpng-dev
 DEBIAN_DEPS_WEBVIEW := libsoup-3.0-dev libjson-glib-dev
+DEBIAN_DEPS_LRG := libgl1-mesa-dev
 
 # Arch Linux (pacman)
 ARCH_DEPS_TOOLS := gcc make pkgconf
@@ -259,6 +298,7 @@ ARCH_DEPS_GIR := gobject-introspection
 ARCH_DEPS_WAYLAND := wayland libxkbcommon cairo libdecor
 ARCH_DEPS_MCP := libsoup3 libdex json-glib libpng
 ARCH_DEPS_WEBVIEW := libsoup3 json-glib
+ARCH_DEPS_LRG := mesa
 
 # Install build dependencies (auto-detects distro)
 .PHONY: install-deps
@@ -268,20 +308,23 @@ ifeq ($(DISTRO),fedora)
 		$(if $(filter 1,$(BUILD_GIR)),$(FEDORA_DEPS_GIR)) \
 		$(if $(filter 1,$(BUILD_WAYLAND)),$(FEDORA_DEPS_WAYLAND)) \
 		$(if $(filter 1,$(MCP)),$(FEDORA_DEPS_MCP)) \
-		$(if $(filter 1,$(WEBVIEW)),$(FEDORA_DEPS_WEBVIEW))
+		$(if $(filter 1,$(WEBVIEW)),$(FEDORA_DEPS_WEBVIEW)) \
+		$(if $(filter 1,$(LRG_BACKEND)),$(FEDORA_DEPS_LRG))
 else ifeq ($(DISTRO),debian)
 	sudo apt-get update
 	sudo apt-get install -y $(DEBIAN_DEPS_TOOLS) $(DEBIAN_DEPS_REQUIRED) \
 		$(if $(filter 1,$(BUILD_GIR)),$(DEBIAN_DEPS_GIR)) \
 		$(if $(filter 1,$(BUILD_WAYLAND)),$(DEBIAN_DEPS_WAYLAND)) \
 		$(if $(filter 1,$(MCP)),$(DEBIAN_DEPS_MCP)) \
-		$(if $(filter 1,$(WEBVIEW)),$(DEBIAN_DEPS_WEBVIEW))
+		$(if $(filter 1,$(WEBVIEW)),$(DEBIAN_DEPS_WEBVIEW)) \
+		$(if $(filter 1,$(LRG_BACKEND)),$(DEBIAN_DEPS_LRG))
 else ifeq ($(DISTRO),arch)
 	sudo pacman -S --needed --noconfirm $(ARCH_DEPS_TOOLS) $(ARCH_DEPS_REQUIRED) \
 		$(if $(filter 1,$(BUILD_GIR)),$(ARCH_DEPS_GIR)) \
 		$(if $(filter 1,$(BUILD_WAYLAND)),$(ARCH_DEPS_WAYLAND)) \
 		$(if $(filter 1,$(MCP)),$(ARCH_DEPS_MCP)) \
-		$(if $(filter 1,$(WEBVIEW)),$(ARCH_DEPS_WEBVIEW))
+		$(if $(filter 1,$(WEBVIEW)),$(ARCH_DEPS_WEBVIEW)) \
+		$(if $(filter 1,$(LRG_BACKEND)),$(ARCH_DEPS_LRG))
 else
 	$(error Unsupported distro "$(DISTRO_ID)". Override with: make DISTRO=fedora|debian|arch install-deps)
 endif

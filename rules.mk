@@ -152,8 +152,8 @@ $(OUTDIR)/gst.pc: gst.pc.in | $(OUTDIR)
 		-e 's|@VERSION@|$(VERSION)|g' \
 		$< > $@
 
-# Version header generation
-src/gst-version.h: src/gst-version.h.in
+# Version header generation (regenerate when the version in config.mk changes)
+src/gst-version.h: src/gst-version.h.in config.mk
 	sed \
 		-e 's|@GST_VERSION_MAJOR@|$(VERSION_MAJOR)|g' \
 		-e 's|@GST_VERSION_MINOR@|$(VERSION_MINOR)|g' \
@@ -280,6 +280,7 @@ install-gst-mcp: $(OUTDIR)/gst-mcp
 install-desktop:
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/applications
 	$(INSTALL_DATA) data/gst.desktop $(DESTDIR)$(DATADIR)/applications/
+	$(INSTALL_DATA) data/gst-lrg.desktop $(DESTDIR)$(DATADIR)/applications/
 	$(MKDIR_P) $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps
 	$(INSTALL_DATA) data/logo-256.png $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
 
@@ -303,6 +304,7 @@ uninstall:
 	rm -f $(DESTDIR)$(TYPELIBDIR)/$(TYPELIB_FILE)
 	rm -rf $(DESTDIR)$(MODULEDIR)
 	rm -f $(DESTDIR)$(DATADIR)/applications/gst.desktop
+	rm -f $(DESTDIR)$(DATADIR)/applications/gst-lrg.desktop
 	rm -f $(DESTDIR)$(DATADIR)/icons/hicolor/256x256/apps/gst.png
 	rm -f $(DESTDIR)/usr/share/terminfo/g/gst-256color
 

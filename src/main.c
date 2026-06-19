@@ -54,6 +54,12 @@
 #include "window/gst-wayland-window.h"
 #endif
 
+#ifdef GST_HAVE_LRG_BACKEND
+#include "rendering/gst-grl-font-cache.h"
+#include "rendering/gst-lrg-renderer.h"
+#include "window/gst-lrg-window.h"
+#endif
+
 /* ===== Constants ===== */
 
 /* Keyboard modifier mask for forced mouse reporting */
@@ -90,6 +96,32 @@ static gboolean opt_no_yaml_config = FALSE;
 static gboolean opt_x11 = FALSE;
 static gboolean opt_wayland = FALSE;
 
+#ifdef GST_HAVE_LRG_BACKEND
+/* --lrg[=MODE]: use the libregnum/raylib backend. Bare --lrg means 2D
+ * (the only implemented mode); 3d/3dvr are reserved. Parsed via a callback
+ * so the value is optional. */
+static gboolean          opt_lrg_given = FALSE;
+static GstLrgRenderMode  opt_lrg_mode = GST_LRG_RENDER_MODE_2D;
+
+static gboolean
+opt_lrg_cb(
+	const gchar     *name,
+	const gchar     *value,
+	gpointer         data,
+	GError         **error
+){
+	(void)name;
+	(void)data;
+	opt_lrg_given = TRUE;
+	if (!gst_lrg_render_mode_from_string(value, &opt_lrg_mode)) {
+		g_set_error(error, G_OPTION_ERROR, G_OPTION_ERROR_BAD_VALUE,
+			"unknown --lrg mode '%s' (use 2d, 3d, or 3dvr)", value);
+		return FALSE;
+	}
+	return TRUE;
+}
+#endif
+
 static GOptionEntry entries[] = {
 	{ "config", 'c', 0, G_OPTION_ARG_FILENAME, &opt_config,
 	  "Use specified config file", "PATH" },
@@ -115,6 +147,12 @@ static GOptionEntry entries[] = {
 	  "Force X11 backend", NULL },
 	{ "wayland", 0, 0, G_OPTION_ARG_NONE, &opt_wayland,
 	  "Force Wayland backend", NULL },
+#ifdef GST_HAVE_LRG_BACKEND
+	{ "lrg", 0, G_OPTION_FLAG_OPTIONAL_ARG, G_OPTION_ARG_CALLBACK,
+	  (gpointer)opt_lrg_cb,
+	  "Use the libregnum/raylib backend (MODE: 2d [default]; 3d/3dvr reserved)",
+	  "MODE" },
+#endif
 	{ "mcp-socket", 0, 0, G_OPTION_ARG_STRING, &opt_mcp_socket,
 	  "MCP socket name (creates gst-mcp-NAME.sock)", "NAME" },
 	{ "generate-yaml-config", 0, 0, G_OPTION_ARG_NONE, &opt_generate_yaml,
@@ -504,6 +542,11 @@ static GstFontCache *font_cache = NULL;
 #ifdef GST_HAVE_WAYLAND
 /* Wayland-specific state (only valid when backend == GST_BACKEND_WAYLAND) */
 static GstCairoFontCache *cairo_font_cache = NULL;
+#endif
+
+#ifdef GST_HAVE_LRG_BACKEND
+/* LRG-specific state (only valid when backend == GST_BACKEND_LRG) */
+static GstGrlFontCache *grl_font_cache = NULL;
 #endif
 
 /* Window mode flags (shared between backends) */
@@ -930,6 +973,12 @@ set_win_mode(GstWinMode mode)
 			GST_WAYLAND_RENDERER(renderer), mode);
 	}
 #endif
+#ifdef GST_HAVE_LRG_BACKEND
+	else if (backend == GST_BACKEND_LRG) {
+		gst_lrg_renderer_set_win_mode(
+			GST_LRG_RENDERER(renderer), mode);
+	}
+#endif
 }
 
 /*
@@ -943,6 +992,12 @@ set_win_mode(GstWinMode mode)
 static GstBackendType
 detect_backend(void)
 {
+#ifdef GST_HAVE_LRG_BACKEND
+	/* --lrg selects the libregnum backend with highest precedence. */
+	if (opt_lrg_given) {
+		return GST_BACKEND_LRG;
+	}
+#endif
 #ifdef GST_HAVE_WAYLAND
 	if (opt_wayland) {
 		return GST_BACKEND_WAYLAND;
@@ -977,6 +1032,15 @@ do_draw(gpointer user_data)
 	if (!(win_mode & GST_WIN_MODE_VISIBLE)) {
 		return G_SOURCE_REMOVE;
 	}
+
+#ifdef GST_HAVE_LRG_BACKEND
+	/* The LRG backend redraws every frame from its own 16ms render-loop
+	 * tick (raylib is immediate-mode and must poll+present continuously),
+	 * so event-driven draws here would double-bracket the frame. */
+	if (backend == GST_BACKEND_LRG) {
+		return G_SOURCE_REMOVE;
+	}
+#endif
 
 	if (!gst_renderer_start_draw(renderer)) {
 		return G_SOURCE_REMOVE;
@@ -1059,6 +1123,13 @@ zoom(GstAction action)
 		fontstr = gst_cairo_font_cache_get_used_font(cairo_font_cache);
 	}
 #endif
+#ifdef GST_HAVE_LRG_BACKEND
+	else if (backend == GST_BACKEND_LRG) {
+		cur_size = gst_grl_font_cache_get_font_size(grl_font_cache);
+		def_size = gst_grl_font_cache_get_default_font_size(grl_font_cache);
+		fontstr = gst_grl_font_cache_get_used_font(grl_font_cache);
+	}
+#endif
 	else {
 		return;
 	}
@@ -1121,6 +1192,22 @@ zoom(GstAction action)
 
 		cell_w = gst_cairo_font_cache_get_char_width(cairo_font_cache);
 		cell_h = gst_cairo_font_cache_get_char_height(cairo_font_cache);
+	}
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+	else if (backend == GST_BACKEND_LRG) {
+		gst_grl_font_cache_unload_fonts(grl_font_cache);
+		if (!gst_grl_font_cache_load_fonts(grl_font_cache,
+			fontstr, new_size))
+		{
+			/* Reload at old size as fallback */
+			gst_grl_font_cache_load_fonts(grl_font_cache,
+				fontstr, cur_size);
+			return;
+		}
+
+		cell_w = gst_grl_font_cache_get_char_width(grl_font_cache);
+		cell_h = gst_grl_font_cache_get_char_height(grl_font_cache);
 	}
 #endif
 
@@ -1905,6 +1992,89 @@ init_wayland_backend(
 }
 #endif /* GST_HAVE_WAYLAND */
 
+#ifdef GST_HAVE_LRG_BACKEND
+/*
+ * init_lrg_backend:
+ * @cols: terminal columns
+ * @rows: terminal rows
+ * @fontstr: font specification
+ * @config: configuration object
+ *
+ * Initializes the libregnum/LRG backend. Unlike X11/Wayland (which measure
+ * the font before creating the window), raylib fonts need an active GL
+ * context, so the window is created first, then fonts are loaded and the
+ * window is resized precisely to the grid.
+ *
+ * Returns: TRUE on success
+ */
+static gboolean
+init_lrg_backend(
+	gint            cols,
+	gint            rows,
+	const gchar     *fontstr,
+	GstConfig       *config
+){
+	GstLrgWindow *lrg_win;
+	GstLrgRenderer *lrg_renderer;
+	gint win_w;
+	gint win_h;
+
+	/* Initialize fontconfig (resolves the font spec to a TTF path) */
+	if (!FcInit()) {
+		g_printerr("Could not initialize fontconfig\n");
+		return FALSE;
+	}
+
+	/* Create the raylib window first (provisional cell size); this opens
+	 * the GL context the font atlas needs. */
+	lrg_win = gst_lrg_window_new(cols, rows, 10, 20, (gint)cfg_border_px);
+	if (lrg_win == NULL) {
+		g_printerr("Cannot create libregnum window (no display?)\n");
+		return FALSE;
+	}
+	window = GST_WINDOW(lrg_win);
+
+	/* Load fonts now the GL context exists, then size the window exactly. */
+	grl_font_cache = gst_grl_font_cache_new();
+	if (!gst_grl_font_cache_load_fonts(grl_font_cache, fontstr, 0)) {
+		g_printerr("Cannot load font: %s\n", fontstr);
+		g_object_unref(grl_font_cache);
+		grl_font_cache = NULL;
+		return FALSE;
+	}
+
+	cell_w = gst_grl_font_cache_get_char_width(grl_font_cache);
+	cell_h = gst_grl_font_cache_get_char_height(grl_font_cache);
+
+	win_w = cols * cell_w + 2 * (gint)cfg_border_px;
+	win_h = rows * cell_h + 2 * (gint)cfg_border_px;
+
+	gst_window_set_wm_hints(window, cell_w, cell_h, (gint)cfg_border_px);
+	gst_window_resize(window, (guint)win_w, (guint)win_h);
+	gst_window_show(window);
+
+	/* Create the renderer and wire it into the window's frame pump. */
+	lrg_renderer = gst_lrg_renderer_new(terminal, lrg_win,
+		grl_font_cache, (gint)cfg_border_px);
+	renderer = GST_RENDERER(lrg_renderer);
+	gst_lrg_window_set_renderer(lrg_win, renderer);
+
+	/* Load colors from config */
+	if (!gst_lrg_renderer_load_colors(lrg_renderer, config)) {
+		g_printerr("Cannot load colors\n");
+	}
+
+	/* Apply the requested render mode (2D only today). */
+	gst_lrg_window_set_render_mode(lrg_win, opt_lrg_mode);
+
+	/* Set initial win_mode */
+	set_win_mode(GST_WIN_MODE_VISIBLE | GST_WIN_MODE_FOCUSED
+		| GST_WIN_MODE_NUMLOCK);
+
+	return TRUE;
+}
+#endif /* GST_HAVE_LRG_BACKEND */
+
 /* ===== Main ===== */
 
 int
@@ -2015,6 +2185,17 @@ main(
 	if (backend == GST_BACKEND_WAYLAND) {
 		g_printerr("Wayland support not compiled in. "
 			"Rebuild with BUILD_WAYLAND=1\n");
+		return EXIT_FAILURE;
+	}
+#endif
+
+#ifdef GST_HAVE_LRG_BACKEND
+	/* Only the 2D render mode is implemented; reject 3d/3dvr cleanly. */
+	if (backend == GST_BACKEND_LRG
+	    && !gst_lrg_render_mode_is_implemented(opt_lrg_mode)) {
+		g_printerr("gst: --lrg=%s is not yet implemented; "
+			"only 2d is supported\n",
+			gst_lrg_render_mode_to_string(opt_lrg_mode));
 		return EXIT_FAILURE;
 	}
 #endif
@@ -2222,6 +2403,11 @@ skip_c_config:
 			ok = init_wayland_backend(cols, rows, fontstr, config);
 			break;
 #endif
+#ifdef GST_HAVE_LRG_BACKEND
+		case GST_BACKEND_LRG:
+			ok = init_lrg_backend(cols, rows, fontstr, config);
+			break;
+#endif
 		default:
 			g_printerr("Unknown backend type\n");
 			break;
@@ -2244,6 +2430,12 @@ skip_c_config:
 	case GST_BACKEND_WAYLAND:
 		gst_wayland_renderer_set_selection(
 			GST_WAYLAND_RENDERER(renderer), selection);
+		break;
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+	case GST_BACKEND_LRG:
+		gst_lrg_renderer_set_selection(
+			GST_LRG_RENDERER(renderer), selection);
 		break;
 #endif
 	default:
@@ -2272,6 +2464,11 @@ skip_c_config:
 #ifdef GST_HAVE_WAYLAND
 		if (cairo_font_cache != NULL) {
 			g_object_unref(cairo_font_cache);
+		}
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+		if (grl_font_cache != NULL) {
+			g_object_unref(grl_font_cache);
 		}
 #endif
 		g_object_unref(pty);
@@ -2343,6 +2540,14 @@ skip_c_config:
 			gst_module_manager_set_font_cache(mod_mgr, cairo_font_cache);
 		}
 #endif
+#ifdef GST_HAVE_LRG_BACKEND
+		else if (backend == GST_BACKEND_LRG) {
+			/* The LRG backend rasterizes glyphs with a cairo-ft cache, so
+			 * hand modules that (same type as the Wayland backend). */
+			gst_module_manager_set_font_cache(mod_mgr,
+				gst_grl_font_cache_get_cairo_cache(grl_font_cache));
+		}
+#endif
 
 		gst_module_manager_activate_all(mod_mgr);
 	}
@@ -2376,6 +2581,14 @@ skip_c_config:
 	if (cairo_font_cache != NULL) {
 		gst_cairo_font_cache_unload_fonts(cairo_font_cache);
 		g_object_unref(cairo_font_cache);
+	}
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+	/* graylib fonts need the GL context (owned by the window), so unload
+	 * before the window is destroyed. */
+	if (grl_font_cache != NULL) {
+		gst_grl_font_cache_unload_fonts(grl_font_cache);
+		g_object_unref(grl_font_cache);
 	}
 #endif
 

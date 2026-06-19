@@ -9,6 +9,7 @@ GST (GObject Simple Terminal) is a GObject-based terminal emulator reimplementin
 ```bash
 make              # Build everything
 make DEBUG=1      # Debug build with symbols
+make LRG_BACKEND=1 # Build with the libregnum (LRG) 2D backend (--lrg)
 make test         # Run GTest suite
 make clean        # Clean build artifacts
 ```
@@ -16,8 +17,8 @@ make clean        # Clean build artifacts
 ## Directory Structure
 
 - `src/core/` - Terminal emulation (GstTerminal, GstPty, GstEscapeParser)
-- `src/rendering/` - Rendering (abstract GstRenderer, GstX11Renderer)
-- `src/window/` - Windowing (abstract GstWindow, GstX11Window)
+- `src/rendering/` - Rendering (abstract GstRenderer; X11, Wayland, and LRG/graylib renderers + render contexts + font caches)
+- `src/window/` - Windowing (abstract GstWindow; X11, Wayland, and LRG/graylib windows)
 - `src/config/` - YAML configuration (GstConfig, GstColorScheme)
 - `src/module/` - Module system (GstModule, GstModuleManager)
 - `src/boxed/` - Boxed types (GstGlyph, GstCursor)
@@ -195,6 +196,25 @@ Phase 9 (Wayland Backend + Abstract Render Context):
 - Wayland protocols: xdg-shell (stable), zwp_primary_selection_v1 (unstable)
 - 9 new render context tests (152 total tests pass)
 
+Phase 10 (libregnum/LRG 2D backend):
+- Optional third backend rendering the terminal via libregnum/graylib (raylib
+  GObject wrapper) in a raylib/OpenGL window; gated by `make LRG_BACKEND=1`
+- `--lrg[=MODE]` CLI flag (defaults to 2D; 3D/3DVR reserved and rejected),
+  takes precedence over `--x11`/`--wayland`/`$WAYLAND_DISPLAY`
+- GstLrgWindow: owns a GrlWindow + a 16ms render-loop GSource on the GLib main
+  loop (raylib has no fd-based event source); polls input -> GstWindow signals,
+  drives the renderer start_draw/render/finish_draw each tick
+- GstLrgRenderer: full-grid immediate-mode redraw each frame (raylib clears the
+  framebuffer); swap_buffers, never EndDrawing (its WaitTime would block GLib)
+- GstLrgRenderContext: GstRenderContextOps over graylib draw calls -> module
+  overlays (scrollback, boxdraw, transparency) work unchanged
+- GstGrlFontCache: wraps GstCairoFontCache (cairo-ft) and caches each glyph as
+  a graylib texture (rasterized white+alpha, tinted at blit) so text is
+  pixel-identical to the X11/Wayland backends; mirrors cmacs lrgterm
+- VERSION bumped to 0.4.0; full input/selection/clipboard/resize parity
+- New test-lrg-backend (enum helpers + backend registration)
+
 Next phases:
+- LRG 3D / 3D-VR render modes (libregnum engine + cameras)
 - Mouse reporting protocol (SGR, X10, etc.)
 - Zoom support (font cache resize)

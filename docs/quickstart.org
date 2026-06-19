@@ -28,6 +28,15 @@ sudo dnf install wayland-devel wayland-protocols-devel \
     libxkbcommon-devel cairo-devel
 #+end_src
 
+*Optional (libregnum/LRG 2D backend, =--lrg=):*
+
+#+begin_src sh
+sudo dnf install mesa-libGL-devel    # graylib/raylib are vendored
+make LRG_BACKEND=1
+#+end_src
+
+See [[file:lrg-backend.org][LRG Backend]] for details.
+
 *Optional (MCP module for AI assistant integration):*
 
 #+begin_src sh
@@ -70,7 +79,7 @@ Or after =make install=:
 gst
 #+end_src
 
-GST auto-detects whether to use X11 or Wayland based on your session. You can force a backend with =--x11= or =--wayland=.
+GST auto-detects whether to use X11 or Wayland based on your session. You can force a backend with =--x11= or =--wayland=. A =LRG_BACKEND=1= build also accepts =--lrg= for the [[file:lrg-backend.org][libregnum 2D backend]].
 
 ** Generate a Config File
 :PROPERTIES:

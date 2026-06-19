@@ -4,6 +4,22 @@
 :END:
 No critical known issues at this time.
 
+** libregnum (LRG) backend caveats
+:PROPERTIES:
+:CUSTOM_ID: lrg-backend-caveats
+:END:
+These are expected limitations of the optional =--lrg= backend (see
+[[file:lrg-backend.org][LRG Backend]]), not bugs:
+
+- =PRIMARY= selection maps to the system clipboard (raylib/GLFW exposes only
+  one clipboard), so middle-click paste returns the last copied/selected text.
+- =--lrg=3d= and =--lrg=3dvr= are reserved and rejected at startup; only =2d=
+  is implemented.
+- The window repaints at ~60fps while open (immediate-mode rendering).
+- Window transparency is applied at the window level, not per-cell.
+- =--lrg= opens a separate raylib/OpenGL window and does not support embedding
+  via =--windid=.
+
 ** Resolved Issues
 :PROPERTIES:
 :CUSTOM_ID: resolved-issues

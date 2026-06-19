@@ -455,11 +455,69 @@ GType gst_font_style_get_type(void) G_GNUC_CONST;
  */
 typedef enum {
     GST_BACKEND_X11 = 0,
-    GST_BACKEND_WAYLAND
+    GST_BACKEND_WAYLAND,
+    GST_BACKEND_LRG
 } GstBackendType;
 
 GType gst_backend_type_get_type(void) G_GNUC_CONST;
 #define GST_TYPE_BACKEND_TYPE (gst_backend_type_get_type())
+
+/*
+ * GstLrgRenderMode:
+ * @GST_LRG_RENDER_MODE_2D: flat 2D terminal grid. The only mode implemented
+ *   today; the default for a bare --lrg.
+ * @GST_LRG_RENDER_MODE_3D: terminal as a panel in a 3D scene. Reserved (not
+ *   yet implemented).
+ * @GST_LRG_RENDER_MODE_3DVR: stereo 3D for VR headsets. Reserved.
+ *
+ * The render mode of the libregnum (%GST_BACKEND_LRG) backend, mirroring
+ * cmacs/gsurf. Parsed from the --lrg[=MODE] command line by
+ * gst_lrg_render_mode_from_string().
+ */
+typedef enum {
+    GST_LRG_RENDER_MODE_2D,
+    GST_LRG_RENDER_MODE_3D,
+    GST_LRG_RENDER_MODE_3DVR
+} GstLrgRenderMode;
+
+GType gst_lrg_render_mode_get_type(void) G_GNUC_CONST;
+#define GST_TYPE_LRG_RENDER_MODE (gst_lrg_render_mode_get_type())
+
+/*
+ * gst_lrg_render_mode_from_string:
+ * @str: (nullable): mode string ("2d", "3d", "3dvr"), or NULL/"" for 2D
+ * @out_mode: (out): location for the parsed #GstLrgRenderMode
+ *
+ * Parses a --lrg[=MODE] value. A NULL or empty string yields
+ * %GST_LRG_RENDER_MODE_2D (the default), matching emacs --lrg.
+ *
+ * Returns: TRUE on a recognised mode (or bare --lrg), FALSE on an
+ *   unrecognised mode (@out_mode is left at %GST_LRG_RENDER_MODE_2D).
+ */
+gboolean
+gst_lrg_render_mode_from_string(
+    const gchar         *str,
+    GstLrgRenderMode    *out_mode
+);
+
+/*
+ * gst_lrg_render_mode_to_string:
+ * @mode: a #GstLrgRenderMode
+ *
+ * Returns: (nullable): the canonical nick ("2d", "3d", "3dvr"), or NULL.
+ */
+const gchar *
+gst_lrg_render_mode_to_string(GstLrgRenderMode mode);
+
+/*
+ * gst_lrg_render_mode_is_implemented:
+ * @mode: a #GstLrgRenderMode
+ *
+ * Returns: TRUE if @mode is implemented today. Only
+ *   %GST_LRG_RENDER_MODE_2D is implemented; 3D / 3D-VR are reserved.
+ */
+gboolean
+gst_lrg_render_mode_is_implemented(GstLrgRenderMode mode);
 
 G_END_DECLS
 
