@@ -164,6 +164,16 @@ LIB_HDRS += \
 $(LRG_GRAYLIB_LIB) $(LRG_RAYLIB_LIB):
 	$(MAKE) -C $(GRAYLIB_DIR) lib
 $(OUTDIR)/$(LIB_SHARED_FULL): $(LRG_GRAYLIB_LIB) $(LRG_RAYLIB_LIB)
+
+# The LRG sources #include <graylib.h>, which pulls in graylib's GENERATED
+# grl-version.h / config.h. Building the archive also generates those headers,
+# so make every LRG object order-only depend on it: graylib is built before
+# these objects compile (even under parallel make), but a newer archive
+# timestamp does not force needless recompiles.
+$(OBJDIR)/rendering/gst-grl-font-cache.o: | $(LRG_GRAYLIB_LIB)
+$(OBJDIR)/rendering/gst-lrg-render-context.o: | $(LRG_GRAYLIB_LIB)
+$(OBJDIR)/rendering/gst-lrg-renderer.o: | $(LRG_GRAYLIB_LIB)
+$(OBJDIR)/window/gst-lrg-window.o: | $(LRG_GRAYLIB_LIB)
 endif
 
 # yaml-glib sources (built-in dependency)
