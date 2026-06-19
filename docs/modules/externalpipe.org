@@ -1,0 +1,102 @@
+* External Pipe Module
+:PROPERTIES:
+:CUSTOM_ID: external-pipe-module
+:END:
+Pipe visible terminal screen content to an external command.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The externalpipe module collects all visible text from the terminal screen and pipes it to a shell command via stdin. This is useful for extracting text from the screen for processing -- for example, piping to a URL selector, a clipboard tool, or a search script.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  externalpipe:
+    enabled: true
+    command: "grep -oP 'https?://\\S+' | head -1 | xclip -selection clipboard"
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "externalpipe", "enabled", TRUE);
+gst_config_set_module_config_string(config, "externalpipe", "command",
+    "grep -oP 'https?://\\S+' | head -1 | xclip -selection clipboard");
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option    | Type    | Default | Description                             |
+|-----------+---------+---------+-----------------------------------------|
+| =enabled= | boolean | =false= | Enable the module                       |
+| =command= | string  | =""=    | Shell command to pipe screen content to |
+
+** Keybindings
+:PROPERTIES:
+:CUSTOM_ID: keybindings
+:END:
+| Key            | Action                                        |
+|----------------+-----------------------------------------------|
+| =Ctrl+Shift+e= | Pipe screen content to the configured command |
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+1. Set the =command= option to the command you want to receive the terminal text
+2. Press =Ctrl+Shift+e= to trigger
+3. All visible terminal text is collected and written to the command's stdin
+4. The command runs asynchronously via =/bin/sh -c=
+
+*** Examples
+:PROPERTIES:
+:CUSTOM_ID: examples
+:END:
+*Copy all URLs to clipboard:*
+
+#+begin_src yaml
+modules:
+  externalpipe:
+    enabled: true
+    command: "grep -oP 'https?://\\S+' | xclip -selection clipboard"
+#+end_src
+
+*Open URL selector with dmenu:*
+
+#+begin_src yaml
+modules:
+  externalpipe:
+    enabled: true
+    command: "grep -oP 'https?://\\S+' | sort -u | dmenu -l 10 | xargs xdg-open"
+#+end_src
+
+*Save screen content to a file:*
+
+#+begin_src yaml
+modules:
+  externalpipe:
+    enabled: true
+    command: "cat > /tmp/terminal-dump.txt"
+#+end_src
+
+** Notes
+:PROPERTIES:
+:CUSTOM_ID: notes
+:END:
+- The command receives all visible terminal lines via stdin, then stdin is closed
+- Wide character placeholders (dummy cells for double-width characters) are skipped
+- The command is wrapped with =/bin/sh -c= so pipes and shell features work
+- The module does nothing if =command= is empty

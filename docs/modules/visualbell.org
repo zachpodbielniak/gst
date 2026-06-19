@@ -1,0 +1,61 @@
+* Visual Bell Module
+:PROPERTIES:
+:CUSTOM_ID: visual-bell-module
+:END:
+Visual flash notification on terminal bell events.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The visualbell module provides a visual indicator when the terminal bell character (ASCII 0x07, =\a=) is received. Instead of (or in addition to) an audible beep, the terminal briefly flashes to notify you.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  visualbell:
+    enabled: true
+    duration: 100
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "visualbell", "enabled", TRUE);
+gst_config_set_module_config_int(config, "visualbell", "duration", 100);
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option     | Type    | Default | Range   | Description                    |
+|------------+---------+---------+---------+--------------------------------|
+| =enabled=  | boolean | =false= |         | Enable the module              |
+| =duration= | integer | =100=   | 10-5000 | Flash duration in milliseconds |
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+Enable the module and the terminal will flash whenever a bell character is received. Common triggers:
+
+- Tab completion with no matches (bash)
+- =echo -e '\a'=
+- Programs that signal errors via bell
+
+** Notes
+:PROPERTIES:
+:CUSTOM_ID: notes
+:END:
+- The flash duration controls how long the visual indicator is displayed
+- This module implements the =GstBellHandler= interface

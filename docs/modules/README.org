@@ -1,0 +1,106 @@
+* GST Modules
+:PROPERTIES:
+:CUSTOM_ID: gst-modules
+:END:
+Modules extend GST's functionality through a plugin system. Each module is a shared object (=.so=) that GST loads at startup. Modules can intercept keyboard events, modify rendering, handle URLs, and more.
+
+** Quick Reference
+:PROPERTIES:
+:CUSTOM_ID: quick-reference
+:END:
+*** Core Modules
+:PROPERTIES:
+:CUSTOM_ID: core-modules
+:END:
+| Module                                       | Description                                       | Default  |
+|----------------------------------------------+---------------------------------------------------+----------|
+| [[file:scrollback.org][scrollback]]           | Scrollback history with keyboard/mouse navigation | Enabled  |
+| [[file:transparency.org][transparency]]       | Window opacity with focus tracking                | Disabled |
+| [[file:urlclick.org][urlclick]]               | Detect and open URLs                              | Enabled  |
+| [[file:externalpipe.org][externalpipe]]       | Pipe screen content to external commands          | Disabled |
+| [[file:boxdraw.org][boxdraw]]                 | Pixel-perfect box-drawing characters              | Enabled  |
+| [[file:visualbell.org][visualbell]]           | Visual flash on terminal bell                     | Disabled |
+| [[file:undercurl.org][undercurl]]             | Curly underline rendering                         | Enabled  |
+| [[file:clipboard.org][clipboard]]             | Auto-sync selection to system clipboard           | Enabled  |
+| [[file:font2.org][font2]]                     | Fallback font preloading                          | Disabled |
+| [[file:keyboard-select.org][keyboard_select]] | Vim-like keyboard text selection                  | Disabled |
+| [[file:kittygfx.org][kittygfx]]               | Kitty graphics protocol (inline images)           | Disabled |
+| [[file:mcp.org][mcp]]                         | MCP server for AI assistant integration           | Disabled |
+
+*** Escape Sequence Modules
+:PROPERTIES:
+:CUSTOM_ID: escape-sequence-modules
+:END:
+| Module                                           | Description                                          | Default  |
+|--------------------------------------------------+------------------------------------------------------+----------|
+| [[file:notify.org][notify]]                       | Desktop notifications via OSC 9/777/99               | Disabled |
+| [[file:dynamic-colors.org][dynamic_colors]]       | Runtime color palette changes via OSC 10/11/12/4/104 | Enabled  |
+| [[file:osc52.org][osc52]]                         | Remote clipboard access via OSC 52                   | Disabled |
+| [[file:sync-update.org][sync_update]]             | Synchronized output (mode 2026) to eliminate flicker | Enabled  |
+| [[file:shell-integration.org][shell_integration]] | Semantic prompt zones via OSC 133                    | Disabled |
+| [[file:hyperlinks.org][hyperlinks]]               | OSC 8 explicit hyperlinks with click-to-open         | Disabled |
+
+*** Graphics and Rendering Modules
+:PROPERTIES:
+:CUSTOM_ID: graphics-and-rendering-modules
+:END:
+| Module                           | Description                                   | Default  |
+|----------------------------------+-----------------------------------------------+----------|
+| [[file:sixel.org][sixel]]         | DEC Sixel graphics protocol for inline images | Disabled |
+| [[file:ligatures.org][ligatures]] | HarfBuzz font ligature rendering              | Disabled |
+
+*** Interactive Modules
+:PROPERTIES:
+:CUSTOM_ID: interactive-modules
+:END:
+| Module                     | Description                                          | Default  |
+|----------------------------+------------------------------------------------------+----------|
+| [[file:search.org][search]] | Interactive scrollback text search with highlighting | Disabled |
+
+** Enabling / Disabling Modules
+:PROPERTIES:
+:CUSTOM_ID: enabling--disabling-modules
+:END:
+In your YAML config (=~/.config/gst/config.yaml=):
+
+#+begin_src yaml
+modules:
+  scrollback:
+    enabled: true
+  transparency:
+    enabled: false
+#+end_src
+
+In C config:
+
+#+begin_src C
+gst_config_set_module_config_bool(config, "scrollback", "enabled", TRUE);
+gst_config_set_module_config_bool(config, "transparency", "enabled", FALSE);
+#+end_src
+
+A module set to =enabled: false= is not activated at startup. Omitting the =enabled= key defaults to the module's built-in default (see table above).
+
+** Module Search Path
+:PROPERTIES:
+:CUSTOM_ID: module-search-path
+:END:
+Modules are loaded from =.so= files at startup. GST searches these directories in order:
+
+1. =$GST_MODULE_PATH= (colon-separated directories)
+2. =~/.config/gst/modules/=
+3. =/etc/gst/modules/=
+4. =/usr/share/gst/modules/=
+
+All built-in modules are compiled into the build directory and loaded automatically.
+
+** Writing Custom Modules
+:PROPERTIES:
+:CUSTOM_ID: writing-custom-modules
+:END:
+See the [[file:module-system.org][Module System Developer Guide]] for how to write your own modules, including:
+
+- Module entry points and lifecycle
+- Available interfaces (hook points)
+- Priority system
+- Building and testing
+- Minimal example with Makefile

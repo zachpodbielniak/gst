@@ -1,0 +1,104 @@
+* Font2 Module
+:PROPERTIES:
+:CUSTOM_ID: font2-module
+:END:
+Fallback font preloading for faster rendering.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The font2 module pre-loads fallback fonts into the font cache at startup. Without it, when GST encounters a character not in the primary font (e.g. emoji, Nerd Font icons), fontconfig performs a system-wide search to find a matching font -- this can cause a visible delay on the first occurrence.
+
+By specifying your fallback fonts explicitly, the module loads them into the cache before any rendering begins, eliminating the runtime lookup delay.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  font2:
+    enabled: true
+    fonts:
+      - "Symbols Nerd Font:pixelsize=14"
+      - "Noto Color Emoji:pixelsize=14"
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "font2", "enabled", TRUE);
+
+const gchar *fonts[] = {
+    "Symbols Nerd Font:pixelsize=14",
+    "Noto Color Emoji:pixelsize=14",
+    NULL
+};
+gst_config_set_module_config_strv(config, "font2", "fonts", fonts);
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option    | Type     | Default | Description                                              |
+|-----------+----------+---------+----------------------------------------------------------|
+| =enabled= | boolean  | =false= | Enable the module                                        |
+| =fonts=   | string[] | =[]=    | List of fallback font specifications (fontconfig format) |
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+Add any fonts that contain characters your primary font lacks:
+
+- *Nerd Fonts* - For powerline symbols, devicons, and other coding icons
+- *Noto Color Emoji* - For emoji rendering
+- *CJK fonts* - For Chinese, Japanese, or Korean characters
+- *Mathematical fonts* - For mathematical symbols
+
+*** Font Format
+:PROPERTIES:
+:CUSTOM_ID: font-format
+:END:
+Fonts use the same fontconfig pattern syntax as the primary font:
+
+#+begin_example
+Family:property=value:property=value
+#+end_example
+
+Common properties:
+
+- =pixelsize=14= - Size in pixels (should match your primary font)
+- =antialias=true= - Anti-aliasing
+- =style=Regular= - Font style
+
+*** Relationship to Global Fallbacks
+:PROPERTIES:
+:CUSTOM_ID: relationship-to-global-fallbacks
+:END:
+If the =fonts= list in the font2 module config is empty, the module falls back to the global =font.fallback= config:
+
+#+begin_src yaml
+font:
+  primary: "Liberation Mono:pixelsize=14"
+  fallback:
+    - "Noto Color Emoji:pixelsize=14"
+#+end_src
+
+The font2 module-specific =fonts= list takes priority over the global =font.fallback= when both are set.
+
+** Notes
+:PROPERTIES:
+:CUSTOM_ID: notes
+:END:
+- Works with both X11 (=GstFontCache=) and Wayland (=GstCairoFontCache=) backends
+- Fonts are loaded once during module activation and remain in the cache for the terminal's lifetime
+- If a specified font is not installed, it is silently skipped

@@ -1,0 +1,64 @@
+* Undercurl Module
+:PROPERTIES:
+:CUSTOM_ID: undercurl-module
+:END:
+Curly underline rendering support.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The undercurl module enables rendering of curly (wavy) underlines in the terminal. This decoration style is used by some programs (notably Neovim and other editors) to indicate spelling errors, diagnostics, or other inline annotations with a distinctive wavy line beneath the text.
+
+Without this module, curly underline escape sequences fall back to a standard straight underline.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  undercurl:
+    enabled: true
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "undercurl", "enabled", TRUE);
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option    | Type    | Default | Description                      |
+|-----------+---------+---------+----------------------------------|
+| =enabled= | boolean | =true=  | Enable curly underline rendering |
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+The module works automatically when enabled. Programs that emit curly underline escape sequences (SGR extended underline style) will display wavy underlines instead of straight ones.
+
+*** Common Programs That Use Undercurl
+:PROPERTIES:
+:CUSTOM_ID: common-programs-that-use-undercurl
+:END:
+- *Neovim* - Spell checking, LSP diagnostics
+- *Vim* (with terminal support) - Spell checking
+- *Various terminal applications* using SGR extended underline sequences
+
+** Notes
+:PROPERTIES:
+:CUSTOM_ID: notes
+:END:
+- This is a rendering feature toggle -- it has no keybindings or interactive behavior
+- When disabled, curly underline sequences render as standard straight underlines

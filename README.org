@@ -1,0 +1,186 @@
+#+begin_html
+  <p align="center">
+    <img src="data/logo.png" alt="GST Logo" width="192">
+  </p>
+#+end_html
+
+* GST - GObject Simple Terminal
+:PROPERTIES:
+:CUSTOM_ID: gst---gobject-simple-terminal
+:END:
+A GObject-based terminal emulator with modular extensibility. GST is a reimplementation of [[https://st.suckless.org/][st (suckless terminal)]] using GObject for clean architecture and a plugin-based module system to replace st's patch-based customization.
+
+** Features
+:PROPERTIES:
+:CUSTOM_ID: features
+:END:
+- *GObject Architecture*: Clean separation between terminal emulation, rendering, and windowing
+- *Module System*: GModule-based plugins with well-defined hook points (replacing st's patches)
+- *Dual Configuration*: YAML files for simple config, compiled C for advanced customization
+- *X11 and Wayland*: Both backends supported with runtime auto-detection
+- *GObject Introspection*: Full GIR support for language bindings
+
+** Building
+:PROPERTIES:
+:CUSTOM_ID: building
+:END:
+*** Dependencies
+:PROPERTIES:
+:CUSTOM_ID: dependencies
+:END:
+- glib-2.0, gobject-2.0, gio-2.0, gmodule-2.0
+- x11, xft, fontconfig
+- libyaml (yaml-0.1), json-glib-1.0
+- gcc (gnu89)
+- gobject-introspection (optional, for GIR generation)
+
+On Fedora:
+
+#+begin_src sh
+sudo dnf install gcc make \
+    glib2-devel \
+    gobject-introspection-devel \
+    libX11-devel \
+    libXft-devel \
+    fontconfig-devel \
+    libyaml-devel \
+    json-glib-devel
+#+end_src
+
+*** Build Commands
+:PROPERTIES:
+:CUSTOM_ID: build-commands
+:END:
+#+begin_src sh
+make              # Build all (lib, gst, modules)
+make lib          # Build static and shared libraries
+make gst          # Build the gst executable
+make gir          # Generate GIR/typelib
+make modules      # Build all modules
+make test         # Run the test suite
+make install      # Install to PREFIX
+make DEBUG=1      # Build with debug symbols
+#+end_src
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+#+begin_src sh
+gst                          # Start with default shell
+gst -e htop                  # Run htop
+gst -g 120x40                # Start with 120 columns, 40 rows
+gst -f 'JetBrains Mono:14'   # Use specific font
+gst -c ~/.config/gst/my.yaml # Use custom config
+gst --x11                    # Force X11 backend
+gst --wayland                # Force Wayland backend
+#+end_src
+
+See [[file:docs/cli.org]] for the complete CLI reference.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+Generate a default config file:
+
+#+begin_src sh
+gst --generate-yaml-config > ~/.config/gst/config.yaml
+#+end_src
+
+Configuration files are searched in this order:
+
+1. =--config PATH= (command line override)
+2. =~/.config/gst/config.yaml=
+3. =/etc/gst/config.yaml=
+4. =/usr/share/gst/config.yaml=
+
+GST also supports a C configuration file for advanced customization (compiled automatically at startup). See [[file:docs/c-config.org]] for details.
+
+See [[file:docs/configuration.org]] for the complete configuration reference.
+
+** Modules
+:PROPERTIES:
+:CUSTOM_ID: modules
+:END:
+Modules are loaded from:
+
+1. =$GST_MODULE_PATH= (environment variable, colon-separated)
+2. =~/.config/gst/modules/=
+3. =/etc/gst/modules/=
+4. =/usr/share/gst/modules/=
+
+*** Built-in Modules
+:PROPERTIES:
+:CUSTOM_ID: built-in-modules
+:END:
+| Module                                                    | Description                                           | Default  |
+|-----------------------------------------------------------+-------------------------------------------------------+----------|
+| [[file:docs/modules/scrollback.org][scrollback]]           | Ring buffer scrollback with keyboard/mouse navigation | Enabled  |
+| [[file:docs/modules/transparency.org][transparency]]       | Window opacity with focus tracking                    | Disabled |
+| [[file:docs/modules/urlclick.org][urlclick]]               | URL detection and opening                             | Enabled  |
+| [[file:docs/modules/externalpipe.org][externalpipe]]       | Pipe screen content to external commands              | Disabled |
+| [[file:docs/modules/boxdraw.org][boxdraw]]                 | Pixel-perfect box-drawing characters                  | Enabled  |
+| [[file:docs/modules/visualbell.org][visualbell]]           | Visual flash on terminal bell                         | Disabled |
+| [[file:docs/modules/undercurl.org][undercurl]]             | Curly underline rendering                             | Enabled  |
+| [[file:docs/modules/clipboard.org][clipboard]]             | Auto-sync selection to system clipboard               | Enabled  |
+| [[file:docs/modules/font2.org][font2]]                     | Fallback font preloading                              | Disabled |
+| [[file:docs/modules/keyboard-select.org][keyboard_select]] | Vim-like keyboard text selection                      | Disabled |
+| [[file:docs/modules/kittygfx.org][kittygfx]]               | Kitty graphics protocol (inline images)               | Disabled |
+| [[file:docs/modules/mcp.org][mcp]]                         | MCP server for AI assistant integration               | Disabled |
+
+See [[file:docs/modules/README.org]] for the complete module guide.
+
+*** Writing Modules
+:PROPERTIES:
+:CUSTOM_ID: writing-modules
+:END:
+See [[file:docs/modules/module-system.org]] for the module development guide.
+
+** Architecture
+:PROPERTIES:
+:CUSTOM_ID: architecture
+:END:
+#+begin_example
+gst/
+├── src/
+│   ├── core/           # Terminal emulation
+│   ├── rendering/      # Abstract renderer + X11 implementation
+│   ├── window/         # Abstract window + X11 implementation
+│   ├── config/         # YAML configuration
+│   ├── module/         # Module system
+│   ├── selection/      # Selection and clipboard
+│   ├── boxed/          # GBoxed types (glyph, cursor)
+│   ├── interfaces/     # Module hook interfaces
+│   └── util/           # UTF-8, base64 utilities
+├── modules/            # Built-in modules
+├── tests/              # GTest unit tests
+└── data/               # Default config and color schemes
+#+end_example
+
+** Documentation
+:PROPERTIES:
+:CUSTOM_ID: documentation
+:END:
+- [[file:docs/quickstart.org][Quick Start Guide]] - Get up and running
+- [[file:docs/cli.org][CLI Reference]] - All command-line options
+- [[file:docs/configuration.org][Configuration Reference]] - Every config option explained
+- [[file:docs/keybindings.org][Keybindings]] - Keyboard and mouse bindings
+- [[file:docs/colors.org][Color Schemes]] - Theming and palette customization
+- [[file:docs/c-config.org][C Configuration]] - Advanced config via compiled C
+- [[file:docs/modules/README.org][Module Guide]] - All built-in modules
+- [[file:docs/modules/module-system.org][Module Development]] - Writing custom modules
+- [[file:docs/modules/mcp.org][MCP Server]] - AI assistant integration
+- [[file:docs/known-issues.org][Known Issues]] - Open issues and workarounds
+
+** License
+:PROPERTIES:
+:CUSTOM_ID: license
+:END:
+AGPLv3 - See [[file:LICENSE]] for details.
+
+** Credits
+:PROPERTIES:
+:CUSTOM_ID: credits
+:END:
+Based on [[https://st.suckless.org/][st (suckless terminal)]] by suckless.org.

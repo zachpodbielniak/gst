@@ -1,0 +1,74 @@
+* Transparency Module
+:PROPERTIES:
+:CUSTOM_ID: transparency-module
+:END:
+Window opacity control with focus-aware adjustment.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The transparency module sets the window opacity using the =_NET_WM_WINDOW_OPACITY= hint (X11) or the equivalent Wayland mechanism. You can configure different opacity levels for when the window is focused versus unfocused, allowing the terminal to become more transparent when you switch to another window.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  transparency:
+    enabled: true
+    opacity: 0.9
+    focus_opacity: 0.95
+    unfocus_opacity: 0.8
+#+end_src
+
+If you only need a single opacity level (no focus tracking), just set =opacity=:
+
+#+begin_src yaml
+modules:
+  transparency:
+    enabled: true
+    opacity: 0.85
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "transparency", "enabled", TRUE);
+gst_config_set_module_config_double(config, "transparency", "opacity", 0.9);
+gst_config_set_module_config_double(config, "transparency", "focus_opacity", 0.95);
+gst_config_set_module_config_double(config, "transparency", "unfocus_opacity", 0.8);
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option            | Type    | Default | Range   | Description                                        |
+|-------------------+---------+---------+---------+----------------------------------------------------|
+| =enabled=         | boolean | =false= |         | Enable the module                                  |
+| =opacity=         | double  | =0.9=   | 0.0-1.0 | Static opacity (used when focus/unfocus are equal) |
+| =focus_opacity=   | double  | =0.9=   | 0.0-1.0 | Opacity when the window has focus                  |
+| =unfocus_opacity= | double  | =0.9=   | 0.0-1.0 | Opacity when the window loses focus                |
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+- =1.0= = fully opaque, =0.0= = fully transparent
+- If =focus_opacity= and =unfocus_opacity= are the same, focus tracking is skipped for efficiency
+- The =opacity= value is used as the initial opacity; =focus_opacity=/=unfocus_opacity= take over once focus events are received
+
+** Requirements
+:PROPERTIES:
+:CUSTOM_ID: requirements
+:END:
+- *X11*: Requires a compositor that supports =_NET_WM_WINDOW_OPACITY= (e.g. picom, compton, or a compositing window manager)
+- *Wayland*: Compositor support varies; works with compositors that respect client opacity hints

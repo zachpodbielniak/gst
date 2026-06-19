@@ -1,0 +1,110 @@
+* URL Click Module
+:PROPERTIES:
+:CUSTOM_ID: url-click-module
+:END:
+Detect and open URLs from the terminal screen.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The urlclick module scans the visible terminal text for URLs and opens the first match using a configurable opener command. Press =Ctrl+Shift+u= to trigger URL detection -- the module finds URLs matching a regex pattern and opens the first one found with =xdg-open= (or your configured opener).
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  urlclick:
+    enabled: true
+    opener: xdg-open
+    regex: "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "urlclick", "enabled", TRUE);
+gst_config_set_module_config_string(config, "urlclick", "opener", "xdg-open");
+gst_config_set_module_config_string(config, "urlclick", "regex",
+    "(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+");
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option    | Type    | Default       | Description                                            |
+|-----------+---------+---------------+--------------------------------------------------------|
+| =enabled= | boolean | =true=        | Enable the module                                      |
+| =opener=  | string  | =xdg-open=    | Command to open URLs (receives the URL as an argument) |
+| =regex=   | string  | (URL pattern) | Regular expression for matching URLs                   |
+
+** Keybindings
+:PROPERTIES:
+:CUSTOM_ID: keybindings
+:END:
+| Key            | Action                                        |
+|----------------+-----------------------------------------------|
+| =Ctrl+Shift+u= | Scan screen for URLs and open the first match |
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+1. Make sure a URL is visible on the terminal screen
+2. Press =Ctrl+Shift+u=
+3. The module scans all visible text for the first URL matching the regex
+4. The URL is opened using the =opener= command
+
+*** Custom Opener
+:PROPERTIES:
+:CUSTOM_ID: custom-opener
+:END:
+To open URLs in a specific browser:
+
+#+begin_src yaml
+modules:
+  urlclick:
+    enabled: true
+    opener: firefox
+#+end_src
+
+Or use a script for more control:
+
+#+begin_src yaml
+modules:
+  urlclick:
+    enabled: true
+    opener: ~/bin/open-url.sh
+#+end_src
+
+*** Custom Regex
+:PROPERTIES:
+:CUSTOM_ID: custom-regex
+:END:
+To match only HTTPS URLs:
+
+#+begin_src yaml
+modules:
+  urlclick:
+    enabled: true
+    regex: "https://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
+#+end_src
+
+The regex is compiled as a GLib =GRegex=. Changes to the regex in config cause recompilation on next activation.
+
+** Notes
+:PROPERTIES:
+:CUSTOM_ID: notes
+:END:
+- The module collects text from all visible terminal lines, skipping wide character placeholders
+- Only the first URL found is opened
+- The opener command runs asynchronously and does not block the terminal

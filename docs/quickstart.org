@@ -1,0 +1,163 @@
+* GST Quick Start Guide
+:PROPERTIES:
+:CUSTOM_ID: gst-quick-start-guide
+:END:
+GST (GObject Simple Terminal) is a fast, modular terminal emulator based on [[https://st.suckless.org/][st]] with GObject architecture and a plugin system.
+
+** Install Dependencies
+:PROPERTIES:
+:CUSTOM_ID: install-dependencies
+:END:
+*Fedora:*
+
+#+begin_src sh
+sudo dnf install gcc make \
+    glib2-devel \
+    gobject-introspection-devel \
+    libX11-devel \
+    libXft-devel \
+    fontconfig-devel \
+    libyaml-devel \
+    json-glib-devel
+#+end_src
+
+*Optional (Wayland backend):*
+
+#+begin_src sh
+sudo dnf install wayland-devel wayland-protocols-devel \
+    libxkbcommon-devel cairo-devel
+#+end_src
+
+*Optional (MCP module for AI assistant integration):*
+
+#+begin_src sh
+sudo dnf install libsoup3-devel libdex-devel libpng-devel
+#+end_src
+
+** Build
+:PROPERTIES:
+:CUSTOM_ID: build
+:END:
+#+begin_src sh
+git clone --recurse-submodules <repo-url>
+cd gst
+make
+#+end_src
+
+For a debug build with symbols:
+
+#+begin_src sh
+make DEBUG=1
+#+end_src
+
+To include the MCP module:
+
+#+begin_src sh
+MCP=1 make
+#+end_src
+
+** First Launch
+:PROPERTIES:
+:CUSTOM_ID: first-launch
+:END:
+#+begin_src sh
+./build/release/gst
+#+end_src
+
+Or after =make install=:
+
+#+begin_src sh
+gst
+#+end_src
+
+GST auto-detects whether to use X11 or Wayland based on your session. You can force a backend with =--x11= or =--wayland=.
+
+** Generate a Config File
+:PROPERTIES:
+:CUSTOM_ID: generate-a-config-file
+:END:
+GST works out of the box with sensible defaults. To customize it, generate a config file:
+
+#+begin_src sh
+gst --generate-yaml-config > ~/.config/gst/config.yaml
+#+end_src
+
+Edit the file with your preferred editor. Changes take effect on next launch.
+
+To generate a config with only specific modules included:
+
+#+begin_src sh
+gst --generate-yaml-config --modules scrollback,transparency,urlclick \
+    > ~/.config/gst/config.yaml
+#+end_src
+
+** Enable a Module
+:PROPERTIES:
+:CUSTOM_ID: enable-a-module
+:END:
+Modules extend GST's functionality. Edit your config to enable one:
+
+#+begin_src yaml
+modules:
+  transparency:
+    enabled: true
+    opacity: 0.85
+#+end_src
+
+See [[file:modules/README.org][Module Documentation]] for all available modules.
+
+** Common Tasks
+:PROPERTIES:
+:CUSTOM_ID: common-tasks
+:END:
+*Change the font:*
+
+#+begin_src yaml
+font:
+  primary: "JetBrains Mono:pixelsize=14:antialias=true:autohint=true"
+#+end_src
+
+*Change window size:*
+
+#+begin_src yaml
+window:
+  geometry: 120x40
+#+end_src
+
+Or from the command line:
+
+#+begin_src sh
+gst -g 120x40
+#+end_src
+
+*Set a color scheme:*
+
+#+begin_src yaml
+colors:
+  foreground: "#cdd6f4"
+  background: "#1e1e2e"
+#+end_src
+
+See [[file:colors.org][Color Schemes]] for complete theming instructions.
+
+*Custom keybindings:*
+
+#+begin_src yaml
+keybinds:
+  "Ctrl+Shift+c": clipboard_copy
+  "Ctrl+Shift+v": clipboard_paste
+#+end_src
+
+See [[file:keybindings.org][Keybindings]] for all available actions.
+
+** Next Steps
+:PROPERTIES:
+:CUSTOM_ID: next-steps
+:END:
+- [[file:cli.org][CLI Reference]] - All command-line options
+- [[file:configuration.org][Configuration Reference]] - Every config option explained
+- [[file:keybindings.org][Keybindings]] - Keyboard and mouse bindings
+- [[file:colors.org][Color Schemes]] - Theming and palette customization
+- [[file:c-config.org][C Configuration]] - Advanced config via compiled C
+- [[file:modules/README.org][Module Guide]] - All built-in modules
+- [[file:modules/module-system.org][Module Development]] - Writing your own modules

@@ -1,0 +1,122 @@
+* Notify Module
+:PROPERTIES:
+:CUSTOM_ID: notify-module
+:END:
+Desktop notifications from terminal applications via OSC escape sequences.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The notify module lets programs running in the terminal send desktop notifications using standard OSC escape sequences. It supports three common notification protocols: iTerm2 (OSC 9), rxvt-unicode (OSC 777), and kitty (OSC 99). Notifications are dispatched via =notify-send=, which works with any freedesktop.org-compliant notification daemon.
+
+When =suppress_focused= is enabled (the default), notifications are silently dropped while the terminal window has focus -- they only appear when the terminal is in the background.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+*** YAML
+:PROPERTIES:
+:CUSTOM_ID: yaml
+:END:
+#+begin_src yaml
+modules:
+  notify:
+    enabled: true
+    show_title: true
+    suppress_focused: true
+    timeout: -1
+    urgency: normal
+#+end_src
+
+*** C Config
+:PROPERTIES:
+:CUSTOM_ID: c-config
+:END:
+#+begin_src C
+gst_config_set_module_config_bool(config, "notify", "enabled", TRUE);
+gst_config_set_module_config_bool(config, "notify", "show_title", TRUE);
+gst_config_set_module_config_bool(config, "notify", "suppress_focused", TRUE);
+gst_config_set_module_config_int(config, "notify", "timeout", -1);
+gst_config_set_module_config_string(config, "notify", "urgency", "normal");
+#+end_src
+
+*** Options
+:PROPERTIES:
+:CUSTOM_ID: options
+:END:
+| Option             | Type    | Default    | Description                                                |
+|--------------------+---------+------------+------------------------------------------------------------|
+| =enabled=          | boolean | =false=    | Enable the module                                          |
+| =show_title=       | boolean | =true=     | Prepend the terminal window title to notification body     |
+| =suppress_focused= | boolean | =true=     | Suppress notifications when the terminal has focus         |
+| =timeout=          | integer | =-1=       | Notification timeout in seconds (=-1= = system default)    |
+| =urgency=          | string  | ="normal"= | Notification urgency: ="low"=, ="normal"=, or ="critical"= |
+
+** Escape Sequences
+:PROPERTIES:
+:CUSTOM_ID: escape-sequences
+:END:
+The module handles three notification protocols:
+
+*** OSC 9 (iTerm2)
+:PROPERTIES:
+:CUSTOM_ID: osc-9-iterm2
+:END:
+#+begin_example
+ESC ] 9 ; <message> ST
+#+end_example
+
+Sends a notification with =<message>= as the body. No separate title field -- uses the terminal window title if =show_title= is true.
+
+*** OSC 777 (rxvt-unicode)
+:PROPERTIES:
+:CUSTOM_ID: osc-777-rxvt-unicode
+:END:
+#+begin_example
+ESC ] 777 ; notify ; <title> ; <body> ST
+#+end_example
+
+Sends a notification with an explicit =<title>= and =<body>=.
+
+*** OSC 99 (kitty)
+:PROPERTIES:
+:CUSTOM_ID: osc-99-kitty
+:END:
+#+begin_example
+ESC ] 99 ; <key=value pairs> ; <body> ST
+#+end_example
+
+Kitty-style notification with metadata key-value pairs. The body is the final semicolon-separated field.
+
+** Usage
+:PROPERTIES:
+:CUSTOM_ID: usage
+:END:
+Programs can send notifications from the shell:
+
+#+begin_src sh
+# iTerm2 style (simplest)
+printf '\e]9;Build complete\a'
+
+# rxvt-unicode style (with title)
+printf '\e]777;notify;Build Status;Compilation finished\a'
+#+end_src
+
+** Notes
+:PROPERTIES:
+:CUSTOM_ID: notes
+:END:
+- Requires =notify-send= to be installed (part of =libnotify= / =libnotify-tools=).
+- The =suppress_focused= check uses the =WIN_MODE_FOCUSED= flag, which is updated on window focus/unfocus events.
+- The =timeout= value is converted to milliseconds when passed to =notify-send= via the =-t= flag. A value of =-1= omits the flag entirely, using the notification daemon's default.
+
+** Source Files
+:PROPERTIES:
+:CUSTOM_ID: source-files
+:END:
+| File                                 | Description                        |
+|--------------------------------------+------------------------------------|
+| =modules/notify/gst-notify-module.c= | Module implementation              |
+| =modules/notify/gst-notify-module.h= | Type macros and struct declaration |
