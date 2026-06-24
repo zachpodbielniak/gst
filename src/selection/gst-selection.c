@@ -387,6 +387,18 @@ gst_selection_extend(
 		return;
 	}
 
+	/*
+	 * While still EMPTY (button down, no drag yet), don't promote to
+	 * READY until the pointer leaves the cell where the button was
+	 * pressed. A plain click -- even with a pixel of jitter inside the
+	 * same cell -- must not start a highlight; selection requires a drag
+	 * into a different cell.
+	 */
+	if (sel->mode == GST_SELECTION_EMPTY && !done &&
+	    col == sel->ob.x && row == sel->ob.y) {
+		return;
+	}
+
 	sel->oe.x = col;
 	sel->oe.y = row;
 	sel_normalize(sel);

@@ -1435,6 +1435,22 @@ on_key_press(
 }
 
 /*
+ * Diagnostic: when the GST_MOUSE_DEBUG env var is set, log every mouse
+ * event, the pixel->cell mapping, and which path it takes (app reporting
+ * vs. local selection). Cheap to leave in; the check is cached.
+ */
+static gboolean
+mouse_debug_on(void)
+{
+	static gint cached = -1;
+
+	if (cached < 0) {
+		cached = (g_getenv("GST_MOUSE_DEBUG") != NULL) ? 1 : 0;
+	}
+	return cached != 0;
+}
+
+/*
  * Window button-press: handle selection or mouse reporting.
  */
 static void
@@ -1453,6 +1469,17 @@ on_button_press(
 	col = pixel_to_col(px);
 	row = pixel_to_row(py);
 
+	if (mouse_debug_on()) {
+		g_printerr("[mouse] PRESS   btn=%u state=0x%x px=%d py=%d -> "
+			"col=%d row=%d | mouse_mode=%d sgr=%d force_mod=%d "
+			"cell=%dx%d\n",
+			button, state, px, py, col, row,
+			IS_MOUSE_MODE(terminal) ? 1 : 0,
+			gst_terminal_has_mode(terminal, GST_MODE_MOUSE_SGR) ? 1 : 0,
+			(state & GST_FORCE_MOUSE_MOD) ? 1 : 0,
+			cell_w, cell_h);
+	}
+
 	/* If mouse reporting is enabled, send to app */
 	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
 		gint btn;
@@ -1467,9 +1494,15 @@ on_button_press(
 		default:      return;
 		}
 
-		/* Reset motion dedup on press */
-		last_mouse_col = -1;
-		last_mouse_row = -1;
+		/*
+		 * Seed motion dedup with the press cell so sub-cell pointer
+		 * jitter while the button is held is not reported as a drag.
+		 * Without this, a plain click in a mouse-reporting app (e.g.
+		 * tmux with mouse on) is seen as a drag and starts a selection
+		 * instead of just clicking the cell.
+		 */
+		last_mouse_col = col;
+		last_mouse_row = row;
 
 		mouse_report(btn, col, row, FALSE, FALSE, state);
 		return;
@@ -1513,6 +1546,14 @@ on_button_release(
 	gint row;
 	gchar *sel_text;
 
+	if (mouse_debug_on()) {
+		g_printerr("[mouse] RELEASE btn=%u state=0x%x px=%d py=%d -> "
+			"col=%d row=%d | mouse_mode=%d\n",
+			button, state, px, py,
+			pixel_to_col(px), pixel_to_row(py),
+			IS_MOUSE_MODE(terminal) ? 1 : 0);
+	}
+
 	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
 		gint btn;
 
@@ -1532,9 +1573,9 @@ on_button_release(
 		default:      return;
 		}
 
-		/* Reset motion dedup on release */
-		last_mouse_col = -1;
-		last_mouse_row = -1;
+		/* Seed motion dedup with the release cell (see on_button_press) */
+		last_mouse_col = col;
+		last_mouse_row = row;
 
 		/*
 		 * SGR mode preserves the actual button in release.
@@ -1583,6 +1624,15 @@ on_motion_notify(
 	gint col;
 	gint row;
 
+	if (mouse_debug_on()) {
+		g_printerr("[mouse] MOTION  state=0x%x px=%d py=%d -> "
+			"col=%d row=%d | mouse_mode=%d last=(%d,%d)\n",
+			state, px, py,
+			pixel_to_col(px), pixel_to_row(py),
+			IS_MOUSE_MODE(terminal) ? 1 : 0,
+			last_mouse_col, last_mouse_row);
+	}
+
 	if (IS_MOUSE_MODE(terminal) && !(state & GST_FORCE_MOUSE_MOD)) {
 		gint btn;
 
@@ -1613,12 +1663,22 @@ on_motion_notify(
 		else if (state & Button3Mask) btn = 2;
 		else                          btn = 0;
 
+		if (mouse_debug_on()) {
+			g_printerr("[mouse]  -> REPORT DRAG to app: btn=%d col=%d "
+				"row=%d\n", btn, col, row);
+		}
+
 		mouse_report(btn, col, row, FALSE, TRUE, state);
 		return;
 	}
 
 	col = pixel_to_col(px);
 	row = pixel_to_row(py);
+
+	if (mouse_debug_on()) {
+		g_printerr("[mouse]  -> LOCAL selection extend: col=%d row=%d\n",
+			col, row);
+	}
 
 	gst_selection_extend(selection, col, row,
 		GST_SELECTION_TYPE_REGULAR, FALSE);

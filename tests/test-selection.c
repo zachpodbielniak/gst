@@ -163,6 +163,39 @@ test_selection_extend_done(void)
 }
 
 /*
+ * Test that a plain click (no drag, or only same-cell pointer jitter)
+ * does not create a selection. Motion that never leaves the start cell
+ * must keep the selection EMPTY so release clears it, leaving nothing
+ * highlighted.
+ */
+static void
+test_selection_click_no_drag(void)
+{
+	GstTerminal  *term;
+	GstSelection *sel;
+
+	term = gst_terminal_new(80, 24);
+	sel  = gst_selection_new(term);
+
+	fill_row(term, 0, "Hello World");
+
+	gst_selection_start(sel, 3, 0, GST_SELECTION_SNAP_NONE);
+
+	/* Same-cell motion (pointer jitter) must stay EMPTY, not go READY */
+	gst_selection_extend(sel, 3, 0, GST_SELECTION_TYPE_REGULAR, FALSE);
+	g_assert_cmpint(gst_selection_get_mode(sel), ==, GST_SELECTION_EMPTY);
+	g_assert_false(gst_selection_selected(sel, 3, 0));
+
+	/* Release while still EMPTY -> cleared, nothing highlighted */
+	gst_selection_extend(sel, 3, 0, GST_SELECTION_TYPE_REGULAR, TRUE);
+	g_assert_true(gst_selection_is_empty(sel));
+	g_assert_false(gst_selection_selected(sel, 3, 0));
+
+	g_object_unref(sel);
+	g_object_unref(term);
+}
+
+/*
  * Test clearing a selection.
  */
 static void
@@ -435,6 +468,7 @@ main(
 	g_test_add_func("/selection/start-snap", test_selection_start_snap);
 	g_test_add_func("/selection/extend", test_selection_extend);
 	g_test_add_func("/selection/extend-done", test_selection_extend_done);
+	g_test_add_func("/selection/click-no-drag", test_selection_click_no_drag);
 	g_test_add_func("/selection/clear", test_selection_clear);
 	g_test_add_func("/selection/multiline", test_selection_multiline);
 	g_test_add_func("/selection/get-text-single", test_selection_get_text_single);

@@ -137,6 +137,7 @@ gst --mcp-socket myproject
 |-----------------------+----------------------------------------------------------------------|
 | =GST_MODULE_PATH=     | Colon-separated list of directories to search for module =.so= files |
 | =GST_MCP_SOCKET_NAME= | Override the MCP socket name (same as =--mcp-socket=)                |
+| =GST_MOUSE_DEBUG=     | If set, log every mouse event to stderr (press/release/motion, pixel->cell mapping, mouse-report vs. local-selection path). Diagnostic aid for click/drag/selection issues. |
 | =WAYLAND_DISPLAY=     | If set, GST auto-selects the Wayland backend                         |
 | =SHELL=               | Used as the default shell if =terminal.shell= is not configured      |
 | =XDG_CONFIG_HOME=     | Base directory for user config (default: =~/.config=)                |

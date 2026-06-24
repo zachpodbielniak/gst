@@ -24,6 +24,27 @@ These are expected limitations of the optional =--lrg= backend (see
 :PROPERTIES:
 :CUSTOM_ID: resolved-issues
 :END:
+*** Plain left-click behaved like a drag (RESOLVED)
+:PROPERTIES:
+:CUSTOM_ID: click-behaves-like-drag-resolved
+:END:
+*Status:* Fixed in 0.4.1
+*Affects:* Mouse input / text selection (=GstSelection=, =main.c=), all backends (X11, Wayland, LRG)
+
+A plain left-click-and-release was treated as a click-and-drag. This showed up two ways depending on whether the running program had mouse reporting enabled:
+
+1. *Local selection* -- at a normal shell prompt, a click left the clicked cell highlighted instead of selecting nothing.
+2. *Mouse-reporting apps* -- inside tmux (with =mouse on=), vim, etc., a click on a pane started a copy-mode/drag selection instead of just clicking (e.g. switching the active tmux pane). Other terminals like kitty handle this correctly.
+
+Both came from the same cause: the ~1px of pointer jitter present in almost any real click produces a single mouse-motion event in the *same* cell as the press, and that motion was being treated as the start of a drag.
+
+- For local selection, =gst_selection_extend()= promoted the selection =EMPTY -> READY= on the first motion even when the pointer never left the starting cell, defeating the "click with no drag clears on release" safeguard and leaving a one-cell highlight.
+- For mouse reporting, =on_button_press()= reset the motion-dedup baseline (=last_mouse_col/row=) to =-1=, so the first same-cell motion after a press always passed the dedup check and was reported to the application as a drag.
+
+/Fix:/ Two complementary changes, both keyed on "did the pointer actually leave the press cell":
+- =gst_selection_extend()= now stays =EMPTY= until the pointer moves to a *different* cell than where the button was pressed (covered by =tests/test-selection.c=).
+- =on_button_press()=/=on_button_release()= now seed the motion-dedup baseline with the press/release cell instead of =-1=, so same-cell jitter is not reported as motion. A real cross-cell drag still reports and selects normally.
+
 *** Large paste truncated, leaving tmux stuck in bracketed-paste mode (RESOLVED)
 :PROPERTIES:
 :CUSTOM_ID: large-paste-truncated-resolved
