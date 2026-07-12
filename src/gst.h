@@ -30,6 +30,7 @@
 #include "core/gst-terminal.h"
 #include "core/gst-pty.h"
 #include "core/gst-escape-parser.h"
+#include "core/gst-mouse.h"
 
 /* Rendering */
 #include "rendering/gst-renderer.h"

@@ -34,6 +34,7 @@ LIB_SRCS := \
 	src/core/gst-terminal.c \
 	src/core/gst-pty.c \
 	src/core/gst-escape-parser.c \
+	src/core/gst-mouse.c \
 	src/rendering/gst-renderer.c \
 	src/rendering/gst-render-context.c \
 	src/rendering/gst-x11-renderer.c \

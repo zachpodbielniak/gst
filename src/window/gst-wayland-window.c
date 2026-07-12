@@ -616,10 +616,20 @@ pointer_leave(
 	uint32_t          serial,
 	struct wl_surface *surface
 ){
-	(void)data;
+	GstWaylandWindow *self;
+
 	(void)pointer;
 	(void)serial;
 	(void)surface;
+
+	/*
+	 * Clear tracked button state on leave. A real button grab keeps
+	 * pointer focus on the surface, so leave only fires once no button
+	 * is held; without this, a release missed off-surface would latch a
+	 * button bit and make every later hover report as a drag.
+	 */
+	self = (GstWaylandWindow *)data;
+	self->pointer_button_state = 0;
 }
 
 static void

@@ -24,6 +24,19 @@ These are expected limitations of the optional =--lrg= backend (see
 :PROPERTIES:
 :CUSTOM_ID: resolved-issues
 :END:
+*** Mouse hover reported as a button drag -- tmux "stuck mouse down" (RESOLVED)
+:PROPERTIES:
+:CUSTOM_ID: hover-reported-as-drag-resolved
+:END:
+*Status:* Fixed in 0.4.2
+*Affects:* Mouse reporting (=gst_mouse_encode_report=, =main.c=), all backends; most visible on Wayland + tmux
+
+Inside tmux with =mouse on=, tmux behaved as if the left button were permanently held: any interaction auto-entered copy/selection mode, the pane separator auto-dragged (resizing panes) without the button held, and it took Ctrl-C or several clicks to stop. Kitty was unaffected.
+
+In any-event mouse tracking (DEC private mode 1003 -> =GST_MODE_MOUSE_MANY=, which tmux enables), the terminal reports *all* pointer motion, including plain hover. =on_motion_notify= derived the reported button purely from the current button mask and, when no button was held, fell through to =btn = 0= (left button). Combined with the =+32= motion offset, a hover was encoded as =ESC[<32;x;yM= -- a left-button *drag* -- instead of =ESC[<35;x;yM= (no-button motion, code =3 + 32 = 35=). tmux therefore saw a never-ending drag. A secondary Wayland bug made this reproducible even in button-event mode (1002): =pointer_leave= never cleared =pointer_button_state=, so a release missed while the pointer was off-surface latched a button bit into every later motion.
+
+/Fix:/ No-button motion now encodes as button code =3= (=ESC[<35=), matching xterm/kitty. The report encoder was extracted from =main.c= into a pure, unit-tested =gst_mouse_encode_report()= (=src/core/gst-mouse.c=) with coverage for press/release/drag/hover in SGR and classic modes. The Wayland =pointer_leave= handler now clears =pointer_button_state=. The =GST_MOUSE_DEBUG= log also reports the active tracking mode. Covered by =tests/test-mouse.c=.
+
 *** Plain left-click behaved like a drag (RESOLVED)
 :PROPERTIES:
 :CUSTOM_ID: click-behaves-like-drag-resolved

@@ -907,48 +907,13 @@ mouse_report(
 	guint       state
 ){
 	gchar buf[64];
-	gint len;
-	gint cb;
+	gssize len;
 
-	/* Build the button code with modifier bits */
-	cb = button;
+	len = gst_mouse_encode_report(buf, sizeof(buf),
+		button, col, row, release, motion, state,
+		gst_terminal_has_mode(terminal, GST_MODE_MOUSE_SGR));
 
-	/* Motion events add 32 to the button code */
-	if (motion) {
-		cb += 32;
-	}
-
-	/* Encode modifier keys into the button code */
-	if (state & ShiftMask)   cb += 4;
-	if (state & Mod1Mask)    cb += 8;
-	if (state & ControlMask) cb += 16;
-
-	if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_SGR)) {
-		/*
-		 * SGR extended mode: ESC [ < Cb ; Cx ; Cy M/m
-		 * Coordinates are 1-based decimal, no offset.
-		 * 'M' for press/motion, 'm' for release.
-		 */
-		len = g_snprintf(buf, sizeof(buf), "\033[<%d;%d;%d%c",
-			cb, col + 1, row + 1, release ? 'm' : 'M');
-	} else {
-		/*
-		 * Classic X10/normal mode: ESC [ M Cb Cx Cy
-		 * Cb has +32 offset, coordinates have +33 offset.
-		 * Coordinates are clamped to 223 (255 - 32) max.
-		 */
-		if (col > 222) col = 222;
-		if (row > 222) row = 222;
-		buf[0] = '\033';
-		buf[1] = '[';
-		buf[2] = 'M';
-		buf[3] = (gchar)(32 + cb);
-		buf[4] = (gchar)(33 + col);
-		buf[5] = (gchar)(33 + row);
-		len = 6;
-	}
-
-	gst_pty_write(pty, buf, (gssize)len);
+	gst_pty_write(pty, buf, len);
 }
 
 /*
@@ -1451,6 +1416,20 @@ mouse_debug_on(void)
 }
 
 /*
+ * Diagnostic: name of the active mouse tracking mode. MANY (1003) is the
+ * "any-event" mode where hover motion is reported to the app.
+ */
+static const gchar *
+mouse_track_mode_name(void)
+{
+	if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_MANY))   return "MANY";
+	if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_MOTION)) return "MOTION";
+	if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_BTN))    return "BTN";
+	if (gst_terminal_has_mode(terminal, GST_MODE_MOUSE_X10))    return "X10";
+	return "off";
+}
+
+/*
  * Window button-press: handle selection or mouse reporting.
  */
 static void
@@ -1471,10 +1450,11 @@ on_button_press(
 
 	if (mouse_debug_on()) {
 		g_printerr("[mouse] PRESS   btn=%u state=0x%x px=%d py=%d -> "
-			"col=%d row=%d | mouse_mode=%d sgr=%d force_mod=%d "
-			"cell=%dx%d\n",
+			"col=%d row=%d | mouse_mode=%d track=%s sgr=%d "
+			"force_mod=%d cell=%dx%d\n",
 			button, state, px, py, col, row,
 			IS_MOUSE_MODE(terminal) ? 1 : 0,
+			mouse_track_mode_name(),
 			gst_terminal_has_mode(terminal, GST_MODE_MOUSE_SGR) ? 1 : 0,
 			(state & GST_FORCE_MOUSE_MOD) ? 1 : 0,
 			cell_w, cell_h);
@@ -1657,11 +1637,15 @@ on_motion_notify(
 			}
 		}
 
-		/* Determine held button for the motion report */
+		/*
+		 * Determine held button for the motion report. With no button
+		 * held (hover, only reported in any-event mode), use code 3
+		 * ("no button") so it encodes as motion 35, not a left drag (32).
+		 */
 		if (state & Button1Mask)      btn = 0;
 		else if (state & Button2Mask) btn = 1;
 		else if (state & Button3Mask) btn = 2;
-		else                          btn = 0;
+		else                          btn = 3;
 
 		if (mouse_debug_on()) {
 			g_printerr("[mouse]  -> REPORT DRAG to app: btn=%d col=%d "
