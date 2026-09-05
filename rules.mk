@@ -3,6 +3,7 @@
 
 # All source objects depend on the generated version headers
 $(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h deps/crispy/src/crispy-version.h
+$(LIB_OBJS:.o=.d) $(MAIN_OBJ:.o=.d): src/gst-version.h deps/crispy/src/crispy-version.h
 
 # main.o (and its .d file) depends on the generated default config header
 $(OBJDIR)/main.o $(OBJDIR)/main.d: $(OUTDIR)/gst-default-config.h

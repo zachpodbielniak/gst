@@ -180,6 +180,7 @@ endif
 # yaml-glib sources (built-in dependency)
 YAMLGLIB_SRCS := \
 	deps/yaml-glib/src/yaml-builder.c \
+	deps/yaml-glib/src/yaml-comments.c \
 	deps/yaml-glib/src/yaml-document.c \
 	deps/yaml-glib/src/yaml-generator.c \
 	deps/yaml-glib/src/yaml-gobject.c \
@@ -188,17 +189,25 @@ YAMLGLIB_SRCS := \
 	deps/yaml-glib/src/yaml-parser.c \
 	deps/yaml-glib/src/yaml-schema.c \
 	deps/yaml-glib/src/yaml-sequence.c \
-	deps/yaml-glib/src/yaml-serializable.c
+	deps/yaml-glib/src/yaml-serializable.c \
+	deps/yaml-glib/src/yaml-writer.c
 
 # crispy sources (built-in dependency)
 CRISPY_SRCS := \
 	deps/crispy/src/interfaces/crispy-compiler.c \
 	deps/crispy/src/interfaces/crispy-cache-provider.c \
+	deps/crispy/src/interfaces/crispy-dependency-resolver.c \
 	deps/crispy/src/core/crispy-gcc-compiler.c \
 	deps/crispy/src/core/crispy-file-cache.c \
 	deps/crispy/src/core/crispy-plugin-engine.c \
 	deps/crispy/src/core/crispy-script.c \
 	deps/crispy/src/core/crispy-source-utils-private.c \
+	deps/crispy/src/core/crispy-temp-registry-private.c \
+	deps/crispy/src/core/crispy-dependency-info.c \
+	deps/crispy/src/core/crispy-pkg-config-resolver.c \
+	deps/crispy/src/core/crispy-use-parser-private.c \
+	deps/crispy/src/core/crispy-header-tracker-private.c \
+	deps/crispy/src/core/crispy-profiler-private.c \
 	deps/crispy/src/core/crispy-config-context.c \
 	deps/crispy/src/core/crispy-config-loader.c
 

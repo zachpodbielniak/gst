@@ -20,10 +20,22 @@ These are expected limitations of the optional =--lrg= backend (see
 - =--lrg= opens a separate raylib/OpenGL window and does not support embedding
   via =--windid=.
 
+** Vendored build warnings (0.4.3)
+
+The pinned graylib/raylib sources build successfully but emit warnings for a duplicate =grl-image.o= recipe, a missing declaration of =grl_input_drain_injections()= in =grl-window.c=, and a possibly uninitialized =mi= in raylib's =external/m3d.h=. These upstream sources are unchanged by the GST dependency refresh; GST's own default and full-feature builds and tests pass without warnings.
+
+Run full-feature builds and tests sequentially: =make -j8 DEBUG=1 MCP=1 WEBVIEW=1 LRG_BACKEND=1 all && make -j8 DEBUG=1 MCP=1 WEBVIEW=1 LRG_BACKEND=1 test=. Requesting =all test= together in a parallel clean build can race the MCP module build against the generic module rule, which lacks MCP-specific include flags.
+
 ** Resolved Issues
 :PROPERTIES:
 :CUSTOM_ID: resolved-issues
 :END:
+*** Dependency refresh build integration (RESOLVED)
+
+*Status:* Fixed in 0.4.3
+
+Updated GST's vendored source lists for the new crispy support code and yaml-glib comment/writer implementation. Generated version headers now precede dependency-file generation, avoiding missing-header diagnostics during clean builds. The render-context test uses designated initializers so optional drawing hooks remain zero-initialized without compiler warnings.
+
 *** Mouse hover reported as a button drag -- tmux "stuck mouse down" (RESOLVED)
 :PROPERTIES:
 :CUSTOM_ID: hover-reported-as-drag-resolved

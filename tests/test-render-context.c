@@ -140,11 +140,11 @@ mock_draw_glyph(
 }
 
 static const GstRenderContextOps mock_ops = {
-	mock_fill_rect,
-	mock_fill_rect_rgba,
-	mock_fill_rect_fg,
-	mock_fill_rect_bg,
-	mock_draw_glyph
+	.fill_rect = mock_fill_rect,
+	.fill_rect_rgba = mock_fill_rect_rgba,
+	.fill_rect_fg = mock_fill_rect_fg,
+	.fill_rect_bg = mock_fill_rect_bg,
+	.draw_glyph = mock_draw_glyph
 };
 
 /*
