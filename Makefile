@@ -14,7 +14,7 @@
 #   make ASAN=1    - Build with AddressSanitizer
 
 .DEFAULT_GOAL := all
-.PHONY: all lib gst gir modules test deps check-deps
+.PHONY: all lib gst gir modules test tests deps check-deps
 
 # Include configuration
 include config.mk
@@ -216,6 +216,9 @@ TEST_SRCS := $(wildcard tests/test-*.c)
 ifneq ($(MCP_AVAILABLE),1)
 TEST_SRCS := $(filter-out tests/test-mcp-module.c,$(TEST_SRCS))
 endif
+ifneq ($(WEBVIEW_AVAILABLE),1)
+TEST_SRCS := $(filter-out tests/test-webview.c,$(TEST_SRCS))
+endif
 
 # Module directories
 MODULE_DIRS := $(wildcard modules/*)
@@ -265,7 +268,7 @@ gir: $(OUTDIR)/$(GIR_FILE) $(OUTDIR)/$(TYPELIB_FILE)
 ifeq ($(MCP_AVAILABLE),1)
 .PHONY: mcp-glib
 mcp-glib:
-	$(MAKE) -C deps/mcp-glib
+	$(MAKE) -C deps/mcp-glib BUILDDIR=build
 endif
 
 # Build gst-mcp relay binary (only if MCP=1)
@@ -291,11 +294,13 @@ modules: lib $(OUTDIR)/modules
 				MCP_CFLAGS="$(MCP_CFLAGS)" \
 				MCP_LDFLAGS="$(MCP_LDFLAGS)" \
 				WEBVIEW_CFLAGS="$(WEBVIEW_CFLAGS)" \
-				WEBVIEW_LDFLAGS="$(WEBVIEW_LDFLAGS)"; \
+				WEBVIEW_LDFLAGS="$(WEBVIEW_LDFLAGS)" || exit $$?; \
 		fi \
 	done
 
 # Build and run tests
+tests: test
+
 test: lib $(TEST_BINS)
 ifeq ($(MCP_AVAILABLE),1)
 test: modules
@@ -319,8 +324,26 @@ endif
 	fi
 
 # Build individual test binaries
+# Tests that include private module implementations must track those inputs.
+$(OBJDIR)/tests/test-sixel.o: modules/sixel/gst-sixel-module.c modules/sixel/gst-sixel-module.h
+$(OBJDIR)/tests/test-externalpipe.o: modules/externalpipe/gst-externalpipe-module.c modules/externalpipe/gst-externalpipe-module.h
+$(OBJDIR)/tests/test-kitty-cache.o: $(wildcard modules/kittygfx/*.[ch])
+
+ifeq ($(WEBVIEW_AVAILABLE),1)
+$(OBJDIR)/tests/test-webview.o: tests/test-webview.c $(wildcard modules/webview/*.[ch]) | $(OBJDIR)
+	$(CC) $(TEST_CFLAGS) $(WEBVIEW_CFLAGS) -c $< -o $@
+
+$(OUTDIR)/test-webview: $(OBJDIR)/tests/test-webview.o $(OUTDIR)/$(LIB_SHARED_FULL)
+	$(CC) -o $@ $< $(TEST_LDFLAGS) $(WEBVIEW_LDFLAGS)
+endif
+
 # MCP test needs extra flags for mcp-glib linkage and MCP module sources
 ifeq ($(MCP_AVAILABLE),1)
+# The module's own Makefile supplies MCP-specific compiler and linker flags.
+# Order this prerequisite after modules instead of using the generic .so rule.
+$(OUTDIR)/modules/mcp.so: | modules
+	@test -f $@
+
 $(OBJDIR)/tests/test-mcp-module.o: tests/test-mcp-module.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
 	$(CC) $(TEST_CFLAGS) $(MCP_CFLAGS) -c $< -o $@
@@ -359,7 +382,7 @@ help:
 	@echo "  gst        - Build the gst executable"
 	@echo "  gir        - Generate GObject Introspection data"
 	@echo "  modules    - Build all modules"
-	@echo "  test       - Build and run the test suite"
+	@echo "  test/tests - Build and run the test suite"
 	@echo "  install    - Install to PREFIX ($(PREFIX))"
 	@echo "  uninstall  - Remove installed files"
 	@echo "  clean      - Remove build artifacts"

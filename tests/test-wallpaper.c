@@ -278,7 +278,11 @@ test_background_hook_auto_detection(void)
 	g_assert_cmpint(mod->last_height, ==, 768);
 	g_assert_true(ctx.has_wallpaper);
 
+	/* Registration takes a reference; release the test's reference as well. */
+	g_object_add_weak_pointer(G_OBJECT(mod), (gpointer *)&mod);
+	g_object_unref(mod);
 	g_object_unref(mgr);
+	g_assert_null(mod);
 }
 
 /* ===== Test: wallpaper config scale modes ===== */

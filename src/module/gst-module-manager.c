@@ -233,6 +233,11 @@ gst_module_manager_dispose(GObject *object)
 
 	self = GST_MODULE_MANAGER(object);
 
+	/* Stop callbacks while the manager's services and module code are alive. */
+	if (self->modules != NULL) {
+		gst_module_manager_deactivate_all(self);
+	}
+
 	/* Free all hook lists */
 	for (i = 0; i < GST_HOOK_LAST; i++)
 	{
@@ -240,7 +245,9 @@ gst_module_manager_dispose(GObject *object)
 		self->hooks[i] = NULL;
 	}
 
-	/* Close loaded GModule handles */
+	g_clear_pointer(&self->modules, g_hash_table_unref);
+
+	/* Close loaded GModule handles after releasing module instances. */
 	if (self->loaded_gmodules != NULL)
 	{
 		for (i = 0; i < self->loaded_gmodules->len; i++)
@@ -256,7 +263,6 @@ gst_module_manager_dispose(GObject *object)
 		g_clear_pointer(&self->loaded_gmodules, g_ptr_array_unref);
 	}
 
-	g_clear_pointer(&self->modules, g_hash_table_unref);
 	self->config = NULL;
 	self->terminal = NULL;
 	self->window = NULL;

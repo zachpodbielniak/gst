@@ -172,17 +172,15 @@ pty_io_callback(
 	gchar buf[PTY_READ_BUF_SIZ];
 	gssize n;
 
-	if (condition & (G_IO_HUP | G_IO_ERR)) {
-		priv->io_watch_id = 0;
-		return FALSE;
-	}
-
-	if (condition & G_IO_IN) {
-		n = read(priv->master_fd, buf, sizeof(buf));
+	/* HUP may arrive together with unread output. Drain before closing. */
+	if (condition & (G_IO_IN | G_IO_HUP | G_IO_ERR)) {
+		do {
+			n = read(priv->master_fd, buf, sizeof(buf));
+		} while (n < 0 && errno == EINTR);
 		if (n > 0) {
 			g_signal_emit(pty, signals[SIGNAL_DATA_RECEIVED], 0,
 			              (gpointer)buf, (gulong)n);
-		} else if (n <= 0) {
+		} else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
 			priv->io_watch_id = 0;
 			return FALSE;
 		}
@@ -340,6 +338,20 @@ pty_child_watch(
 
 	priv->running = FALSE;
 	priv->child_watch_id = 0;
+
+	/* Deliver queued output before child-exited handlers can quit the loop. */
+	{
+		gchar buf[PTY_READ_BUF_SIZ];
+		gssize n;
+
+		do {
+			n = read(priv->master_fd, buf, sizeof(buf));
+			if (n > 0) {
+				g_signal_emit(pty, signals[SIGNAL_DATA_RECEIVED], 0,
+					(gpointer)buf, (gulong)n);
+			}
+		} while (n > 0 || (n < 0 && errno == EINTR));
+	}
 
 	/* The child is gone; there is nothing left to drain to it. */
 	pty_clear_out_watch(priv);

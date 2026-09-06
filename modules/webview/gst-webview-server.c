@@ -440,12 +440,16 @@ gst_webview_server_stop(GstWebviewServer *srv)
 		SoupWebsocketConnection *conn;
 
 		conn = g_ptr_array_index(srv->ws_clients, i);
+		/* Closing is asynchronous; no later callback may retain srv. */
+		g_signal_handlers_disconnect_by_data(conn, srv);
 		if (soup_websocket_connection_get_state(conn) ==
 			SOUP_WEBSOCKET_STATE_OPEN)
 		{
 			soup_websocket_connection_close(conn, 1001, "Server shutting down");
 		}
+		g_object_unref(conn);
 	}
+	g_ptr_array_set_size(srv->ws_clients, 0);
 
 	/* Disconnect and stop soup server */
 	if (srv->soup != NULL) {
@@ -985,7 +989,8 @@ check_auth_msg(
 		return FALSE;
 	}
 
-	return TRUE;
+	/* Unknown or misspelled authentication modes must fail closed. */
+	return FALSE;
 }
 
 /*

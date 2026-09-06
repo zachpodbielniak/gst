@@ -13,6 +13,7 @@
 #include "gst-config.h"
 #include "../gst-types.h"
 
+#include <X11/Xlib.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -575,7 +576,7 @@ load_colors_section(
 					int_val);
 				return FALSE;
 			}
-			self->fg_index = (guint)int_val;
+			gst_config_set_fg_index(self, (guint)int_val);
 		}
 	}
 
@@ -595,7 +596,7 @@ load_colors_section(
 					int_val);
 				return FALSE;
 			}
-			self->bg_index = (guint)int_val;
+			gst_config_set_bg_index(self, (guint)int_val);
 		}
 	}
 
@@ -615,7 +616,7 @@ load_colors_section(
 					int_val);
 				return FALSE;
 			}
-			self->cursor_fg_index = (guint)int_val;
+			gst_config_set_cursor_fg_index(self, (guint)int_val);
 		}
 	}
 
@@ -635,7 +636,7 @@ load_colors_section(
 					int_val);
 				return FALSE;
 			}
-			self->cursor_bg_index = (guint)int_val;
+			gst_config_set_cursor_bg_index(self, (guint)int_val);
 		}
 	}
 
@@ -1344,6 +1345,316 @@ load_mousebinds_section(
 
 /* ===== YAML save helpers ===== */
 
+/* Typed writer counterparts to the module loader macros above. */
+#define SAVE_MOD_BOOL(builder, key, field) \
+	do { \
+		yaml_builder_set_member_name((builder), (key)); \
+		yaml_builder_add_boolean_value((builder), (field)); \
+	} while (0)
+#define SAVE_MOD_INT(builder, key, field) \
+	do { \
+		yaml_builder_set_member_name((builder), (key)); \
+		yaml_builder_add_int_value((builder), (gint64)(field)); \
+	} while (0)
+#define SAVE_MOD_DOUBLE(builder, key, field) \
+	do { \
+		yaml_builder_set_member_name((builder), (key)); \
+		yaml_builder_add_double_value((builder), (field)); \
+	} while (0)
+#define SAVE_MOD_STRING(builder, key, field) \
+	do { \
+		if ((field) != NULL) { \
+			yaml_builder_set_member_name((builder), (key)); \
+			yaml_builder_add_string_value((builder), (field)); \
+		} \
+	} while (0)
+#define SAVE_MOD_STRV(builder, key, field) \
+	do { \
+		guint item; \
+		yaml_builder_set_member_name((builder), (key)); \
+		yaml_builder_begin_sequence(builder); \
+		for (item = 0; (field) != NULL && (field)[item] != NULL; item++) { \
+			yaml_builder_add_string_value((builder), (field)[item]); \
+		} \
+		yaml_builder_end_sequence(builder); \
+	} while (0)
+
+/*
+ * build_bindings_section:
+ *
+ * Persist modifier masks and symbolic key names accepted by the loader.
+ * Always emit both maps: an empty map explicitly disables default bindings.
+ */
+static void
+build_bindings_section(GstConfig *self, YamlBuilder *builder, gboolean mouse)
+{
+	GArray *bindings;
+	guint i;
+
+	bindings = mouse ? self->mousebinds : self->keybinds;
+	yaml_builder_set_member_name(builder, mouse ? "mousebinds" : "keybinds");
+	yaml_builder_begin_mapping(builder);
+	for (i = 0; bindings != NULL && i < bindings->len; i++) {
+		g_autoptr(GString) name = NULL;
+		GstKeyMod mods;
+		GstAction action;
+		guint key;
+
+		if (mouse) {
+			const GstMousebind *binding;
+
+			binding = &g_array_index(bindings, GstMousebind, i);
+			mods = binding->mods;
+			action = binding->action;
+			key = binding->button;
+		} else {
+			const GstKeybind *binding;
+
+			binding = &g_array_index(bindings, GstKeybind, i);
+			mods = binding->mods;
+			action = binding->action;
+			key = binding->keyval;
+		}
+		name = g_string_new(NULL);
+		if (mods & GST_KEY_MOD_CTRL) g_string_append(name, "Ctrl+");
+		if (mods & GST_KEY_MOD_SHIFT) g_string_append(name, "Shift+");
+		if (mods & GST_KEY_MOD_ALT) g_string_append(name, "Alt+");
+		if (mods & GST_KEY_MOD_SUPER) g_string_append(name, "Super+");
+		if (mouse) {
+			g_string_append_printf(name, "Button%u", key);
+		} else {
+			const gchar *symbol;
+
+			symbol = XKeysymToString((KeySym)key);
+			if (symbol == NULL) continue;
+			g_string_append(name, symbol);
+		}
+		yaml_builder_set_member_name(builder, name->str);
+		yaml_builder_add_string_value(builder, gst_action_to_string(action));
+	}
+	yaml_builder_end_mapping(builder);
+}
+
+/*
+ * build_modules_section:
+ *
+ * Serialize every typed module field, including disabled modules so enabling
+ * them after a reload does not silently replace their customized settings.
+ */
+static void
+build_modules_section(GstConfig *self, YamlBuilder *builder)
+{
+	yaml_builder_set_member_name(builder, "modules");
+	yaml_builder_begin_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "scrollback");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.scrollback.enabled);
+	SAVE_MOD_INT(builder, "lines", self->modules.scrollback.lines);
+	SAVE_MOD_INT(builder, "mouse_scroll_lines", self->modules.scrollback.mouse_scroll_lines);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "transparency");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.transparency.enabled);
+	SAVE_MOD_DOUBLE(builder, "opacity", self->modules.transparency.opacity);
+	SAVE_MOD_DOUBLE(builder, "focus_opacity", self->modules.transparency.focus_opacity);
+	SAVE_MOD_DOUBLE(builder, "unfocus_opacity", self->modules.transparency.unfocus_opacity);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "urlclick");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.urlclick.enabled);
+	SAVE_MOD_STRING(builder, "opener", self->modules.urlclick.opener);
+	SAVE_MOD_STRING(builder, "regex", self->modules.urlclick.regex);
+	SAVE_MOD_STRING(builder, "modifiers", self->modules.urlclick.modifiers);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "externalpipe");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.externalpipe.enabled);
+	SAVE_MOD_STRING(builder, "command", self->modules.externalpipe.command);
+	SAVE_MOD_STRING(builder, "key", self->modules.externalpipe.key);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "boxdraw");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.boxdraw.enabled);
+	SAVE_MOD_INT(builder, "bold_offset", self->modules.boxdraw.bold_offset);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "visualbell");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.visualbell.enabled);
+	SAVE_MOD_INT(builder, "duration", self->modules.visualbell.duration);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "undercurl");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.undercurl.enabled);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "clipboard");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.clipboard.enabled);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "font2");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.font2.enabled);
+	SAVE_MOD_STRV(builder, "fonts", self->modules.font2.fonts);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "keyboard_select");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.keyboard_select.enabled);
+	SAVE_MOD_STRING(builder, "key", self->modules.keyboard_select.key);
+	SAVE_MOD_BOOL(builder, "show_crosshair", self->modules.keyboard_select.show_crosshair);
+	SAVE_MOD_STRING(builder, "highlight_color", self->modules.keyboard_select.highlight_color);
+	SAVE_MOD_INT(builder, "highlight_alpha", self->modules.keyboard_select.highlight_alpha);
+	SAVE_MOD_STRING(builder, "search_color", self->modules.keyboard_select.search_color);
+	SAVE_MOD_INT(builder, "search_alpha", self->modules.keyboard_select.search_alpha);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "kittygfx");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.kittygfx.enabled);
+	SAVE_MOD_INT(builder, "max_total_ram_mb", self->modules.kittygfx.max_total_ram_mb);
+	SAVE_MOD_INT(builder, "max_single_image_mb", self->modules.kittygfx.max_single_image_mb);
+	SAVE_MOD_INT(builder, "max_placements", self->modules.kittygfx.max_placements);
+	SAVE_MOD_BOOL(builder, "allow_file_transfer", self->modules.kittygfx.allow_file_transfer);
+	SAVE_MOD_BOOL(builder, "allow_shm_transfer", self->modules.kittygfx.allow_shm_transfer);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "webview");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.webview.enabled);
+	SAVE_MOD_STRING(builder, "host", self->modules.webview.host);
+	SAVE_MOD_INT(builder, "port", self->modules.webview.port);
+	SAVE_MOD_BOOL(builder, "read_only", self->modules.webview.read_only);
+	SAVE_MOD_STRING(builder, "auth", self->modules.webview.auth);
+	SAVE_MOD_STRING(builder, "token", self->modules.webview.token);
+	SAVE_MOD_STRING(builder, "password", self->modules.webview.password);
+	SAVE_MOD_INT(builder, "update_interval", self->modules.webview.update_interval);
+	SAVE_MOD_INT(builder, "max_clients", self->modules.webview.max_clients);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "mcp");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.mcp.enabled);
+	SAVE_MOD_STRING(builder, "transport", self->modules.mcp.transport);
+	SAVE_MOD_STRING(builder, "socket_name", self->modules.mcp.socket_name);
+	SAVE_MOD_INT(builder, "port", self->modules.mcp.port);
+	SAVE_MOD_STRING(builder, "host", self->modules.mcp.host);
+	yaml_builder_set_member_name(builder, "tools");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "read_screen", self->modules.mcp.tools.read_screen);
+	SAVE_MOD_BOOL(builder, "read_scrollback", self->modules.mcp.tools.read_scrollback);
+	SAVE_MOD_BOOL(builder, "search_scrollback", self->modules.mcp.tools.search_scrollback);
+	SAVE_MOD_BOOL(builder, "get_cursor_position", self->modules.mcp.tools.get_cursor_position);
+	SAVE_MOD_BOOL(builder, "get_cell_attributes", self->modules.mcp.tools.get_cell_attributes);
+	SAVE_MOD_BOOL(builder, "get_foreground_process", self->modules.mcp.tools.get_foreground_process);
+	SAVE_MOD_BOOL(builder, "get_working_directory", self->modules.mcp.tools.get_working_directory);
+	SAVE_MOD_BOOL(builder, "is_shell_idle", self->modules.mcp.tools.is_shell_idle);
+	SAVE_MOD_BOOL(builder, "get_pty_info", self->modules.mcp.tools.get_pty_info);
+	SAVE_MOD_BOOL(builder, "list_detected_urls", self->modules.mcp.tools.list_detected_urls);
+	SAVE_MOD_BOOL(builder, "get_config", self->modules.mcp.tools.get_config);
+	SAVE_MOD_BOOL(builder, "list_modules", self->modules.mcp.tools.list_modules);
+	SAVE_MOD_BOOL(builder, "set_config", self->modules.mcp.tools.set_config);
+	SAVE_MOD_BOOL(builder, "toggle_module", self->modules.mcp.tools.toggle_module);
+	SAVE_MOD_BOOL(builder, "get_window_info", self->modules.mcp.tools.get_window_info);
+	SAVE_MOD_BOOL(builder, "set_window_title", self->modules.mcp.tools.set_window_title);
+	SAVE_MOD_BOOL(builder, "send_text", self->modules.mcp.tools.send_text);
+	SAVE_MOD_BOOL(builder, "send_keys", self->modules.mcp.tools.send_keys);
+	SAVE_MOD_BOOL(builder, "screenshot", self->modules.mcp.tools.screenshot);
+	SAVE_MOD_BOOL(builder, "save_screenshot", self->modules.mcp.tools.save_screenshot);
+	yaml_builder_end_mapping(builder);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "notify");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.notify.enabled);
+	SAVE_MOD_BOOL(builder, "show_title", self->modules.notify.show_title);
+	SAVE_MOD_STRING(builder, "urgency", self->modules.notify.urgency);
+	SAVE_MOD_INT(builder, "timeout", self->modules.notify.timeout);
+	SAVE_MOD_BOOL(builder, "suppress_focused", self->modules.notify.suppress_focused);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "dynamic_colors");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.dynamic_colors.enabled);
+	SAVE_MOD_BOOL(builder, "allow_query", self->modules.dynamic_colors.allow_query);
+	SAVE_MOD_BOOL(builder, "allow_set", self->modules.dynamic_colors.allow_set);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "osc52");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.osc52.enabled);
+	SAVE_MOD_BOOL(builder, "allow_read", self->modules.osc52.allow_read);
+	SAVE_MOD_BOOL(builder, "allow_write", self->modules.osc52.allow_write);
+	SAVE_MOD_INT(builder, "max_bytes", self->modules.osc52.max_bytes);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "sync_update");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.sync_update.enabled);
+	SAVE_MOD_INT(builder, "timeout", self->modules.sync_update.timeout);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "shell_integration");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.shell_integration.enabled);
+	SAVE_MOD_BOOL(builder, "mark_prompts", self->modules.shell_integration.mark_prompts);
+	SAVE_MOD_BOOL(builder, "show_exit_code", self->modules.shell_integration.show_exit_code);
+	SAVE_MOD_STRING(builder, "error_color", self->modules.shell_integration.error_color);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "hyperlinks");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.hyperlinks.enabled);
+	SAVE_MOD_STRING(builder, "opener", self->modules.hyperlinks.opener);
+	SAVE_MOD_STRING(builder, "modifier", self->modules.hyperlinks.modifier);
+	SAVE_MOD_BOOL(builder, "underline_hover", self->modules.hyperlinks.underline_hover);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "search");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.search.enabled);
+	SAVE_MOD_STRING(builder, "highlight_color", self->modules.search.highlight_color);
+	SAVE_MOD_INT(builder, "highlight_alpha", self->modules.search.highlight_alpha);
+	SAVE_MOD_STRING(builder, "current_color", self->modules.search.current_color);
+	SAVE_MOD_INT(builder, "current_alpha", self->modules.search.current_alpha);
+	SAVE_MOD_BOOL(builder, "match_case", self->modules.search.match_case);
+	SAVE_MOD_BOOL(builder, "regex", self->modules.search.regex);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "sixel");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.sixel.enabled);
+	SAVE_MOD_INT(builder, "max_width", self->modules.sixel.max_width);
+	SAVE_MOD_INT(builder, "max_height", self->modules.sixel.max_height);
+	SAVE_MOD_INT(builder, "max_colors", self->modules.sixel.max_colors);
+	SAVE_MOD_INT(builder, "max_total_ram_mb", self->modules.sixel.max_total_ram_mb);
+	SAVE_MOD_INT(builder, "max_placements", self->modules.sixel.max_placements);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "ligatures");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.ligatures.enabled);
+	SAVE_MOD_STRV(builder, "features", self->modules.ligatures.features);
+	SAVE_MOD_INT(builder, "cache_size", self->modules.ligatures.cache_size);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "wallpaper");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.wallpaper.enabled);
+	SAVE_MOD_STRING(builder, "image_path", self->modules.wallpaper.image_path);
+	SAVE_MOD_STRING(builder, "scale_mode", self->modules.wallpaper.scale_mode);
+	SAVE_MOD_DOUBLE(builder, "bg_alpha", self->modules.wallpaper.bg_alpha);
+	yaml_builder_end_mapping(builder);
+	yaml_builder_end_mapping(builder);
+}
+
 /*
  * build_terminal_section:
  *
@@ -1446,16 +1757,32 @@ build_colors_section(
 	yaml_builder_begin_mapping(builder);
 
 	yaml_builder_set_member_name(builder, "foreground");
-	yaml_builder_add_int_value(builder, (gint64)self->fg_index);
+	if (self->fg_hex != NULL) {
+		yaml_builder_add_string_value(builder, self->fg_hex);
+	} else {
+		yaml_builder_add_int_value(builder, (gint64)self->fg_index);
+	}
 
 	yaml_builder_set_member_name(builder, "background");
-	yaml_builder_add_int_value(builder, (gint64)self->bg_index);
+	if (self->bg_hex != NULL) {
+		yaml_builder_add_string_value(builder, self->bg_hex);
+	} else {
+		yaml_builder_add_int_value(builder, (gint64)self->bg_index);
+	}
 
 	yaml_builder_set_member_name(builder, "cursor_fg");
-	yaml_builder_add_int_value(builder, (gint64)self->cursor_fg_index);
+	if (self->cursor_fg_hex != NULL) {
+		yaml_builder_add_string_value(builder, self->cursor_fg_hex);
+	} else {
+		yaml_builder_add_int_value(builder, (gint64)self->cursor_fg_index);
+	}
 
 	yaml_builder_set_member_name(builder, "cursor_bg");
-	yaml_builder_add_int_value(builder, (gint64)self->cursor_bg_index);
+	if (self->cursor_bg_hex != NULL) {
+		yaml_builder_add_string_value(builder, self->cursor_bg_hex);
+	} else {
+		yaml_builder_add_int_value(builder, (gint64)self->cursor_bg_index);
+	}
 
 	if (self->palette_hex != NULL) {
 		guint i;
@@ -1710,6 +2037,15 @@ gst_config_save_to_file(
 	build_colors_section(self, builder);
 	build_cursor_section(self, builder);
 	build_selection_section(self, builder);
+
+	yaml_builder_set_member_name(builder, "draw");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_INT(builder, "min_latency", self->min_latency);
+	SAVE_MOD_INT(builder, "max_latency", self->max_latency);
+	yaml_builder_end_mapping(builder);
+	build_modules_section(self, builder);
+	build_bindings_section(self, builder, FALSE);
+	build_bindings_section(self, builder, TRUE);
 
 	yaml_builder_end_mapping(builder);
 
@@ -2350,6 +2686,8 @@ gst_config_set_fg_index(
 	g_return_if_fail(index <= 255);
 
 	self->fg_index = index;
+	/* Palette indices supersede any previous direct color. */
+	g_clear_pointer(&self->fg_hex, g_free);
 }
 
 void
@@ -2361,6 +2699,8 @@ gst_config_set_bg_index(
 	g_return_if_fail(index <= 255);
 
 	self->bg_index = index;
+	/* Palette indices supersede any previous direct color. */
+	g_clear_pointer(&self->bg_hex, g_free);
 }
 
 void
@@ -2372,6 +2712,8 @@ gst_config_set_cursor_fg_index(
 	g_return_if_fail(index <= 255);
 
 	self->cursor_fg_index = index;
+	/* Palette indices supersede any previous direct color. */
+	g_clear_pointer(&self->cursor_fg_hex, g_free);
 }
 
 void
@@ -2383,6 +2725,8 @@ gst_config_set_cursor_bg_index(
 	g_return_if_fail(index <= 255);
 
 	self->cursor_bg_index = index;
+	/* Palette indices supersede any previous direct color. */
+	g_clear_pointer(&self->cursor_bg_hex, g_free);
 }
 
 void

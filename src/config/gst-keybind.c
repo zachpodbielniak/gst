@@ -379,6 +379,15 @@ gst_keybind_lookup(
 
 	mods = gst_key_mod_from_x11_state(x11_state);
 
+	/* Lock changes letter case, but must not change shortcut identity. */
+	if (x11_state & LockMask) {
+		if ((mods & GST_KEY_MOD_SHIFT) && keyval >= XK_a && keyval <= XK_z) {
+			keyval -= XK_a - XK_A;
+		} else if (!(mods & GST_KEY_MOD_SHIFT) && keyval >= XK_A && keyval <= XK_Z) {
+			keyval += XK_a - XK_A;
+		}
+	}
+
 	for (i = 0; i < bindings->len; i++) {
 		const GstKeybind *kb;
 

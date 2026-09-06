@@ -339,31 +339,52 @@ shell_expand(
 	const gchar  *params,
 	GError      **error
 ){
-	g_autofree gchar *cmd = NULL;
-	g_autofree gchar *stdout_output = NULL;
-	g_autofree gchar *stderr_output = NULL;
-	gint exit_status;
+	g_autofree gchar *script = NULL;
+	g_autoptr(GSubprocess) process = NULL;
+	g_autoptr(GBytes) output = NULL;
+	g_autoptr(GBytes) diagnostics = NULL;
+	g_autoptr(GString) flags = NULL;
+	const gchar *data;
+	gsize length;
+	gsize offset;
 
 	if (params == NULL || params[0] == '\0')
 		return g_strdup("");
 
-	cmd = g_strdup_printf("/bin/sh -c \"printf '%%s' %s\"", params);
-
-	if (!g_spawn_command_line_sync(cmd, &stdout_output, &stderr_output,
-	                               &exit_status, error))
+	/* Preserve argument boundaries through shell expansion and re-parsing. */
+	script = g_strdup_printf("printf '%%s\\0' %s", params);
+	process = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
+		G_SUBPROCESS_FLAGS_STDERR_PIPE, error, "/bin/sh", "-c", script, NULL);
+	if (process == NULL || !g_subprocess_communicate(process, NULL, NULL,
+		&output, &diagnostics, error))
 		return NULL;
 
-	if (!g_spawn_check_wait_status(exit_status, NULL)) {
+	if (!g_subprocess_get_successful(process)) {
+		data = g_bytes_get_data(diagnostics, &length);
 		g_set_error(error,
 		            G_IO_ERROR,
 		            G_IO_ERROR_FAILED,
-		            "CRISPY_PARAMS expansion failed: %s",
-		            stderr_output != NULL ? stderr_output : "(no output)");
+		            "CRISPY_PARAMS expansion failed: %.*s",
+		            (gint)MIN(length, G_MAXINT), data != NULL ? data : "");
 		return NULL;
 	}
 
-	g_strstrip(stdout_output);
-	return g_steal_pointer(&stdout_output);
+	flags = g_string_new(NULL);
+	data = g_bytes_get_data(output, &length);
+	for (offset = 0; offset < length; ) {
+		g_autofree gchar *quoted = NULL;
+		g_autofree gchar *argument = NULL;
+		const gchar *end;
+		gsize arg_len;
+
+		end = memchr(data + offset, '\0', length - offset);
+		arg_len = end != NULL ? (gsize)(end - data - offset) : length - offset;
+		argument = g_strndup(data + offset, arg_len);
+		quoted = g_shell_quote(argument);
+		g_string_append_printf(flags, "%s ", quoted);
+		offset += arg_len + 1;
+	}
+	return g_string_free(g_steal_pointer(&flags), FALSE);
 }
 
 /* --- Public API --- */

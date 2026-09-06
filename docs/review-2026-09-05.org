@@ -1,0 +1,91 @@
+#+title: GST repository review — 2026-09-05
+#+description: Reproduced defects, regression tests, fixes, and verification boundaries for the master review
+#+authors: Codex
+#+categories: gst testing maintenance
+#+created: 2026-09-05T20:13:00-04:00
+#+updated: 2026-09-05T20:20:40-04:00
+#+version: 1
+
+* Scope and method
+
+Reviewed GST on =master= starting from =307de2b9cf9b2477dc33278338bad927b6fbdf1e=. Preserved the earlier agent's nine modified test files and three new test files, validated their assertions individually, and extended the regression coverage. No dependency source was inspected or edited. Normal project builds compiled their required dependencies; existing graylib/raylib archives were linked for LRG verification.
+
+The first suite run stopped individual binaries at their first assertion failure. Running each registered test separately exposed 23 failing cases in the inherited suite. Further regression tests were added for integer boundaries, escape cancellation, reset state, selection release, sixel parameters, external pipes, build integration, and Webview. Every finding below has an observed failing assertion, crash, sanitizer report, or build failure before its fix. Multiple test cases can exercise one root cause.
+
+* Validated findings
+
+The test names below are paths accepted by the corresponding GTest binary's =-p= option. All listed regression cases pass after the fixes.
+
+| ID | Defect and observed pre-fix behavior | Regression coverage | Fix |
+|----+--------------------------------------+---------------------+-----|
+| R01 | Deleting =G_MAXINT= characters from column 1 overflows =col + n= and crashes. | =test-line /line/delete-chars-large-count= | Clamp the count against the remaining width before adding it to a column. |
+| R02 | A six-byte SGR mouse buffer returns 9 as its written length, allowing callers to read past the buffer. | =test-mouse /mouse/sgr-short-buffer= | Reject truncated =snprintf= reports with a zero byte count. |
+| R03 | The public alternate-screen setter changes the mode bit twice, leaving the mode inconsistent with the active buffer. | =test-terminal /terminal/altscreen-mode-matches-buffer= | Let the screen swap own the alternate-screen bit transition. |
+| R04 | Cursor position reports use screen-relative rows when origin mode requires rows relative to the scroll region. | =test-escape /escape/response/dsr-origin= | Subtract the scroll-region origin when producing the report. |
+| R05 | Embedded NUL bytes are treated as incomplete UTF-8, dropping following output; interrupted multibyte sequences have the same problem. | =test-escape /escape/utf8/embedded-nul=; =test-terminal-edge /edge/utf8/nul-after-partial= and =/edge/utf8/nul-after-split-partial= | Ignore NUL controls and reject incomplete prefixes containing NUL instead of buffering unrelated subsequent bytes. |
+| R06 | OSC titles narrow Unicode runes to single bytes, corrupting accented and CJK text. | =test-escape /escape/osc/utf8-title= | Encode decoded runes back into UTF-8 when accumulating escape strings. |
+| R07 | Large CSI parameters wrap on conversion to =gint= or overflow cursor arithmetic, moving to the wrong edge. | =test-terminal-edge /edge/cursor/large-relative=, =/edge/cursor/large-absolute-origin=, and =/edge/cursor/beyond-int= | Saturate parsed parameters and clamp movement before adding cursor coordinates or origin offsets. |
+| R08 | Reset retains a partial UTF-8 sequence, allowing bytes after reset to complete pre-reset input. | =test-terminal-edge /edge/reset/partial-utf8= | Clear pending decoder bytes and the remembered repeat character. |
+| R09 | CAN and SUB apply unfinished OSC commands instead of cancelling them. | =test-terminal-edge /edge/string/can= and =/edge/string/sub= | Discard the pending string and escape state without dispatching it. |
+| R10 | OSC titles stop at their first semicolon. | =test-terminal-edge /edge/string/title-semicolon= | Use the complete raw title payload after the command separator. |
+| R11 | CapsLock breaks both Ctrl+letter and Ctrl+Shift+letter bindings despite lock modifiers being ignored. | =test-keybind /keybind/lookup-capslock-ctrl= and =/keybind/lookup-capslock-ctrl-shift= | Normalize letter case according to Shift after accounting for CapsLock. |
+| R12 | The first reversed rectangular drag normalizes using the previous selection type. | =test-selection /selection/rectangular-reverse= | Set the new selection type before calculating bounds. |
+| R13 | Copying soft-wrapped text inserts unwanted newlines because the wrap marker is checked on the cell after the last glyph. | =test-selection /selection/get-text-soft-wrap= | Inspect the last selected glyph's wrap attribute. |
+| R14 | Reading selection text on the other screen copies unrelated content at the same coordinates. | =test-selection /selection/altscreen= | Reject text extraction when the active screen differs from the selection's screen. |
+| R15 | A completed selection is reported as empty solely because its interaction mode is IDLE. | =test-selection /selection/extend-done= | Distinguish retained selection coordinates from a completed mouse interaction. |
+| R16 | A release at a different cell loses the selection if no intermediate motion event was delivered. | =test-terminal-edge /edge/selection/release-moves= | Clear an EMPTY selection on release only when the release remains in the starting cell. |
+| R17 | Disposing a module manager leaves externally retained modules active and their callbacks running. | =test-module /module/manager-dispose-deactivates= | Deactivate modules while services remain available and release instances before closing handles. |
+| R18 | PTY HUP discards queued output; child-exited can also fire before the final output is delivered. | =test-pty /pty/exit-preserves-buffered-tail= | Read pending data on HUP and drain the nonblocking PTY before emitting child-exited. |
+| R19 | Switching direct colors back to palette indices leaves stale hex values with precedence. | =test-config /config/load-index-replaces-hex= and =/config/set-index-replaces-hex= | Clear direct-color overrides in palette setters and use those setters when loading indices. |
+| R20 | Saving configuration loses direct colors, draw latency, module settings, and replacement key/mouse bindings. | =test-config /config/save-roundtrip= | Serialize these fields, including nested MCP tool settings, arrays, and explicit empty binding maps. |
+| R21 | Multiple CRISPY_PARAMS flags are concatenated into one invalid compiler argument. | =test-config-compiler /config-compiler/crispy-params-multiple-flags= | Preserve shell-expanded argument boundaries with NUL-separated output and shell-quote each argument when rebuilding flags. |
+| R22 | Replacing a kitty image counts both old and new allocations, causing premature eviction of unrelated images. | =test-kitty-cache /kitty/cache/replacement-preserves-resident-images= | Remove the replaced allocation from RAM accounting before checking capacity. |
+| R23 | Out-of-range kitty crop coordinates become negative signed offsets and reach the renderer as invalid pixel pointers. | =test-kitty-cache /kitty/render/out-of-range-crop-x= and =/kitty/render/out-of-range-crop-y= | Validate offsets before pointer arithmetic and bound crop extents using subtraction. |
+| R24 | Sixel rows retain allocation padding while the advertised stride uses content width, corrupting all but the first row. | =test-sixel /sixel/decode/compact-rows= | Compact and resize the pixel buffer to the advertised row layout. |
+| R25 | Repeated sixels beyond the configured height enlarge the advertised image without corresponding pixels. | =test-sixel /sixel/decode/repeat-height-limit= | Reject out-of-height bands before drawing or updating image extents. |
+| R26 | Long sixel repeat counts and color registers overflow signed integers, losing pixels or aliasing another palette register. | =test-sixel /sixel/decode/large-repeat= and =/sixel/decode/large-color= | Saturate decimal accumulation before multiplication and clamp repeat counts to available width. |
+| R27 | A sixel command containing only a color selection manufactures a one-pixel image. | =test-sixel /sixel/decode/empty= | Initialize written extents to -1 so commands with no pixel data produce no placement. |
+| R28 | External-pipe commands create unreaped children because DO_NOT_REAP_CHILD is used without a child watch. | =test-externalpipe /externalpipe/reaps-children= | Let GLib detach and reap commands whose status is not collected. |
+| R29 | Exporting wide text inserts an extra space for each wide-character dummy cell. | =test-externalpipe /externalpipe/wide-text= | Check dummy attributes before interpreting a zero rune as blank content. |
+| R30 | A failed module build can be hidden by a later successful or skipped loop iteration. | =test-build /build/module-failure= | Propagate the failing recursive make status immediately. |
+| R31 | =make tests= succeeds without running tests because the existing tests directory satisfies the target. | =test-build /build/tests-target= | Add a phony tests alias for the actual test runner. |
+| R32 | A parallel clean MCP build invokes the generic module rule without MCP flags; custom GST build directories also leak into the dependency build despite fixed dependency link paths. | =test-build /build/mcp-module-build-order=; fresh parallel full-option build | Order the MCP output after the module-specific builder and keep the dependency output at the path GST links. |
+| R33 | Compiler test probes leak nine executable paths and the wallpaper fixture leaks its original module reference. | LeakSanitizer runs of =test-config-compiler= and =test-wallpaper=; wallpaper weak-pointer assertion | Scope the probe paths and release both fixture and manager references. |
+| R34 | Unknown Webview authentication modes fall through to unconditional access. | =test-webview /webview/auth/unknown-mode= | Fail closed unless authentication succeeds or the mode is explicitly none. |
+| R35 | Webview shutdown leaves message/closed callbacks referring to a freed server and retains client references. | =test-webview /webview/shutdown/disconnects-clients= | Disconnect server callbacks before asynchronous closes, release client references, and empty the list. |
+
+* Verification
+
+** Build packages
+
+Required Fedora packages: =gcc make pkgconf-pkg-config glib2-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel libyaml-devel json-glib-devel=. Wayland adds =wayland-devel libxkbcommon-devel cairo-devel libdecor-devel=. MCP/Webview add =libsoup3-devel libdex-devel libpng-devel=. LRG adds =mesa-libGL-devel= and uses the existing vendored archives. No packages were installed and no host overlay was enabled.
+
+** Release build
+
+A fresh output directory was used to force a complete GST build without invoking clean recipes that remove generated dependency headers. The final full-option suite passes 254 test cases, including MCP and Webview; there are no compiler warnings in either the fresh build log or the final verification log.
+
+#+begin_src bash
+make -j8 BUILDDIR=build/review-final MCP=1 WEBVIEW=1 LRG_BACKEND=1 all tests
+#+end_src
+
+The initial fresh build found a mistake in the new build-order fixture: GNU make can regenerate included makefiles even under =-n=, contaminating dependencies with a temporary output path. The fixture now includes a dry-run clean goal to suppress dependency-file inclusion without executing any clean recipe. The complete command above and a subsequent incremental build were rerun successfully after correcting the fixture.
+
+** Sanitizers
+
+AddressSanitizer, UndefinedBehaviorSanitizer, and LeakSanitizer pass all 241 cases in the default-backend plus Webview configuration. No sanitizer suppressions or reduced compiler warning flags were used. MCP tests and live LRG rendering are not part of this sanitizer run; MCP is covered by the full-option release suite.
+
+#+begin_src bash
+make DEBUG=1 ASAN=1 BUILDDIR=build/review-sanitize WEBVIEW=1 tests
+#+end_src
+
+LeakSanitizer could not inspect processes under the sandbox, so sanitizer execution was repeated outside it with approval. Its first unrestricted run found the test-fixture leaks listed in R33; both were corrected before the final clean run. The compiler tests now use GLib's isolated test directories so normal test runs do not populate the user's real runtime compilation cache.
+
+** Evidence locations
+
+Session logs are retained in =/tmp/gst-review-session/=, including =before-results.txt=, per-case =before_*.log= files, =baseline.log=, =release-final.log=, =release-final-verified.log=, =sanitize-verified.log=, and =sanitize-final-verified.log=. The original unmodified library was retained there to run newly written terminal regressions against the pre-fix implementation. The sixel extensions were also compiled against an original module snapshot before its fixes. Temporary evidence is not part of the repository; the regression sources and this report are the persistent record.
+
+* Review boundaries and dependency follow-up
+
+The review followed terminal parsing and state transitions, PTY I/O and exit order, selection, configuration loading/saving/compilation, module lifecycle and image decoding, external pipes, optional Webview authentication/shutdown, rendering interfaces and window integration, and build/tool entry points. Renderer abstractions and module draw dispatch are exercised by tests. No live X11, Wayland, or LRG graphical session was launched, so visual behavior under an actual compositor is not claimed as verified. This is a bug-finding review, not a proof that all remaining code is defect-free.
+
+No new dependency defect was confirmed and no dependency source was reviewed or changed. The existing [[file:known-issues.org][known-issues document]] already records graylib/raylib warnings about a duplicate object recipe, a missing function declaration, and a potentially uninitialized variable. Those existing dependency findings remain for a separate follow-up; this review linked the prebuilt graphics archives rather than investigating those sources. The previously documented GST MCP build race is fixed by R32.

@@ -289,6 +289,52 @@ test_keybind_lookup_no_match(void)
 	g_array_unref(bindings);
 }
 
+/* ===== Test: CapsLock preserves Ctrl+letter binding identity ===== */
+
+static void
+test_keybind_lookup_capslock_ctrl(void)
+{
+	GArray *bindings;
+	GstKeybind kb;
+	GstAction action;
+
+	bindings = g_array_new(FALSE, TRUE, sizeof(GstKeybind));
+	g_assert_true(gst_keybind_parse("Ctrl+c", "clipboard_copy", &kb));
+	g_array_append_val(bindings, kb);
+
+	action = gst_keybind_lookup(bindings, XK_C, ControlMask | LockMask);
+	g_assert_cmpint(action, ==, GST_ACTION_CLIPBOARD_COPY);
+
+	action = gst_keybind_lookup(bindings, XK_D, ControlMask | LockMask);
+	g_assert_cmpint(action, ==, GST_ACTION_NONE);
+
+	g_array_unref(bindings);
+}
+
+/* ===== Test: CapsLock reverses Shift's letter case, not its modifier ===== */
+
+static void
+test_keybind_lookup_capslock_ctrl_shift(void)
+{
+	GArray *bindings;
+	GstKeybind kb;
+	GstAction action;
+
+	bindings = g_array_new(FALSE, TRUE, sizeof(GstKeybind));
+	g_assert_true(gst_keybind_parse("Ctrl+Shift+c", "clipboard_copy", &kb));
+	g_array_append_val(bindings, kb);
+
+	action = gst_keybind_lookup(bindings, XK_c,
+		ControlMask | ShiftMask | LockMask);
+	g_assert_cmpint(action, ==, GST_ACTION_CLIPBOARD_COPY);
+
+	action = gst_keybind_lookup(bindings, XK_d,
+		ControlMask | ShiftMask | LockMask);
+	g_assert_cmpint(action, ==, GST_ACTION_NONE);
+
+	g_array_unref(bindings);
+}
+
 /* ===== Test: config loads keybinds from YAML ===== */
 
 static void
@@ -390,6 +436,10 @@ main(
 		test_keybind_lookup_match);
 	g_test_add_func("/keybind/lookup-no-match",
 		test_keybind_lookup_no_match);
+	g_test_add_func("/keybind/lookup-capslock-ctrl",
+		test_keybind_lookup_capslock_ctrl);
+	g_test_add_func("/keybind/lookup-capslock-ctrl-shift",
+		test_keybind_lookup_capslock_ctrl_shift);
 
 	/* Config integration test */
 	g_test_add_func("/keybind/config-load-keybinds",

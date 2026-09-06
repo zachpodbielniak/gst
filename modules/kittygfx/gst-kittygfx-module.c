@@ -440,14 +440,20 @@ kittygfx_render(
 		px = ctx->borderpx + pl->col * ctx->cw + pl->x_offset;
 		py = ctx->borderpx + (pl->row - top_row) * ctx->ch + pl->y_offset;
 
+		/* Validate offsets before arithmetic or constructing a pixel pointer. */
+		if (pl->src_x < 0 || pl->src_x >= img->width ||
+		    pl->src_y < 0 || pl->src_y >= img->height) {
+			continue;
+		}
+
 		/* Determine source region */
 		sw = (pl->crop_w > 0) ? pl->crop_w : img->width;
 		sh = (pl->crop_h > 0) ? pl->crop_h : img->height;
 
-		if (pl->src_x + sw > img->width) {
+		if (sw > img->width - pl->src_x) {
 			sw = img->width - pl->src_x;
 		}
-		if (pl->src_y + sh > img->height) {
+		if (sh > img->height - pl->src_y) {
 			sh = img->height - pl->src_y;
 		}
 

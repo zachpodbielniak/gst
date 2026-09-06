@@ -382,7 +382,9 @@ gst_selection_extend(
 		return;
 	}
 
-	if (done && sel->mode == GST_SELECTION_EMPTY) {
+	/* A release can be the first event outside the initial cell. */
+	if (done && sel->mode == GST_SELECTION_EMPTY &&
+	    col == sel->ob.x && row == sel->ob.y) {
 		gst_selection_clear(sel);
 		return;
 	}
@@ -401,8 +403,8 @@ gst_selection_extend(
 
 	sel->oe.x = col;
 	sel->oe.y = row;
-	sel_normalize(sel);
 	sel->type = type;
+	sel_normalize(sel);
 
 	sel->mode = done ? GST_SELECTION_IDLE : GST_SELECTION_READY;
 }
@@ -522,8 +524,8 @@ gst_selection_is_empty(GstSelection *sel)
 {
 	g_return_val_if_fail(GST_IS_SELECTION(sel), TRUE);
 
+	/* IDLE also describes a completed selection retained after release. */
 	return (sel->ob.x == -1 ||
-	        sel->mode == GST_SELECTION_IDLE ||
 	        sel->mode == GST_SELECTION_EMPTY);
 }
 
@@ -557,6 +559,10 @@ gst_selection_get_text(GstSelection *sel)
 	g_return_val_if_fail(GST_IS_SELECTION(sel), NULL);
 
 	if (sel->ob.x == -1 || sel->term == NULL) {
+		return NULL;
+	}
+	/* Coordinates refer to the screen on which the selection was made. */
+	if (sel->alt != gst_terminal_has_mode(sel->term, GST_MODE_ALTSCREEN)) {
 		return NULL;
 	}
 
@@ -617,8 +623,7 @@ gst_selection_get_text(GstSelection *sel)
 		if ((y < sel->ne.y || lastx >= linelen) &&
 		    (sel->type == GST_SELECTION_TYPE_RECTANGULAR ||
 		     last < first ||
-		     !((last + 1 <= gst_line_get_glyph_const(line, cols - 1)) &&
-		       ((last + 1)->attr & GST_GLYPH_ATTR_WRAP)))) {
+		     !(last->attr & GST_GLYPH_ATTR_WRAP))) {
 			*ptr++ = '\n';
 		}
 	}

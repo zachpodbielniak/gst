@@ -342,7 +342,7 @@ gst_line_delete_chars(
     g_return_if_fail(n > 0);
 
     /* Limit deletion to end of line */
-    if (col + n > line->len) {
+    if (n > line->len - col) {
         n = line->len - col;
     }
 

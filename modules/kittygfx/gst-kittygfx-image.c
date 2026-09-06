@@ -295,6 +295,19 @@ finalize_upload(
 		return NULL;
 	}
 
+	/* Replacements release their old allocation before capacity accounting. */
+	{
+		GstKittyImage *previous;
+
+		previous = g_hash_table_lookup(cache->images,
+			GUINT_TO_POINTER(upload->image_id));
+		if (previous != NULL) {
+			cache->total_ram -= previous->data_size;
+			g_hash_table_remove(cache->images,
+				GUINT_TO_POINTER(upload->image_id));
+		}
+	}
+
 	/* Evict until we have room */
 	while (cache->total_ram + (gsize)w * (gsize)h * 4 > cache->max_ram &&
 	       g_hash_table_size(cache->images) > 0) {

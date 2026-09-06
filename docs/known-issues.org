@@ -24,7 +24,7 @@ These are expected limitations of the optional =--lrg= backend (see
 
 The pinned graylib/raylib sources build successfully but emit warnings for a duplicate =grl-image.o= recipe, a missing declaration of =grl_input_drain_injections()= in =grl-window.c=, and a possibly uninitialized =mi= in raylib's =external/m3d.h=. These upstream sources are unchanged by the GST dependency refresh; GST's own default and full-feature builds and tests pass without warnings.
 
-Run full-feature builds and tests sequentially: =make -j8 DEBUG=1 MCP=1 WEBVIEW=1 LRG_BACKEND=1 all && make -j8 DEBUG=1 MCP=1 WEBVIEW=1 LRG_BACKEND=1 test=. Requesting =all test= together in a parallel clean build can race the MCP module build against the generic module rule, which lacks MCP-specific include flags.
+The MCP build-order race is resolved: parallel =all tests= requests now wait for the module-specific build before linking MCP tests. See [[file:review-2026-09-05.org][the validated repository review]] for regressions and verification details.
 
 ** Resolved Issues
 :PROPERTIES:

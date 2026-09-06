@@ -102,6 +102,41 @@ test_terminal_modes(void)
 }
 
 static void
+test_terminal_altscreen_mode_matches_buffer(void)
+{
+	GstTerminal *term;
+
+	term = gst_terminal_new(8, 2);
+	gst_terminal_put_char(term, 'P');
+
+	gst_terminal_set_mode(term, GST_MODE_ALTSCREEN, TRUE);
+	g_assert_true(gst_terminal_has_mode(term, GST_MODE_ALTSCREEN));
+	g_assert_cmpuint(gst_terminal_get_glyph(term, 0, 0)->rune, ==, ' ');
+	gst_terminal_set_cursor_pos(term, 0, 0);
+	gst_terminal_put_char(term, 'A');
+
+	/* Setting an already enabled mode must not swap back to primary. */
+	gst_terminal_set_mode(term, GST_MODE_ALTSCREEN, TRUE);
+	g_assert_true(gst_terminal_has_mode(term, GST_MODE_ALTSCREEN));
+	g_assert_cmpuint(gst_terminal_get_glyph(term, 0, 0)->rune, ==, 'A');
+
+	gst_terminal_set_mode(term, GST_MODE_ALTSCREEN, FALSE);
+	g_assert_false(gst_terminal_has_mode(term, GST_MODE_ALTSCREEN));
+	g_assert_cmpuint(gst_terminal_get_glyph(term, 0, 0)->rune, ==, 'P');
+
+	gst_terminal_set_mode(term, GST_MODE_ALTSCREEN, FALSE);
+	g_assert_false(gst_terminal_has_mode(term, GST_MODE_ALTSCREEN));
+	g_assert_cmpuint(gst_terminal_get_glyph(term, 0, 0)->rune, ==, 'P');
+
+	/* Both buffers survive a complete leave/reenter cycle. */
+	gst_terminal_set_mode(term, GST_MODE_ALTSCREEN, TRUE);
+	g_assert_true(gst_terminal_has_mode(term, GST_MODE_ALTSCREEN));
+	g_assert_cmpuint(gst_terminal_get_glyph(term, 0, 0)->rune, ==, 'A');
+
+	g_object_unref(term);
+}
+
+static void
 test_terminal_clear(void)
 {
     GstTerminal *term;
@@ -179,6 +214,8 @@ main(
     g_test_add_func("/terminal/cursor", test_terminal_cursor);
     g_test_add_func("/terminal/put-char", test_terminal_put_char);
     g_test_add_func("/terminal/modes", test_terminal_modes);
+	g_test_add_func("/terminal/altscreen-mode-matches-buffer",
+		test_terminal_altscreen_mode_matches_buffer);
     g_test_add_func("/terminal/clear", test_terminal_clear);
     g_test_add_func("/terminal/scroll-region", test_terminal_scroll_region);
     g_test_add_func("/terminal/reset", test_terminal_reset);

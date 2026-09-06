@@ -349,13 +349,12 @@ sixel_ensure_buffer(
 	gint new_stride;
 	gint y;
 
-	if (need_w <= *buf_w && need_h <= *buf_h) {
-		return TRUE;
-	}
-
 	/* Clamp to max dimensions */
 	if (need_w > max_w || need_h > max_h) {
 		return FALSE;
+	}
+	if (need_w <= *buf_w && need_h <= *buf_h) {
+		return TRUE;
 	}
 
 	/* Double the size, but at least accommodate the needed dims */
@@ -499,8 +498,8 @@ sixel_decode(
 	cur_color = 0;
 	cursor_x = 0;
 	cursor_y = 0;
-	max_x = 0;
-	max_y = 0;
+	max_x = -1;
+	max_y = -1;
 	state = SIXEL_STATE_DATA;
 	num_acc = 0;
 	color_param_count = 0;
@@ -525,7 +524,12 @@ sixel_decode(
 			 * non-semicolon character, the color command is complete.
 			 */
 			if (ch >= '0' && ch <= '9') {
-				num_acc = num_acc * 10 + (gint)(ch - '0');
+				/* Saturate before multiplication; input digits are untrusted. */
+				if (num_acc > (G_MAXINT - (gint)(ch - '0')) / 10) {
+					num_acc = G_MAXINT;
+				} else {
+					num_acc = num_acc * 10 + (gint)(ch - '0');
+				}
 				continue;
 			}
 
@@ -677,7 +681,11 @@ sixel_decode(
 			 * Accumulate digits until we see the sixel character.
 			 */
 			if (ch >= '0' && ch <= '9') {
-				repeat_count = repeat_count * 10 + (gint)(ch - '0');
+				if (repeat_count > (G_MAXINT - (gint)(ch - '0')) / 10) {
+					repeat_count = G_MAXINT;
+				} else {
+					repeat_count = repeat_count * 10 + (gint)(ch - '0');
+				}
 				continue;
 			}
 
@@ -704,6 +712,11 @@ sixel_decode(
 				}
 
 				/* Ensure buffer can hold the repeated pixels */
+				if (cursor_y > max_h - SIXEL_BAND_HEIGHT) {
+					state = SIXEL_STATE_DATA;
+					continue;
+				}
+				repeat_count = MIN(repeat_count, MAX(0, max_w - cursor_x));
 				need_x = cursor_x + repeat_count;
 				need_y = cursor_y + SIXEL_BAND_HEIGHT;
 				if (!sixel_ensure_buffer(&pixels, &buf_w, &buf_h,
@@ -853,17 +866,23 @@ sixel_decode(
 		return FALSE;
 	}
 
-	*out_pixels = pixels;
-	*out_width = buf_w;
-	*out_height = buf_h;
-
 	/*
-	 * Trim the output to actual content size. The buffer may be
-	 * larger than needed due to power-of-two growth. We store the
-	 * full buffer but record the actual content dimensions.
+	 * Compact rows to the advertised stride before handing pixels to the
+	 * renderer. Allocation growth can leave padding after every source row.
 	 */
 	*out_width = max_x + 1;
 	*out_height = max_y + 1;
+	{
+		gint row;
+		gsize stride;
+
+		stride = (gsize)*out_width * SIXEL_BPP;
+		for (row = 1; row < *out_height; row++) {
+			memmove(pixels + (gsize)row * stride,
+				pixels + (gsize)row * (gsize)buf_w * SIXEL_BPP, stride);
+		}
+		*out_pixels = g_realloc(pixels, stride * (gsize)*out_height);
+	}
 
 	return TRUE;
 }

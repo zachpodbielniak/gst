@@ -94,13 +94,12 @@ collect_screen_text(void)
 			gint utf8_len;
 
 			g = gst_line_get_glyph(line, x);
-			if (g == NULL || g->rune == 0) {
-				g_string_append_c(buf, ' ');
+			/* Wide padding uses rune zero, so test its attribute first. */
+			if (g != NULL && (g->attr & GST_GLYPH_ATTR_WDUMMY)) {
 				continue;
 			}
-
-			/* Skip wide char dummies */
-			if (g->attr & GST_GLYPH_ATTR_WDUMMY) {
+			if (g == NULL || g->rune == 0) {
+				g_string_append_c(buf, ' ');
 				continue;
 			}
 
@@ -134,7 +133,8 @@ spawn_pipe(const gchar *command, const gchar *data, gsize length)
 
 	ok = g_spawn_async_with_pipes(
 		NULL, argv, NULL,
-		G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD,
+		/* No child watch is installed: let GLib reap the detached child. */
+		G_SPAWN_SEARCH_PATH,
 		NULL, NULL, NULL,
 		&child_stdin, NULL, NULL,
 		&error);

@@ -8,6 +8,8 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 #include <string.h>
+#include <X11/X.h>
+#include <X11/keysym.h>
 #include "config/gst-config.h"
 #include "config/gst-color-scheme.h"
 #include "gst-enums.h"
@@ -219,6 +221,70 @@ test_config_load_colors(void)
 	g_assert_cmpstr(palette[2], ==, "#a6e3a1");
 	g_assert_cmpstr(palette[3], ==, "#f9e2af");
 	g_assert_null(palette[4]);
+
+	g_unlink(path);
+}
+
+/*
+ * Switching back to palette indices must remove direct-color precedence,
+ * whether the new values come from YAML or the public setters.
+ */
+static void
+test_config_index_replaces_hex(gconstpointer use_setters)
+{
+	g_autoptr(GstConfig) config = NULL;
+	g_autoptr(GstColorScheme) scheme = NULL;
+	g_autofree gchar *path = NULL;
+	GError *error = NULL;
+
+	path = write_temp_yaml(
+		"colors:\n"
+		"  foreground: \"#123456\"\n"
+		"  background: \"#234567\"\n"
+		"  cursor_fg: \"#345678\"\n"
+		"  cursor_bg: \"#456789\"\n"
+	);
+	config = gst_config_new();
+	g_assert_true(gst_config_load_from_path(config, path, &error));
+	g_assert_no_error(error);
+	g_assert_cmpstr(gst_config_get_fg_hex(config), ==, "#123456");
+	g_assert_cmpstr(gst_config_get_bg_hex(config), ==, "#234567");
+	g_assert_cmpstr(gst_config_get_cursor_fg_hex(config), ==, "#345678");
+	g_assert_cmpstr(gst_config_get_cursor_bg_hex(config), ==, "#456789");
+
+	if (GPOINTER_TO_INT(use_setters)) {
+		gst_config_set_fg_index(config, 1);
+		gst_config_set_bg_index(config, 2);
+		gst_config_set_cursor_fg_index(config, 3);
+		gst_config_set_cursor_bg_index(config, 4);
+	} else {
+		g_assert_true(g_file_set_contents(path,
+			"colors:\n"
+			"  foreground: 1\n"
+			"  background: 2\n"
+			"  cursor_fg: 3\n"
+			"  cursor_bg: 4\n", -1, &error));
+		g_assert_no_error(error);
+		g_assert_true(gst_config_load_from_path(config, path, &error));
+		g_assert_no_error(error);
+	}
+
+	scheme = gst_color_scheme_new("index-override");
+	g_assert_true(gst_color_scheme_load_from_config(scheme, config));
+	g_assert_cmphex(gst_color_scheme_get_foreground(scheme), ==,
+		gst_color_scheme_get_color(scheme, 1));
+	g_assert_cmphex(gst_color_scheme_get_background(scheme), ==,
+		gst_color_scheme_get_color(scheme, 2));
+	g_assert_cmphex(gst_color_scheme_get_cursor_color(scheme), ==,
+		gst_color_scheme_get_color(scheme, 4));
+	g_assert_cmpuint(gst_config_get_fg_index(config), ==, 1);
+	g_assert_cmpuint(gst_config_get_bg_index(config), ==, 2);
+	g_assert_cmpuint(gst_config_get_cursor_fg_index(config), ==, 3);
+	g_assert_cmpuint(gst_config_get_cursor_bg_index(config), ==, 4);
+	g_assert_null(gst_config_get_fg_hex(config));
+	g_assert_null(gst_config_get_bg_hex(config));
+	g_assert_null(gst_config_get_cursor_fg_hex(config));
+	g_assert_null(gst_config_get_cursor_bg_hex(config));
 
 	g_unlink(path);
 }
@@ -656,6 +722,51 @@ test_config_load_selection(void)
 
 /* ===== Test: Save and reload round-trip ===== */
 
+/*
+ * Check the loaded values before and after saving so a loader failure
+ * cannot masquerade as a serialization regression.
+ */
+static void
+assert_roundtrip_settings(GstConfig *config)
+{
+	g_assert_cmpuint(gst_config_get_min_latency(config), ==, 12);
+	g_assert_cmpuint(gst_config_get_max_latency(config), ==, 47);
+
+	/* Module settings include booleans, numbers, strings and sequences. */
+	g_assert_false(config->modules.scrollback.enabled);
+	g_assert_cmpint(config->modules.scrollback.lines, ==, 321);
+	g_assert_cmpint(config->modules.scrollback.mouse_scroll_lines, ==, 9);
+	g_assert_true(config->modules.transparency.enabled);
+	g_assert_cmpfloat_with_epsilon(
+		config->modules.transparency.opacity, 0.625, 0.000001);
+	g_assert_true(config->modules.externalpipe.enabled);
+	g_assert_cmpstr(config->modules.externalpipe.command, ==,
+		"sed 's/foo/bar/'");
+	g_assert_true(config->modules.font2.enabled);
+	g_assert_nonnull(config->modules.font2.fonts);
+	g_assert_cmpstr(config->modules.font2.fonts[0], ==,
+		"Noto Sans Mono:pixelsize=17");
+	g_assert_cmpstr(config->modules.font2.fonts[1], ==,
+		"Noto Color Emoji:pixelsize=17");
+	g_assert_null(config->modules.font2.fonts[2]);
+	g_assert_true(config->modules.mcp.tools.read_screen);
+
+	/* Saving must preserve replacement bindings, not restore defaults. */
+	g_assert_cmpint(gst_config_lookup_key_action(config, XK_F6,
+		ControlMask | ShiftMask), ==, GST_ACTION_CLIPBOARD_COPY);
+	g_assert_cmpint(gst_config_lookup_key_action(config, XK_C,
+		ControlMask | ShiftMask), ==, GST_ACTION_NONE);
+	g_assert_cmpint(gst_config_lookup_mouse_action(config, Button3,
+		Mod1Mask), ==, GST_ACTION_PASTE_PRIMARY);
+	g_assert_cmpint(gst_config_lookup_mouse_action(config, Button4, 0),
+		==, GST_ACTION_NONE);
+
+	g_assert_cmpstr(gst_config_get_fg_hex(config), ==, "#123456");
+	g_assert_cmpstr(gst_config_get_bg_hex(config), ==, "#234567");
+	g_assert_cmpstr(gst_config_get_cursor_fg_hex(config), ==, "#345678");
+	g_assert_cmpstr(gst_config_get_cursor_bg_hex(config), ==, "#456789");
+}
+
 static void
 test_config_save_roundtrip(void)
 {
@@ -680,11 +791,43 @@ test_config_save_roundtrip(void)
 		"  shape: bar\n"
 		"  blink: true\n"
 		"  blink_rate: 250\n"
+		"draw:\n"
+		"  min_latency: 12\n"
+		"  max_latency: 47\n"
+		"modules:\n"
+		"  scrollback:\n"
+		"    enabled: false\n"
+		"    lines: 321\n"
+		"    mouse_scroll_lines: 9\n"
+		"  transparency:\n"
+		"    enabled: true\n"
+		"    opacity: 0.625\n"
+		"  externalpipe:\n"
+		"    enabled: true\n"
+		"    command: \"sed 's/foo/bar/'\"\n"
+		"  font2:\n"
+		"    enabled: true\n"
+		"    fonts:\n"
+		"      - \"Noto Sans Mono:pixelsize=17\"\n"
+		"      - \"Noto Color Emoji:pixelsize=17\"\n"
+		"  mcp:\n"
+		"    tools:\n"
+		"      read_screen: true\n"
+		"keybinds:\n"
+		"  Ctrl+Shift+F6: clipboard_copy\n"
+		"mousebinds:\n"
+		"  Alt+Button3: paste_primary\n"
+		"colors:\n"
+		"  foreground: \"#123456\"\n"
+		"  background: \"#234567\"\n"
+		"  cursor_fg: \"#345678\"\n"
+		"  cursor_bg: \"#456789\"\n"
 	);
 
 	config1 = gst_config_new();
 	g_assert_true(gst_config_load_from_path(config1, load_path, &error));
 	g_assert_no_error(error);
+	assert_roundtrip_settings(config1);
 
 	/* Save to a new temp file */
 	{
@@ -717,6 +860,7 @@ test_config_save_roundtrip(void)
 		GST_CURSOR_SHAPE_BAR);
 	g_assert_true(gst_config_get_cursor_blink(config2));
 	g_assert_cmpuint(gst_config_get_blink_rate(config2), ==, 250);
+	assert_roundtrip_settings(config2);
 
 	g_unlink(load_path);
 	g_unlink(save_path);
@@ -737,6 +881,10 @@ main(
 	g_test_add_func("/config/load-window", test_config_load_window);
 	g_test_add_func("/config/load-font", test_config_load_font);
 	g_test_add_func("/config/load-colors", test_config_load_colors);
+	g_test_add_data_func("/config/load-index-replaces-hex",
+		GINT_TO_POINTER(FALSE), test_config_index_replaces_hex);
+	g_test_add_data_func("/config/set-index-replaces-hex",
+		GINT_TO_POINTER(TRUE), test_config_index_replaces_hex);
 	g_test_add_func("/config/load-cursor", test_config_load_cursor);
 	g_test_add_func("/config/cursor-bar", test_config_cursor_bar);
 	g_test_add_func("/config/missing-sections", test_config_missing_sections);

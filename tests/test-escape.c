@@ -1310,6 +1310,23 @@ test_response_dsr(void)
 	g_object_unref(term);
 }
 
+/* Cursor reports use the same origin as CUP while DECOM is enabled. */
+static void
+test_response_dsr_origin(void)
+{
+	GstTerminal *term;
+
+	term = gst_terminal_new(80, 24);
+	g_signal_connect(term, "response", G_CALLBACK(on_response), NULL);
+	term_write(term, "\033[5;20r\033[?6h\033[3;7H\033[6n");
+	g_assert_cmpstr(response_data, ==, "\033[3;7R");
+
+	term_write(term, "\033[?6l\033[7;7H\033[6n");
+	g_assert_cmpstr(response_data, ==, "\033[7;7R");
+	g_clear_pointer(&response_data, g_free);
+	g_object_unref(term);
+}
+
 /* ===== Stale CSI Args Tests ===== */
 
 /*
@@ -1686,6 +1703,30 @@ test_pua_char_single_width(void)
  * the cursor. They should overlay on the previous cell.
  */
 static void
+test_utf8_embedded_nul(void)
+{
+	GstTerminal *term;
+	const gchar data[] = { 'A', '\0', 'B', 'C', 'D', 'E', 'F' };
+
+	term = gst_terminal_new(80, 24);
+	gst_terminal_write(term, data, sizeof(data));
+	g_assert_cmpuint(glyph_at(term, 1, 0), ==, 'B');
+	g_assert_cmpuint(glyph_at(term, 5, 0), ==, 'F');
+	g_object_unref(term);
+}
+
+static void
+test_osc_utf8_title(void)
+{
+	GstTerminal *term;
+
+	term = gst_terminal_new(80, 24);
+	term_write(term, "\033]2;caf\xc3\xa9 \xe6\x97\xa5\a");
+	g_assert_cmpstr(gst_terminal_get_title(term), ==, "caf\xc3\xa9 \xe6\x97\xa5");
+	g_object_unref(term);
+}
+
+static void
 test_combining_char_no_advance(void)
 {
 	GstTerminal *term;
@@ -1783,6 +1824,7 @@ main(
 	/* Response */
 	g_test_add_func("/escape/response/da", test_response_da);
 	g_test_add_func("/escape/response/dsr", test_response_dsr);
+	g_test_add_func("/escape/response/dsr-origin", test_response_dsr_origin);
 
 	/* Stale CSI Args */
 	g_test_add_func("/escape/csi/stale-args-cleared", test_csi_stale_args_cleared);
@@ -1793,6 +1835,8 @@ main(
 
 	/* UTF-8 Split Boundary */
 	g_test_add_func("/escape/utf8/split-boundary", test_utf8_split_boundary);
+	g_test_add_func("/escape/utf8/embedded-nul", test_utf8_embedded_nul);
+	g_test_add_func("/escape/osc/utf8-title", test_osc_utf8_title);
 
 	/* Stale CSI Mode */
 	g_test_add_func("/escape/csi/mode-not-stale", test_csi_mode_not_stale);

@@ -85,6 +85,25 @@ test_mouse_sgr_modifiers(void)
 	g_assert_cmpstr(buf, ==, "\033[<16;5;3M");
 }
 
+static void
+test_mouse_sgr_short_buffer(void)
+{
+	gchar short_buf[6];
+	gchar full_buf[64];
+	gssize len;
+
+	/* A truncated report is not safe to send, nor is snprintf's
+	 * required length safe to use as the count for a PTY write. */
+	len = gst_mouse_encode_report(short_buf, sizeof(short_buf),
+		0, COL, ROW, FALSE, FALSE, 0, TRUE);
+	g_assert_cmpint(len, ==, 0);
+
+	len = gst_mouse_encode_report(full_buf, sizeof(full_buf),
+		0, COL, ROW, FALSE, FALSE, 0, TRUE);
+	g_assert_cmpint(len, ==, 9);
+	g_assert_cmpstr(full_buf, ==, "\033[<0;5;3M");
+}
+
 /* ===== Classic X10 mode ===== */
 
 static void
@@ -139,6 +158,7 @@ main(
 	g_test_add_func("/mouse/sgr-hover-no-button", test_mouse_sgr_hover_no_button);
 	g_test_add_func("/mouse/sgr-drag", test_mouse_sgr_drag);
 	g_test_add_func("/mouse/sgr-modifiers", test_mouse_sgr_modifiers);
+	g_test_add_func("/mouse/sgr-short-buffer", test_mouse_sgr_short_buffer);
 	g_test_add_func("/mouse/classic-press", test_mouse_classic_press);
 	g_test_add_func("/mouse/classic-hover", test_mouse_classic_hover);
 	g_test_add_func("/mouse/classic-clamp", test_mouse_classic_clamp);

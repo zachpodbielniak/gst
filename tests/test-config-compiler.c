@@ -39,6 +39,15 @@ write_temp_file(
 	return path;
 }
 
+/* Check availability without leaking the owned executable path. */
+static gboolean
+have_gcc(void)
+{
+	g_autofree gchar *path = g_find_program_in_path("gcc");
+
+	return path != NULL;
+}
+
 /* ===== Test: GstConfig setters ===== */
 
 static void
@@ -252,7 +261,7 @@ test_compiler_new(void)
 	g_autoptr(GstConfigCompiler) compiler = NULL;
 	GError *error = NULL;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -272,7 +281,7 @@ test_compiler_find_config_none(void)
 	g_autofree gchar *path = NULL;
 	GError *error = NULL;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -302,7 +311,7 @@ test_compiler_compile_simple(void)
 	GError *error = NULL;
 
 	/* Skip if gcc is not available */
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -335,7 +344,7 @@ test_compiler_compile_invalid(void)
 	g_autofree gchar *so_path = NULL;
 	GError *error = NULL;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -368,7 +377,7 @@ test_compiler_load_and_apply(void)
 	GError *error = NULL;
 	gboolean ok;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -411,7 +420,7 @@ test_compiler_missing_symbol(void)
 	GError *error = NULL;
 	gboolean ok;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -451,7 +460,7 @@ test_compiler_crispy_params(void)
 	GError *error = NULL;
 	gboolean ok;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -485,6 +494,45 @@ test_compiler_crispy_params(void)
 	g_unlink(so_path);
 }
 
+/* ===== Test: CRISPY_PARAMS preserves separate compiler flags ===== */
+
+static void
+test_compiler_crispy_params_multiple_flags(void)
+{
+	g_autoptr(GstConfigCompiler) compiler = NULL;
+	g_autofree gchar *source_path = NULL;
+	g_autofree gchar *so_path = NULL;
+	GError *error = NULL;
+
+	if (!have_gcc()) {
+		g_test_skip("gcc not found in PATH");
+		return;
+	}
+
+	source_path = write_temp_file(".c",
+		"#define CRISPY_PARAMS \"-DFIRST=1 -DSECOND=2\"\n"
+		"#include <gmodule.h>\n"
+		"#if !defined(FIRST) || FIRST != 1\n"
+		"#error FIRST must equal 1\n"
+		"#endif\n"
+		"#if !defined(SECOND) || SECOND != 2\n"
+		"#error SECOND must equal 2\n"
+		"#endif\n"
+		"G_MODULE_EXPORT int gst_config_init(void) { return 1; }\n");
+
+	compiler = gst_config_compiler_new(&error);
+	g_assert_no_error(error);
+
+	so_path = gst_config_compiler_compile(compiler, source_path,
+		FALSE, &error);
+	g_assert_no_error(error);
+	g_assert_nonnull(so_path);
+	g_assert_true(g_file_test(so_path, G_FILE_TEST_EXISTS));
+
+	g_unlink(source_path);
+	g_unlink(so_path);
+}
+
 /* ===== Test: cache hit on second compile ===== */
 
 static void
@@ -496,7 +544,7 @@ test_compiler_cache_hit(void)
 	g_autofree gchar *so_path_2 = NULL;
 	GError *error = NULL;
 
-	if (g_find_program_in_path("gcc") == NULL) {
+	if (!have_gcc()) {
 		g_test_skip("gcc not found in PATH");
 		return;
 	}
@@ -532,7 +580,8 @@ main(
 	int   argc,
 	char *argv[]
 ){
-	g_test_init(&argc, &argv, NULL);
+	/* Runtime compilation must not write into the user's real config cache. */
+	g_test_init(&argc, &argv, G_TEST_OPTION_ISOLATE_DIRS, NULL);
 
 	/* Config setter tests */
 	g_test_add_func("/config-compiler/setters",
@@ -561,6 +610,8 @@ main(
 		test_compiler_missing_symbol);
 	g_test_add_func("/config-compiler/crispy-params",
 		test_compiler_crispy_params);
+	g_test_add_func("/config-compiler/crispy-params-multiple-flags",
+		test_compiler_crispy_params_multiple_flags);
 	g_test_add_func("/config-compiler/cache-hit",
 		test_compiler_cache_hit);
 

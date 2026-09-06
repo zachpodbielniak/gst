@@ -32,6 +32,7 @@ typedef struct
 	gboolean  bell_called;
 	gint     *order_counter;   /* shared counter for priority ordering tests */
 	gint      call_order;      /* captured value of *order_counter at call time */
+	guint     deactivate_count;
 } TestBellModule;
 
 typedef struct
@@ -92,7 +93,7 @@ test_bell_module_activate(GstModule *module)
 static void
 test_bell_module_deactivate(GstModule *module)
 {
-	(void)module;
+	TEST_BELL_MODULE(module)->deactivate_count++;
 }
 
 static void
@@ -113,6 +114,7 @@ test_bell_module_init(TestBellModule *self)
 	self->bell_called = FALSE;
 	self->order_counter = NULL;
 	self->call_order = -1;
+	self->deactivate_count = 0;
 }
 
 G_DEFINE_TYPE_WITH_CODE(TestBellModule, test_bell_module, GST_TYPE_MODULE,
@@ -597,6 +599,34 @@ test_module_activate_deactivate(void)
 
 	gst_module_deactivate(GST_MODULE(mod));
 	g_assert_false(gst_module_is_active(GST_MODULE(mod)));
+
+	g_object_unref(mod);
+}
+
+/*
+ * test_module_manager_dispose_deactivates:
+ * Releasing the manager deactivates modules even with an external owner.
+ */
+static void
+test_module_manager_dispose_deactivates(void)
+{
+	GstModuleManager *mgr;
+	TestBellModule *mod;
+
+	mgr = gst_module_manager_new();
+	mod = (TestBellModule *)g_object_new(TEST_TYPE_BELL_MODULE, NULL);
+	g_assert_true(gst_module_manager_register(mgr, GST_MODULE(mod)));
+	gst_module_manager_activate_all(mgr);
+	g_assert_true(gst_module_is_active(GST_MODULE(mod)));
+	g_assert_cmpuint(mod->deactivate_count, ==, 0);
+
+	/* Retain the module's original reference across manager disposal. */
+	g_object_unref(mgr);
+
+	g_assert_cmpuint(mod->deactivate_count, ==, 1);
+	g_assert_false(gst_module_is_active(GST_MODULE(mod)));
+	gst_module_deactivate(GST_MODULE(mod));
+	g_assert_cmpuint(mod->deactivate_count, ==, 1);
 
 	g_object_unref(mod);
 }
@@ -1111,6 +1141,8 @@ main(int argc, char **argv)
 	g_test_add_func("/module/register-duplicate", test_module_register_duplicate);
 	g_test_add_func("/module/unregister", test_module_unregister);
 	g_test_add_func("/module/activate-deactivate", test_module_activate_deactivate);
+	g_test_add_func("/module/manager-dispose-deactivates",
+		test_module_manager_dispose_deactivates);
 	g_test_add_func("/module/priority", test_module_priority);
 	g_test_add_func("/module/is-active", test_module_is_active);
 	g_test_add_func("/module/hook-registration", test_hook_registration);

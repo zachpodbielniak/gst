@@ -10,11 +10,19 @@
  */
 
 #include <glib.h>
+#include <glib/gstdio.h>
+#include <errno.h>
+#include <poll.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <termios.h>
+#include <unistd.h>
 #include "core/gst-pty.h"
 
 typedef struct {
 	GByteArray  *received;
+	gboolean    child_exited;
+	gint        child_status;
 } PtyFixture;
 
 static void
@@ -188,6 +196,128 @@ test_pty_write_order_preserved(void)
 	g_byte_array_unref(fix.received);
 }
 
+static void
+on_tail_child_exited(
+	GstPty *pty,
+	gint status,
+	gpointer user_data
+){
+	PtyFixture *fix = user_data;
+
+	(void)pty;
+	fix->child_exited = TRUE;
+	fix->child_status = status;
+}
+
+static gboolean
+on_tail_timeout(gpointer user_data)
+{
+	gboolean *timed_out = user_data;
+
+	*timed_out = TRUE;
+	return G_SOURCE_CONTINUE;
+}
+
+static void
+test_pty_exit_preserves_buffered_tail(void)
+{
+#ifdef SYS_pidfd_open
+	const gchar payload[] = "final output before child exit";
+	const gchar script[] =
+		"#!/bin/sh\n"
+		"read gate\n"
+		"printf '%s' 'final output before child exit'\n";
+	PtyFixture fix;
+	GstPty *pty;
+	GError *error;
+	gchar *script_path;
+	struct pollfd exit_poll;
+	struct pollfd master_poll;
+	gint script_fd;
+	gint poll_result;
+	gint64 deadline;
+	struct termios tio;
+	gint64 remaining;
+	guint timeout_id;
+	gboolean timed_out;
+
+	error = NULL;
+	script_path = NULL;
+	script_fd = g_file_open_tmp("gst-pty-tail-XXXXXX", &script_path, &error);
+	g_assert_no_error(error);
+	g_assert_cmpint(script_fd, >=, 0);
+	close(script_fd);
+	g_assert_true(g_file_set_contents(script_path, script, -1, &error));
+	g_assert_no_error(error);
+	g_assert_cmpint(g_chmod(script_path, 0700), ==, 0);
+
+	fix.received = g_byte_array_new();
+	fix.child_exited = FALSE;
+	fix.child_status = 0;
+	pty = gst_pty_new();
+	g_signal_connect(pty, "data-received",
+		G_CALLBACK(on_data_received), &fix);
+	g_signal_connect(pty, "child-exited",
+		G_CALLBACK(on_tail_child_exited), &fix);
+	g_assert_true(gst_pty_spawn(pty, script_path, NULL, &error));
+	g_assert_no_error(error);
+
+	/* Wait for exit without dispatching GLib or consuming its wait status.
+	 * A pidfd remains readable even if GLib's SIGCHLD worker reaps first. */
+	exit_poll.fd = (gint)syscall(SYS_pidfd_open,
+		gst_pty_get_child_pid(pty), 0);
+	g_assert_cmpint(exit_poll.fd, >=, 0);
+	exit_poll.events = POLLIN;
+	exit_poll.revents = 0;
+	/* Hold the child in read until its pidfd is open, so even GLib
+	 * versions that reap from a worker cannot win that race. */
+	g_assert_cmpint(tcgetattr(gst_pty_get_fd(pty), &tio), ==, 0);
+	tio.c_lflag &= ~(ECHO | ECHONL);
+	g_assert_cmpint(tcsetattr(gst_pty_get_fd(pty), TCSANOW, &tio), ==, 0);
+	gst_pty_write(pty, "go\n", -1);
+	deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+	do {
+		remaining = deadline - g_get_monotonic_time();
+		g_assert_cmpint(remaining, >, 0);
+		poll_result = poll(&exit_poll, 1,
+			(gint)((remaining + 999) / 1000));
+	} while (poll_result < 0 && errno == EINTR);
+	g_assert_cmpint(poll_result, ==, 1);
+	g_assert_true((exit_poll.revents & POLLIN) != 0);
+	close(exit_poll.fd);
+	g_assert_cmpint(g_unlink(script_path), ==, 0);
+	g_free(script_path);
+
+	/* Prove the first I/O dispatch will see data and hangup together. */
+	master_poll.fd = gst_pty_get_fd(pty);
+	master_poll.events = POLLIN;
+	master_poll.revents = 0;
+	g_assert_cmpint(poll(&master_poll, 1, 0), ==, 1);
+	g_assert_true((master_poll.revents & POLLIN) != 0);
+	g_assert_true((master_poll.revents & POLLHUP) != 0);
+
+	timed_out = FALSE;
+	timeout_id = g_timeout_add_seconds(5, on_tail_timeout, &timed_out);
+	while (!timed_out &&
+	       (!fix.child_exited || fix.received->len < sizeof(payload) - 1)) {
+		g_main_context_iteration(NULL, TRUE);
+	}
+	g_source_remove(timeout_id);
+
+	g_assert_true(fix.child_exited);
+	g_assert_true(WIFEXITED(fix.child_status));
+	g_assert_cmpint(WEXITSTATUS(fix.child_status), ==, 0);
+	g_assert_cmpuint(fix.received->len, ==, sizeof(payload) - 1);
+	g_assert_cmpmem(fix.received->data, fix.received->len,
+		payload, sizeof(payload) - 1);
+
+	g_object_unref(pty);
+	g_byte_array_unref(fix.received);
+#else
+	g_test_skip("pidfd_open is required to observe exit without reaping");
+#endif
+}
+
 int
 main(
 	int     argc,
@@ -199,6 +329,8 @@ main(
 		test_pty_large_write_not_truncated);
 	g_test_add_func("/pty/write-order-preserved",
 		test_pty_write_order_preserved);
+	g_test_add_func("/pty/exit-preserves-buffered-tail",
+		test_pty_exit_preserves_buffered_tail);
 
 	return g_test_run();
 }

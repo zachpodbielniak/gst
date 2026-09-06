@@ -652,7 +652,8 @@ gst_terminal_move_to_abs(
 	priv = term->priv;
 
 	gst_terminal_move_to(term, x,
-	    y + ((priv->cursor.state & GST_CURSOR_STATE_ORIGIN) ? priv->scroll_top : 0));
+	    CLAMP(y, 0, priv->rows - 1) +
+	    ((priv->cursor.state & GST_CURSOR_STATE_ORIGIN) ? priv->scroll_top : 0));
 }
 
 void
@@ -807,6 +808,8 @@ gst_terminal_set_mode(
 	/* Handle altscreen toggle */
 	if ((mode & GST_MODE_ALTSCREEN) &&
 	    (old_mode & GST_MODE_ALTSCREEN) != (priv->mode & GST_MODE_ALTSCREEN)) {
+		/* swap_screen updates the bit itself along with the active buffer. */
+		priv->mode ^= GST_MODE_ALTSCREEN;
 		gst_terminal_swap_screen(term);
 	}
 
@@ -870,6 +873,9 @@ gst_terminal_reset(
 
 	priv->mode = GST_MODE_WRAP | GST_MODE_UTF8;
 	priv->esc = 0;
+	/* No input bytes or repeat character survive a terminal reset. */
+	priv->utf8_partial_len = 0;
+	priv->lastc = 0;
 	priv->scroll_top = 0;
 	priv->scroll_bot = priv->rows - 1;
 
@@ -1739,10 +1745,8 @@ term_csiparse(GstTerminal *term)
 
 	while (p < priv->csi_buf + priv->csi_len) {
 		v = strtol(p, &p, 10);
-		if (v == G_MAXLONG || v == G_MINLONG) {
-			v = -1;
-		}
-		priv->csi_args[priv->csi_nargs++] = (gint)v;
+		/* Parameters are nonnegative; saturate before narrowing to gint. */
+		priv->csi_args[priv->csi_nargs++] = (gint)CLAMP(v, 0, G_MAXINT);
 		if (*p != ';' || priv->csi_nargs == GST_MAX_ARGS) {
 			break;
 		}
@@ -1774,36 +1778,36 @@ term_csihandle(GstTerminal *term)
 
 	case 'A': /* CUU - Cursor Up */
 		gst_terminal_move_to(term, priv->cursor.x,
-		    priv->cursor.y - DEFAULT(priv->csi_args[0], 1));
+		    priv->cursor.y - MIN(DEFAULT(priv->csi_args[0], 1), priv->rows));
 		break;
 
 	case 'B': /* CUD - Cursor Down */
 	case 'e': /* VPR - Vertical Position Relative */
 		gst_terminal_move_to(term, priv->cursor.x,
-		    priv->cursor.y + DEFAULT(priv->csi_args[0], 1));
+		    priv->cursor.y + MIN(DEFAULT(priv->csi_args[0], 1), priv->rows));
 		break;
 
 	case 'C': /* CUF - Cursor Forward */
 	case 'a': /* HPR - Horizontal Position Relative */
 		gst_terminal_move_to(term,
-		    priv->cursor.x + DEFAULT(priv->csi_args[0], 1),
+		    priv->cursor.x + MIN(DEFAULT(priv->csi_args[0], 1), priv->cols),
 		    priv->cursor.y);
 		break;
 
 	case 'D': /* CUB - Cursor Backward */
 		gst_terminal_move_to(term,
-		    priv->cursor.x - DEFAULT(priv->csi_args[0], 1),
+		    priv->cursor.x - MIN(DEFAULT(priv->csi_args[0], 1), priv->cols),
 		    priv->cursor.y);
 		break;
 
 	case 'E': /* CNL - Cursor Next Line */
 		gst_terminal_move_to(term, 0,
-		    priv->cursor.y + DEFAULT(priv->csi_args[0], 1));
+		    priv->cursor.y + MIN(DEFAULT(priv->csi_args[0], 1), priv->rows));
 		break;
 
 	case 'F': /* CPL - Cursor Previous Line */
 		gst_terminal_move_to(term, 0,
-		    priv->cursor.y - DEFAULT(priv->csi_args[0], 1));
+		    priv->cursor.y - MIN(DEFAULT(priv->csi_args[0], 1), priv->rows));
 		break;
 
 	case 'G': /* CHA - Cursor Horizontal Absolute */
@@ -1955,7 +1959,8 @@ term_csihandle(GstTerminal *term)
 			/* Cursor position report */
 			gchar buf[40];
 			g_snprintf(buf, sizeof(buf), "\033[%d;%dR",
-			    priv->cursor.y + 1, priv->cursor.x + 1);
+			    priv->cursor.y + 1 - ((priv->cursor.state & GST_CURSOR_STATE_ORIGIN)
+			        ? priv->scroll_top : 0), priv->cursor.x + 1);
 			term_response(term, buf, -1);
 		}
 		break;
@@ -2109,6 +2114,15 @@ term_strhandle(GstTerminal *term)
 		}
 
 		term_strparse(term);
+		/* Titles use the entire payload after the first separator. */
+		if (raw_buf != NULL && priv->str_nargs > 1) {
+			gchar *title;
+
+			title = strchr(raw_buf, ';');
+			if (title != NULL) {
+				priv->str_args[1] = title + 1;
+			}
+		}
 
 		if (priv->str_nargs == 0) {
 			return;
@@ -2531,6 +2545,12 @@ gst_terminal_put_char(
 	 * Accumulate bytes until terminator (BEL, ESC \, or cancel codes).
 	 */
 	if (priv->esc & GST_ESC_STR) {
+		/* Cancellation must not execute a partially received OSC/DCS/APC. */
+		if (rune == 0x18 || rune == 0x1a) {
+			priv->esc = 0;
+			priv->str_len = 0;
+			return;
+		}
 		if (rune == '\a' || rune == 0x18 || rune == 0x1a ||
 		    (rune == 0x1b && !(priv->esc & GST_ESC_STR_END))) {
 			/* BEL or cancel terminates the string */
@@ -2555,21 +2575,32 @@ gst_terminal_put_char(
 			return;
 		}
 
-		/* Accumulate byte into string buffer */
-		if (priv->str_buf != NULL && priv->str_len < GST_MAX_STR_LEN) {
-			/* Grow buffer if needed */
-			if (priv->str_len + 1 >= priv->str_siz) {
-				priv->str_siz *= 2;
-				priv->str_buf = g_realloc(priv->str_buf, priv->str_siz);
-			}
-			priv->str_buf[priv->str_len++] = (gchar)rune;
-		} else if (priv->str_buf != NULL &&
-			   priv->str_len == GST_MAX_STR_LEN)
+		/* Restore UTF-8 bytes after the input decoder has produced a rune. */
 		{
-			g_warning("escape string buffer overflow "
-				"(%d bytes, type='%c')",
-				GST_MAX_STR_LEN, priv->str_type);
-			priv->str_len++; /* prevent repeated warnings */
+			gchar encoded[6];
+			gint encoded_len;
+
+			encoded_len = (priv->mode & GST_MODE_UTF8)
+				? g_unichar_to_utf8(rune, encoded) : 1;
+			if (!(priv->mode & GST_MODE_UTF8)) {
+				encoded[0] = (gchar)rune;
+			}
+			if (priv->str_buf != NULL && priv->str_len <= GST_MAX_STR_LEN - (gsize)encoded_len) {
+				/* Grow buffer if needed */
+				if (priv->str_len + encoded_len >= priv->str_siz) {
+					priv->str_siz *= 2;
+					priv->str_buf = g_realloc(priv->str_buf, priv->str_siz);
+				}
+				memcpy(priv->str_buf + priv->str_len, encoded, (gsize)encoded_len);
+				priv->str_len += encoded_len;
+			} else if (priv->str_buf != NULL &&
+				   priv->str_len <= GST_MAX_STR_LEN)
+			{
+				g_warning("escape string buffer overflow "
+					"(%d bytes, type='%c')",
+					GST_MAX_STR_LEN, priv->str_type);
+				priv->str_len = GST_MAX_STR_LEN + 1; /* prevent repeated warnings */
+			}
 		}
 		return;
 	}
@@ -2762,6 +2793,11 @@ gst_terminal_write(
 		combined_len += need;
 
 		rune = g_utf8_get_char_validated(combined, combined_len);
+		/* GLib reports a NUL inside a sequence as incomplete, but a PTY
+		 * NUL is a control byte; discard the invalid prefix and resume. */
+		if (rune == (gunichar)-2 && memchr(combined, '\0', (gsize)combined_len) != NULL) {
+			rune = (gunichar)-1;
+		}
 		if (rune == (gunichar)-2) {
 			/*
 			 * Still incomplete - save everything and wait for
@@ -2800,9 +2836,18 @@ gst_terminal_write(
 	while (p < end) {
 		gunichar rune;
 
+		/* NUL is a complete ignored control, not an incomplete UTF-8 rune. */
+		if (*p == '\0') {
+			p++;
+			continue;
+		}
+
 		if (priv->mode & GST_MODE_UTF8) {
 			/* Decode UTF-8 */
 			rune = g_utf8_get_char_validated(p, end - p);
+			if (rune == (gunichar)-2 && memchr(p, '\0', (gsize)(end - p)) != NULL) {
+				rune = (gunichar)-1;
+			}
 			if (rune == (gunichar)-2) {
 				/*
 				 * Incomplete sequence at end of buffer.

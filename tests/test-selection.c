@@ -137,6 +137,7 @@ test_selection_extend_done(void)
 {
 	GstTerminal *term;
 	GstSelection *sel;
+	gchar *text;
 
 	term = gst_terminal_new(80, 24);
 	sel = gst_selection_new(term);
@@ -157,6 +158,14 @@ test_selection_extend_done(void)
 
 	/* Cells should still be queryable as selected */
 	g_assert_true(gst_selection_selected(sel, 5, 0));
+	g_assert_false(gst_selection_is_empty(sel));
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "Hello World");
+	g_free(text);
+
+	gst_selection_clear(sel);
+	g_assert_true(gst_selection_is_empty(sel));
+	g_assert_null(gst_selection_get_text(sel));
 
 	g_object_unref(sel);
 	g_object_unref(term);
@@ -318,6 +327,30 @@ test_selection_get_text_multiline(void)
 	g_object_unref(term);
 }
 
+/*
+ * Soft wraps copy as one logical line; explicit line breaks remain.
+ */
+static void
+test_selection_get_text_soft_wrap(void)
+{
+	GstTerminal *term;
+	GstSelection *sel;
+	gchar *text;
+
+	term = gst_terminal_new(8, 4);
+	sel = gst_selection_new(term);
+
+	gst_terminal_write(term, "abcdefghij\r\nklm", -1);
+	gst_selection_set_range(sel, 0, 0, 2, 2);
+
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "abcdefghij\nklm");
+
+	g_free(text);
+	g_object_unref(sel);
+	g_object_unref(term);
+}
+
 /* ===== Rectangular Selection Tests ===== */
 
 /*
@@ -351,6 +384,42 @@ test_selection_rectangular(void)
 	/* Col 11 should NOT be selected */
 	g_assert_false(gst_selection_selected(sel, 11, 1));
 
+	g_object_unref(sel);
+	g_object_unref(term);
+}
+
+/*
+ * The first down-left drag must normalize using rectangular bounds,
+ * without needing a second motion event to repair the selection.
+ */
+static void
+test_selection_rectangular_reverse(void)
+{
+	GstTerminal *term;
+	GstSelection *sel;
+	gchar *text;
+	gint row;
+
+	term = gst_terminal_new(10, 4);
+	sel = gst_selection_new(term);
+	fill_row(term, 0, "abcdefghi");
+	fill_row(term, 1, "ABCDEFGHI");
+	fill_row(term, 2, "012345678");
+
+	gst_selection_start(sel, 5, 0, GST_SELECTION_SNAP_NONE);
+	gst_selection_extend(sel, 2, 2, GST_SELECTION_TYPE_RECTANGULAR, FALSE);
+
+	for (row = 0; row < 3; row++) {
+		g_assert_true(gst_selection_selected(sel, 2, row));
+		g_assert_true(gst_selection_selected(sel, 5, row));
+		g_assert_false(gst_selection_selected(sel, 1, row));
+		g_assert_false(gst_selection_selected(sel, 6, row));
+	}
+	g_assert_false(gst_selection_selected(sel, 3, 3));
+
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "cdef\nCDEF\n2345");
+	g_free(text);
 	g_object_unref(sel);
 	g_object_unref(term);
 }
@@ -429,6 +498,7 @@ test_selection_altscreen(void)
 {
 	GstTerminal *term;
 	GstSelection *sel;
+	gchar *text;
 
 	term = gst_terminal_new(80, 24);
 	sel = gst_selection_new(term);
@@ -439,18 +509,27 @@ test_selection_altscreen(void)
 	gst_selection_set_range(sel, 0, 0, 11, 0);
 
 	g_assert_true(gst_selection_selected(sel, 5, 0));
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "Primary text");
+	g_free(text);
 
 	/* Switch to alt screen */
 	gst_terminal_write(term, "\033[?1049h", -1);
+	fill_row(term, 0, "OTHER");
 
 	/* Selection should not be visible on alt screen */
 	g_assert_false(gst_selection_selected(sel, 5, 0));
+	text = gst_selection_get_text(sel);
+	g_assert_null(text);
 
 	/* Switch back */
 	gst_terminal_write(term, "\033[?1049l", -1);
 
 	/* Selection should be visible again */
 	g_assert_true(gst_selection_selected(sel, 5, 0));
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "Primary text");
+	g_free(text);
 
 	g_object_unref(sel);
 	g_object_unref(term);
@@ -473,7 +552,9 @@ main(
 	g_test_add_func("/selection/multiline", test_selection_multiline);
 	g_test_add_func("/selection/get-text-single", test_selection_get_text_single);
 	g_test_add_func("/selection/get-text-multiline", test_selection_get_text_multiline);
+	g_test_add_func("/selection/get-text-soft-wrap", test_selection_get_text_soft_wrap);
 	g_test_add_func("/selection/rectangular", test_selection_rectangular);
+	g_test_add_func("/selection/rectangular-reverse", test_selection_rectangular_reverse);
 	g_test_add_func("/selection/scroll", test_selection_scroll);
 	g_test_add_func("/selection/scroll-clear", test_selection_scroll_clear);
 	g_test_add_func("/selection/altscreen", test_selection_altscreen);

@@ -72,6 +72,10 @@ gst_mouse_encode_report(
 		 */
 		len = g_snprintf(buf, buflen, "\033[<%d;%d;%d%c",
 			cb, col + 1, row + 1, release ? 'm' : 'M');
+		/* snprintf returns the required size, even when output is truncated. */
+		if (len < 0 || (gsize)len >= buflen) {
+			return 0;
+		}
 	} else {
 		/*
 		 * Classic X10/normal mode: ESC [ M Cb Cx Cy
