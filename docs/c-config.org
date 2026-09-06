@@ -267,7 +267,7 @@ gst --no-c-config
 |-----------------------+-------------------------------------------------------|
 | =--c-config PATH=     | Use a specific C config file                          |
 | =--generate-c-config= | Print the default C config template to stdout         |
-| =--recompile=         | Compile the C config and exit (do not start terminal) |
+| =--recompile=         | Compile the C config and exit; failure returns a nonzero status and never starts the terminal |
 | =--no-c-config=       | Skip C config compilation and loading                 |
 
 ** Advanced: Accessing the Module Manager

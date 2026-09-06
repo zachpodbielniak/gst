@@ -2345,6 +2345,11 @@ main(
 		return EXIT_FAILURE;
 	}
 skip_c_config:
+	/* Compile-only failures must not fall through to terminal startup. */
+	if (opt_recompile) {
+		g_free(opt_c_config);
+		return EXIT_FAILURE;
+	}
 
 	/* Determine terminal dimensions (CLI overrides config) */
 	cols = (gint)gst_config_get_cols(config);

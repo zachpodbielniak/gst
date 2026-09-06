@@ -62,7 +62,7 @@ The =--lrg= flag renders the terminal through [[file:lrg-backend.org][libregnum]
 | =--no-yaml-config= |          | Skip YAML config loading entirely (use built-in defaults)  |
 | =--c-config=       | =PATH=   | Use a specific C config file                               |
 | =--no-c-config=    |          | Skip C config compilation and loading                      |
-| =--recompile=      |          | Compile the C config file and exit (do not start terminal) |
+| =--recompile=      |          | Compile the C config file and exit; failure returns a nonzero status and never starts the terminal |
 
 *** Config Generation
 :PROPERTIES:
