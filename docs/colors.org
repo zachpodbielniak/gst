@@ -17,6 +17,14 @@ GST uses a 256-color palette, following the standard terminal color model:
 
 Colors 0-15 are the ones you configure in your palette. Colors 16-255 are computed automatically.
 
+** Background Color Erase
+
+GST advertises the terminfo =bce= capability. Erasing cells, inserting or deleting characters or lines, and scrolling therefore fill newly blank cells with the current SGR foreground and background colors, not the configured default palette colors. Text attributes such as reverse video and underline are cleared on these blanks. Resetting SGR colors with =39;49m= or =0m= restores default-color erasure.
+
+This matters particularly under tmux, which can optimize colored spaces into erase operations. Incorrect default-color erasure leaves gaps around text and breaks full-screen TUI backgrounds. No tmux overrides or changes to =TERM= are needed for this behavior; it is implemented in the shared terminal core for all rendering backends.
+
+The =/escape/blank-cell-colors= regression test covers erasure, character and line shifts, scrolling within margins, and alternate-screen clearing with ANSI, indexed, truecolor, and reset colors. Run it with =LD_LIBRARY_PATH=build/debug build/debug/test-escape -p /escape/blank-cell-colors= after =make DEBUG=1 build/debug/test-escape=.
+
 ** Default Palette
 :PROPERTIES:
 :CUSTOM_ID: default-palette

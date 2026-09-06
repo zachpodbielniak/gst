@@ -380,6 +380,116 @@ test_csi_erase_line_left(void)
 	g_object_unref(term);
 }
 
+/**
+ * test_blank_cell_colors:
+ *
+ * Erased and newly exposed cells inherit cursor colors, but not rendition
+ * attributes. Check the entire grid so shifted and untouched cells retain
+ * their original contents and styling, including outside scroll margins.
+ */
+static void
+test_blank_cell_colors(void)
+{
+	static const struct {
+		const gchar *name;
+		const gchar *sequence;
+		const gchar *expected;
+		gboolean alternate;
+	} operations[] = {
+		{ "ED0", "\033[0J", "ABCDEF" "GH    " "      " "      " "      ", FALSE },
+		{ "ED1", "\033[1J", "      " "   JKL" "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "ED2", "\033[2J", "      " "      " "      " "      " "      ", FALSE },
+		{ "EL0", "\033[0K", "ABCDEF" "GH    " "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "EL1", "\033[1K", "ABCDEF" "   JKL" "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "EL2", "\033[2K", "ABCDEF" "      " "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "ECH", "\033[2X", "ABCDEF" "GH  KL" "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "ICH", "\033[2@", "ABCDEF" "GH  IJ" "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "DCH", "\033[2P", "ABCDEF" "GHKL  " "MNOPQR" "STUVWX" "YZabcd", FALSE },
+		{ "SU", "\033[2S", "MNOPQR" "STUVWX" "YZabcd" "      " "      ", FALSE },
+		{ "SD", "\033[2T", "      " "      " "ABCDEF" "GHIJKL" "MNOPQR", FALSE },
+		{ "IL", "\033[2L", "ABCDEF" "      " "      " "GHIJKL" "MNOPQR", FALSE },
+		{ "DL", "\033[2M", "ABCDEF" "STUVWX" "YZabcd" "      " "      ", FALSE },
+		{ "LF-bottom", "\033[5;3H\n", "GHIJKL" "MNOPQR" "STUVWX" "YZabcd" "      ", FALSE },
+		{ "RI-top", "\033[1;3H\033M", "      " "ABCDEF" "GHIJKL" "MNOPQR" "STUVWX", FALSE },
+		{ "SU-region", "\033[2;4r\033[S", "ABCDEF" "MNOPQR" "STUVWX" "      " "YZabcd", FALSE },
+		{ "SD-region", "\033[2;4r\033[T", "ABCDEF" "      " "GHIJKL" "MNOPQR" "YZabcd", FALSE },
+		{ "IL-region", "\033[2;4r\033[3;3H\033[L", "ABCDEF" "GHIJKL" "      " "MNOPQR" "YZabcd", FALSE },
+		{ "DL-region", "\033[2;4r\033[3;3H\033[M", "ABCDEF" "GHIJKL" "STUVWX" "      " "YZabcd", FALSE },
+		{ "LF-margin", "\033[2;4r\033[4;3H\n", "ABCDEF" "MNOPQR" "STUVWX" "      " "YZabcd", FALSE },
+		{ "RI-margin", "\033[2;4r\033[2;3H\033M", "ABCDEF" "      " "GHIJKL" "MNOPQR" "YZabcd", FALSE },
+		{ "alternate-clear", "\033[?1049h", "      " "      " "      " "      " "      ", TRUE }
+	};
+	static const struct {
+		const gchar *name;
+		const gchar *sgr;
+		guint32 fg;
+		guint32 bg;
+	} colors[] = {
+		{ "black", "\033[30;40m", GST_COLOR_BLACK, GST_COLOR_BLACK },
+		{ "bright", "\033[93;104m", GST_COLOR_BRIGHT_YELLOW, GST_COLOR_BRIGHT_BLUE },
+		{ "indexed", "\033[38;5;100;48;5;200m", 100, 200 },
+		{ "truecolor", "\033[38;2;18;52;86;48;2;101;67;33m",
+			GST_TRUECOLOR(18, 52, 86), GST_TRUECOLOR(101, 67, 33) },
+		{ "default-colors", "\033[38;5;100;48;5;200m\033[39;49m",
+			GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG },
+		{ "reset", "\033[38;2;18;52;86;48;2;101;67;33m\033[0m",
+			GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG }
+	};
+	static const gchar *rows[] = { "ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZabcd" };
+	gsize op;
+	gsize color;
+	gint x;
+	gint y;
+
+	for (op = 0; op < G_N_ELEMENTS(operations); op++) {
+		for (color = 0; color < G_N_ELEMENTS(colors); color++) {
+			GstTerminal *term;
+			GstGlyph *glyph;
+			gboolean blank;
+
+			g_test_message("%s / %s", operations[op].name, colors[color].name);
+			term = gst_terminal_new(6, 5);
+			term_write(term, "\033[0;3;31;44m");
+			for (y = 0; y < 5; y++) {
+				gst_terminal_set_cursor_pos(term, 0, y);
+				term_write(term, rows[y]);
+			}
+			gst_terminal_set_cursor_pos(term, 2, 1);
+			term_write(term, colors[color].sgr);
+			/* Reverse must not swap stored colors or leak into blanks. */
+			term_write(term, "\033[1;3;4;7m");
+			term_write(term, operations[op].sequence);
+			for (y = 0; y < 5; y++) {
+				for (x = 0; x < 6; x++) {
+					glyph = gst_terminal_get_glyph(term, x, y);
+					g_assert_nonnull(glyph);
+					blank = operations[op].expected[y * 6 + x] == ' ';
+					g_assert_cmpuint(glyph->rune, ==, operations[op].expected[y * 6 + x]);
+					g_assert_cmpuint(glyph->fg, ==, blank ? colors[color].fg : GST_COLOR_RED);
+					g_assert_cmpuint(glyph->bg, ==, blank ? colors[color].bg : GST_COLOR_BLUE);
+					g_assert_cmpuint(glyph->attr, ==, blank ? 0 : GST_GLYPH_ATTR_ITALIC);
+				}
+			}
+			if (operations[op].alternate) {
+				g_assert_true(gst_terminal_is_altscreen(term));
+				term_write(term, "\033[?1049l");
+				g_assert_false(gst_terminal_is_altscreen(term));
+				for (y = 0; y < 5; y++) {
+					for (x = 0; x < 6; x++) {
+						glyph = gst_terminal_get_glyph(term, x, y);
+						g_assert_nonnull(glyph);
+						g_assert_cmpuint(glyph->rune, ==, rows[y][x]);
+						g_assert_cmpuint(glyph->fg, ==, GST_COLOR_RED);
+						g_assert_cmpuint(glyph->bg, ==, GST_COLOR_BLUE);
+						g_assert_cmpuint(glyph->attr, ==, GST_GLYPH_ATTR_ITALIC);
+					}
+				}
+			}
+			g_object_unref(term);
+		}
+	}
+}
+
 /* ===== CSI Insert/Delete Tests ===== */
 
 /*
@@ -1770,6 +1880,7 @@ main(
 	g_test_add_func("/escape/csi/erase-line-right", test_csi_erase_line_right);
 	g_test_add_func("/escape/csi/erase-line-left", test_csi_erase_line_left);
 	g_test_add_func("/escape/csi/erase-chars", test_csi_erase_chars);
+	g_test_add_func("/escape/blank-cell-colors", test_blank_cell_colors);
 
 	/* CSI Insert/Delete */
 	g_test_add_func("/escape/csi/insert-lines", test_csi_insert_lines);
