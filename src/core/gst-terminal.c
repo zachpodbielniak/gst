@@ -915,16 +915,12 @@ void
 gst_terminal_clear(GstTerminal *term)
 {
 	GstTerminalPrivate *priv;
-	gint i;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
 	gst_terminal_init_screen(term);
 
-	for (i = 0; i < priv->rows; i++) {
-		gst_line_clear(priv->screen[i]);
-	}
-	priv->dirty = TRUE;
+	gst_terminal_clear_region(term, 0, 0, priv->cols - 1, priv->rows - 1);
 }
 
 void
@@ -936,7 +932,8 @@ gst_terminal_clear_region(
     gint        y2
 ){
 	GstTerminalPrivate *priv;
-	gint tmp, y;
+	gint tmp, x, y;
+	GstGlyph blank;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
@@ -950,8 +947,15 @@ gst_terminal_clear_region(
 	y1 = CLAMP(y1, 0, priv->rows - 1);
 	y2 = CLAMP(y2, 0, priv->rows - 1);
 
+	/* BCE blanks retain SGR colors, but never text or wide-cell attributes. */
+	blank.rune = ' ';
+	blank.attr = 0;
+	blank.fg = priv->cursor.glyph.fg;
+	blank.bg = priv->cursor.glyph.bg;
 	for (y = y1; y <= y2; y++) {
-		gst_line_clear_range(priv->screen[y], x1, x2 + 1);
+		for (x = x1; x <= x2; x++) {
+			gst_line_set_glyph(priv->screen[y], x, &blank);
+		}
 	}
 	priv->dirty = TRUE;
 }
@@ -994,8 +998,9 @@ gst_terminal_scroll_up(
 	}
 
 	/* Clear the bottom lines */
+	gst_terminal_clear_region(term, 0, priv->scroll_bot - n + 1,
+	    priv->cols - 1, priv->scroll_bot);
 	for (i = priv->scroll_bot - n + 1; i <= priv->scroll_bot; i++) {
-		gst_line_clear(priv->screen[i]);
 		gst_line_set_wrapped(priv->screen[i], FALSE);
 	}
 
@@ -1028,8 +1033,8 @@ gst_terminal_scroll_down(
 		gst_line_set_dirty(priv->screen[i], TRUE);
 	}
 
+	gst_terminal_clear_region(term, 0, orig, priv->cols - 1, orig + n - 1);
 	for (i = orig; i < orig + n; i++) {
-		gst_line_clear(priv->screen[i]);
 		gst_line_set_wrapped(priv->screen[i], FALSE);
 	}
 
@@ -1070,8 +1075,12 @@ gst_terminal_insert_blanks(
 	gst_terminal_init_screen(term);
 
 	n = CLAMP(n, 0, priv->cols - priv->cursor.x);
+	if (n == 0) {
+		return;
+	}
 	gst_line_insert_blanks(priv->screen[priv->cursor.y], priv->cursor.x, n);
-	priv->dirty = TRUE;
+	gst_terminal_clear_region(term, priv->cursor.x, priv->cursor.y,
+	    priv->cursor.x + n - 1, priv->cursor.y);
 }
 
 void
@@ -1086,8 +1095,12 @@ gst_terminal_delete_chars(
 	gst_terminal_init_screen(term);
 
 	n = CLAMP(n, 0, priv->cols - priv->cursor.x);
+	if (n == 0) {
+		return;
+	}
 	gst_line_delete_chars(priv->screen[priv->cursor.y], priv->cursor.x, n);
-	priv->dirty = TRUE;
+	gst_terminal_clear_region(term, priv->cols - n, priv->cursor.y,
+	    priv->cols - 1, priv->cursor.y);
 }
 
 void
