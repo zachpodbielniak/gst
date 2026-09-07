@@ -13,6 +13,23 @@
 
 G_DEFINE_BOXED_TYPE(GstLine, gst_line, gst_line_copy, gst_line_free)
 
+/* Editing a single half must never leave a drawable orphan wide cell. */
+static void
+repair_wide_cells(GstLine *line)
+{
+	gint x;
+
+	for (x = 0; x < line->len; x++) {
+		GstGlyph *g = &line->glyphs[x];
+		if (((g->attr & GST_GLYPH_ATTR_WDUMMY) &&
+		     (x == 0 || !(line->glyphs[x - 1].attr & GST_GLYPH_ATTR_WIDE))) ||
+		    ((g->attr & GST_GLYPH_ATTR_WIDE) && line->len > 1 &&
+		     (x + 1 == line->len || !(line->glyphs[x + 1].attr & GST_GLYPH_ATTR_WDUMMY)))) {
+			gst_glyph_reset(g);
+		}
+	}
+}
+
 /*
  * gst_line_flags_get_type:
  *
@@ -60,6 +77,9 @@ init_glyphs(
         glyphs[i].attr = GST_GLYPH_ATTR_NONE;
         glyphs[i].fg = GST_COLOR_DEFAULT_FG;
         glyphs[i].bg = GST_COLOR_DEFAULT_BG;
+		glyphs[i].cluster = NULL;
+		glyphs[i].cluster_len = 0;
+		glyphs[i].cluster_capacity = 0;
     }
 }
 
@@ -82,6 +102,7 @@ gst_line_new(gint cols)
 
     line = g_slice_new(GstLine);
     line->len = cols;
+	line->used = 0;
     line->flags = GST_LINE_FLAG_DIRTY;
     line->glyphs = g_new(GstGlyph, cols);
 
@@ -102,15 +123,22 @@ GstLine *
 gst_line_copy(const GstLine *line)
 {
     GstLine *copy;
+	gint i;
 
     g_return_val_if_fail(line != NULL, NULL);
 
     copy = g_slice_new(GstLine);
     copy->len = line->len;
+	copy->used = line->used;
     copy->flags = line->flags;
     copy->glyphs = g_new(GstGlyph, line->len);
 
     memcpy(copy->glyphs, line->glyphs, sizeof(GstGlyph) * line->len);
+	for (i = 0; i < line->len; i++) {
+		copy->glyphs[i].cluster = g_strdup(line->glyphs[i].cluster);
+		copy->glyphs[i].cluster_capacity = copy->glyphs[i].cluster != NULL
+		    ? copy->glyphs[i].cluster_len + 1 : 0;
+	}
 
     return copy;
 }
@@ -124,7 +152,12 @@ gst_line_copy(const GstLine *line)
 void
 gst_line_free(GstLine *line)
 {
+	gint i;
+
     if (line != NULL) {
+		for (i = 0; i < line->len; i++) {
+			gst_glyph_clear(&line->glyphs[i]);
+		}
         g_free(line->glyphs);
         g_slice_free(GstLine, line);
     }
@@ -146,6 +179,7 @@ gst_line_resize(
 ){
     GstGlyph *new_glyphs;
     gint copy_len;
+	gint i;
 
     g_return_if_fail(line != NULL);
     g_return_if_fail(new_cols > 0);
@@ -166,9 +200,15 @@ gst_line_resize(
         init_glyphs(new_glyphs + line->len, new_cols - line->len);
     }
 
+	/* The copied prefix transfers ownership; only discarded cells are freed. */
+	for (i = copy_len; i < line->len; i++) {
+		gst_glyph_clear(&line->glyphs[i]);
+	}
     g_free(line->glyphs);
     line->glyphs = new_glyphs;
     line->len = new_cols;
+	line->used = MIN(line->used, new_cols);
+	repair_wide_cells(line);
     line->flags |= GST_LINE_FLAG_DIRTY;
 }
 
@@ -238,7 +278,8 @@ gst_line_set_glyph(
     g_return_if_fail(glyph != NULL);
     g_return_if_fail(col >= 0 && col < line->len);
 
-    line->glyphs[col] = *glyph;
+	gst_glyph_assign(&line->glyphs[col], glyph);
+	line->used = MAX(line->used, col + 1);
     line->flags |= GST_LINE_FLAG_DIRTY;
 }
 
@@ -254,7 +295,8 @@ gst_line_clear(GstLine *line)
 {
     g_return_if_fail(line != NULL);
 
-    init_glyphs(line->glyphs, line->len);
+	gst_line_clear_range(line, 0, line->len);
+	line->flags &= ~GST_LINE_FLAG_WRAPPED;
     line->flags |= GST_LINE_FLAG_DIRTY;
 }
 
@@ -272,6 +314,8 @@ gst_line_clear_range(
     gint    start,
     gint    end
 ){
+	gint i;
+
     g_return_if_fail(line != NULL);
 
     start = CLAMP(start, 0, line->len);
@@ -281,7 +325,17 @@ gst_line_clear_range(
         return;
     }
 
+	for (i = start; i < end; i++) {
+		gst_glyph_clear(&line->glyphs[i]);
+	}
     init_glyphs(&line->glyphs[start], end - start);
+	if (end >= line->used) {
+		line->used = MIN(line->used, start);
+	}
+	repair_wide_cells(line);
+	if (end == line->len) {
+		line->flags &= ~GST_LINE_FLAG_WRAPPED;
+	}
     line->flags |= GST_LINE_FLAG_DIRTY;
 }
 
@@ -336,6 +390,7 @@ gst_line_delete_chars(
     gint    n
 ){
     gint move_count;
+	gint i;
 
     g_return_if_fail(line != NULL);
     g_return_if_fail(col >= 0 && col < line->len);
@@ -347,6 +402,9 @@ gst_line_delete_chars(
     }
 
     /* Shift remaining characters left */
+	for (i = col; i < col + n; i++) {
+		gst_glyph_clear(&line->glyphs[i]);
+	}
     move_count = line->len - col - n;
     if (move_count > 0) {
         memmove(&line->glyphs[col],
@@ -356,6 +414,10 @@ gst_line_delete_chars(
 
     /* Initialize empty space at end */
     init_glyphs(&line->glyphs[line->len - n], n);
+	if (col < line->used) {
+		line->used = MAX(col, line->used - n);
+	}
+	repair_wide_cells(line);
     line->flags |= GST_LINE_FLAG_DIRTY;
 }
 
@@ -377,6 +439,7 @@ gst_line_insert_blanks(
 ){
     gint move_count;
     gint insert_count;
+	gint i;
 
     g_return_if_fail(line != NULL);
     g_return_if_fail(col >= 0 && col < line->len);
@@ -387,6 +450,9 @@ gst_line_insert_blanks(
     move_count = line->len - col - insert_count;
 
     /* Shift existing characters right */
+	for (i = line->len - insert_count; i < line->len; i++) {
+		gst_glyph_clear(&line->glyphs[i]);
+	}
     if (move_count > 0) {
         memmove(&line->glyphs[col + insert_count],
                 &line->glyphs[col],
@@ -395,6 +461,8 @@ gst_line_insert_blanks(
 
     /* Initialize blank space */
     init_glyphs(&line->glyphs[col], insert_count);
+	line->used = MIN(line->len, MAX(col, line->used) + insert_count);
+	repair_wide_cells(line);
     line->flags |= GST_LINE_FLAG_DIRTY;
 }
 
@@ -439,7 +507,7 @@ gst_line_set_dirty(
  * gst_line_is_wrapped:
  * @line: a GstLine
  *
- * Checks if the line is a continuation of the previous line.
+ * Checks if the line continues onto the following row.
  *
  * Returns: %TRUE if the line is wrapped
  */
@@ -464,11 +532,14 @@ gst_line_set_wrapped(
     gboolean    wrapped
 ){
     g_return_if_fail(line != NULL);
+	line->flags |= GST_LINE_FLAG_DIRTY;
 
     if (wrapped) {
         line->flags |= GST_LINE_FLAG_WRAPPED;
+		line->glyphs[line->len - 1].attr |= GST_GLYPH_ATTR_WRAP;
     } else {
         line->flags &= ~GST_LINE_FLAG_WRAPPED;
+		line->glyphs[line->len - 1].attr &= ~GST_GLYPH_ATTR_WRAP;
     }
 }
 
@@ -509,8 +580,7 @@ gst_line_to_string_range(
 ){
     GString *str;
     gint i;
-    gchar utf8_buf[6];
-    gint utf8_len;
+	gchar utf8_buf[7];
 
     g_return_val_if_fail(line != NULL, NULL);
 
@@ -520,6 +590,9 @@ gst_line_to_string_range(
     if (start >= end) {
         return g_strdup("");
     }
+	if (start > 0 && (line->glyphs[start].attr & GST_GLYPH_ATTR_WDUMMY)) {
+		start--;
+	}
 
     /* Allocate enough space for worst case (6 bytes per char) */
     str = g_string_sized_new((end - start) * 4);
@@ -532,11 +605,7 @@ gst_line_to_string_range(
             continue;
         }
 
-        /* Convert rune to UTF-8 */
-        utf8_len = g_unichar_to_utf8(g->rune, utf8_buf);
-        if (utf8_len > 0) {
-            g_string_append_len(str, utf8_buf, utf8_len);
-        }
+		g_string_append(str, gst_glyph_get_text(g, utf8_buf));
     }
 
     return g_string_free(str, FALSE);
@@ -559,9 +628,7 @@ gst_line_find_last_nonspace(const GstLine *line)
     g_return_val_if_fail(line != NULL, -1);
 
     for (i = line->len - 1; i >= 0; i--) {
-        if (line->glyphs[i].rune != ' ' &&
-            line->glyphs[i].rune != '\0' &&
-            !(line->glyphs[i].attr & GST_GLYPH_ATTR_WDUMMY)) {
+		if (!gst_glyph_is_empty(&line->glyphs[i])) {
             return i;
         }
     }

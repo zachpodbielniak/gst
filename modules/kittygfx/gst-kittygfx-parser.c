@@ -129,6 +129,9 @@ apply_key_value(
 	case 'C':
 		cmd->cursor_movement = (gint)parse_uint32(val, val_len);
 		break;
+	case 'U':
+		cmd->virtual_placement = (gint)parse_uint32(val, val_len);
+		break;
 	case 'q':
 		cmd->quiet = (gint)parse_uint32(val, val_len);
 		break;

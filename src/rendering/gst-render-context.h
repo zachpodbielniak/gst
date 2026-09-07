@@ -125,6 +125,37 @@ struct _GstRenderContext
 	gdouble       wallpaper_bg_alpha; /* cell bg alpha for default-bg cells */
 };
 
+/**
+ * gst_render_context_draw_cluster:
+ * @ctx: populated per-cell context
+ * @text: complete UTF-8 cluster
+ * @style: font style
+ * @x: pixel left edge
+ * @y: pixel top edge
+ * @width: cell span in pixels
+ *
+ * Draws clipped cluster text with the resolved context foreground. The caller
+ * draws the background. LRG image textures use the context's frame lifetime.
+ * Returns: whether cluster drawing succeeded
+ */
+gboolean gst_render_context_draw_cluster(GstRenderContext *ctx,
+	const gchar *text, GstFontStyle style, gint x, gint y, gint width);
+
+/**
+ * gst_render_context_draw_cell:
+ * @ctx: backend context
+ * @line: (transfer none): source line, borrowed for this call
+ * @col: source column
+ * @cols: visible column limit
+ * @x: destination pixel left edge
+ * @y: destination pixel top edge
+ *
+ * Draws a complete cell and dispatches eligible transformers with source-line
+ * metadata. Copies the context, not the owned glyph, and leaves @ctx unchanged.
+ */
+void gst_render_context_draw_cell(GstRenderContext *ctx, GstLine *line,
+	gint col, gint cols, gint x, gint y);
+
 /* ===== Inline dispatch helpers ===== */
 
 /**

@@ -25,6 +25,9 @@ G_BEGIN_DECLS
  * @attr: Attribute flags (bold, italic, etc.)
  * @fg: Foreground color index or RGB value
  * @bg: Background color index or RGB value
+ * @cluster: (nullable): owned full UTF-8 cluster, NULL for a single scalar
+ * @cluster_len: byte length of allocated cluster text
+ * @cluster_capacity: allocated bytes, including the terminator
  *
  * Represents a single character cell in the terminal.
  * This structure contains all information needed to render
@@ -35,6 +38,9 @@ struct _GstGlyph {
     GstGlyphAttr attr;  /* Attribute flags */
     guint32     fg;     /* Foreground color */
     guint32     bg;     /* Background color */
+	gchar       *cluster; /* Owned; use assign/clear for persistent copies */
+	gsize        cluster_len;
+	gsize        cluster_capacity;
 };
 
 /**
@@ -159,9 +165,9 @@ gboolean gst_glyph_has_attr(const GstGlyph *glyph, GstGlyphAttr attr);
 
 /**
  * gst_glyph_reset:
- * @glyph: a GstGlyph
+ * @glyph: an initialized GstGlyph
  *
- * Resets the glyph to an empty space with default attributes.
+ * Resets the glyph to an empty space with default attributes, freeing text.
  */
 void gst_glyph_reset(GstGlyph *glyph);
 
@@ -170,7 +176,45 @@ void gst_glyph_reset(GstGlyph *glyph);
  *
  * Static initializer for a default (empty) glyph.
  */
-#define GST_GLYPH_INIT { ' ', GST_GLYPH_ATTR_NONE, GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG }
+#define GST_GLYPH_INIT { ' ', GST_GLYPH_ATTR_NONE, GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG, NULL, 0, 0 }
+
+/**
+ * gst_glyph_assign:
+ * @dest: initialized destination glyph
+ * @src: source glyph
+ *
+ * Copies all fields and duplicates cluster storage; safe for self-assignment.
+ */
+void gst_glyph_assign(GstGlyph *dest, const GstGlyph *src);
+
+/**
+ * gst_glyph_clear:
+ * @glyph: initialized glyph
+ *
+ * Releases cluster storage without changing scalar, attributes or colors.
+ */
+void gst_glyph_clear(GstGlyph *glyph);
+
+/**
+ * gst_glyph_append:
+ * @glyph: initialized glyph
+ * @rune: scalar to append
+ *
+ * Appends a scalar to the cluster, preserving the first scalar in rune.
+ */
+void gst_glyph_append(GstGlyph *glyph, GstRune rune);
+
+/**
+ * gst_glyph_get_text:
+ * @glyph: glyph to read
+ * @buffer: (out caller-allocates): at least 7 bytes for a single scalar
+ *
+ * Returns the complete cluster, or encodes rune into buffer. Dummy cells
+ * return an empty string. The result is valid until the glyph is modified.
+ *
+ * Returns: (transfer none): full UTF-8 cell text
+ */
+const gchar *gst_glyph_get_text(const GstGlyph *glyph, gchar *buffer);
 
 G_END_DECLS
 

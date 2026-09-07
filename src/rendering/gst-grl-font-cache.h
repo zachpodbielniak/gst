@@ -93,6 +93,28 @@ gst_grl_font_cache_draw_glyph(
 );
 
 /**
+ * gst_grl_font_cache_draw_glyph_index:
+ * @self: a #GstGrlFontCache
+ * @scaled: (transfer none): the exact font used for shaping
+ * @glyph_index: font-internal glyph index
+ * @cell_x: horizontal pen position in pixels
+ * @cell_y: cell top in pixels, including shaping offset
+ * @fg: foreground color
+ *
+ * Draws a shaped glyph through the same atlas as scalar glyphs. Requires
+ * an active GL frame. The atlas retains the font until it is cleared.
+ */
+void
+gst_grl_font_cache_draw_glyph_index(
+	GstGrlFontCache     *self,
+	cairo_scaled_font_t *scaled,
+	gulong              glyph_index,
+	gint                cell_x,
+	gint                cell_y,
+	GstColor            fg
+);
+
+/**
  * gst_grl_font_cache_get_char_width:
  * @self: A #GstGrlFontCache
  *

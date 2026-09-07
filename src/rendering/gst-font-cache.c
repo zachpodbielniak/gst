@@ -15,6 +15,7 @@
 #include "gst-font-cache.h"
 #include <math.h>
 #include <string.h>
+#include <hb-ft.h>
 
 /**
  * SECTION:gst-font-cache
@@ -72,6 +73,93 @@ struct _GstFontCache
 };
 
 G_DEFINE_TYPE(GstFontCache, gst_font_cache, G_TYPE_OBJECT)
+
+gboolean
+gst_font_cache_draw_cluster(
+	GstFontCache *self,
+	XftDraw *draw,
+	const XftColor *color,
+	const gchar *text,
+	GstFontStyle style,
+	gint x,
+	gint baseline
+){
+	FcPattern *pattern;
+	FcPattern *match;
+	FcCharSet *charset;
+	FcResult result;
+	XftFont *font;
+	FT_Face face;
+	hb_font_t *hb_font;
+	hb_buffer_t *buffer;
+	hb_glyph_info_t *info;
+	hb_glyph_position_t *positions;
+	XftGlyphFontSpec *specs;
+	const gchar *p;
+	guint count, i;
+	gdouble xp, yp;
+
+	/* Match all visible scalars together, not just the first emoji/base. */
+	pattern = FcPatternDuplicate(gst_font_cache_get_font(self, style)->pattern);
+	charset = FcCharSetCreate();
+	for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+		gunichar rune = g_utf8_get_char(p);
+		if (rune == 0xfe0f) {
+			FcPatternDel(pattern, FC_COLOR);
+			FcPatternAddBool(pattern, FC_COLOR, FcTrue);
+		}
+		if (rune != 0x200d && rune != 0x200c &&
+		    !(rune >= 0xfe00 && rune <= 0xfe0f) &&
+		    !(rune >= 0xe0000 && rune <= 0xe01ef)) {
+			FcCharSetAddChar(charset, rune);
+		}
+	}
+	FcPatternDel(pattern, FC_CHARSET);
+	FcPatternAddCharSet(pattern, FC_CHARSET, charset);
+	FcCharSetDestroy(charset);
+	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+	FcDefaultSubstitute(pattern);
+	match = FcFontMatch(NULL, pattern, &result);
+	FcPatternDestroy(pattern);
+	if (match == NULL) {
+		return FALSE;
+	}
+	font = XftFontOpenPattern(self->display, match);
+	if (font == NULL) {
+		FcPatternDestroy(match);
+		return FALSE;
+	}
+	face = XftLockFace(font);
+	if (face == NULL) {
+		XftFontClose(self->display, font);
+		return FALSE;
+	}
+	hb_font = hb_ft_font_create_referenced(face);
+	buffer = hb_buffer_create();
+	hb_buffer_add_utf8(buffer, text, -1, 0, -1);
+	hb_buffer_guess_segment_properties(buffer);
+	hb_shape(hb_font, buffer, NULL, 0);
+	info = hb_buffer_get_glyph_infos(buffer, &count);
+	positions = hb_buffer_get_glyph_positions(buffer, NULL);
+	specs = g_new(XftGlyphFontSpec, count);
+	xp = x;
+	yp = baseline;
+	for (i = 0; i < count; i++) {
+		specs[i].font = font;
+		specs[i].glyph = info[i].codepoint;
+		specs[i].x = (gshort)(xp + positions[i].x_offset / 64.0);
+		specs[i].y = (gshort)(yp - positions[i].y_offset / 64.0);
+		xp += positions[i].x_advance / 64.0;
+		yp -= positions[i].y_advance / 64.0;
+	}
+	hb_buffer_destroy(buffer);
+	hb_font_destroy(hb_font);
+	XftUnlockFace(font);
+	XftDrawGlyphFontSpec(draw, color, specs, (gint)count);
+	g_free(specs);
+	XftFontClose(self->display, font);
+	return TRUE;
+}
 
 /*
  * unload_font_variant:

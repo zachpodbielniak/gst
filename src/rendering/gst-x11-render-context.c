@@ -10,6 +10,7 @@
  */
 
 #include "gst-x11-render-context.h"
+#include "../core/gst-line.h"
 #include <string.h>
 #include <X11/extensions/Xrender.h>
 
@@ -175,6 +176,16 @@ x11_draw_glyph(
 		: &ctx->colors[256]; /* default fg fallback */
 
 	/* Draw */
+	if (base->current_line != NULL) {
+		const GstGlyph *cell;
+
+		cell = gst_line_get_glyph_const(base->current_line, base->current_col);
+		if (cell != NULL && cell->rune == rune && cell->cluster != NULL) {
+			gst_font_cache_draw_cluster(ctx->font_cache, ctx->xft_draw,
+			    fg_color, cell->cluster, style, px, py + fv->ascent);
+			return;
+		}
+	}
 	XftDrawGlyphFontSpec(ctx->xft_draw, fg_color, &spec, 1);
 }
 

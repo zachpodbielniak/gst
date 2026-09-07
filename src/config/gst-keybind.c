@@ -46,6 +46,8 @@ static const struct {
 	{ "zoom_in",           GST_ACTION_ZOOM_IN },
 	{ "zoom_out",          GST_ACTION_ZOOM_OUT },
 	{ "zoom_reset",        GST_ACTION_ZOOM_RESET },
+	{ "copy-command-output", GST_ACTION_COPY_COMMAND_OUTPUT },
+	{ "export-command-output", GST_ACTION_EXPORT_COMMAND_OUTPUT },
 };
 
 #define N_ACTIONS (sizeof(action_table) / sizeof(action_table[0]))

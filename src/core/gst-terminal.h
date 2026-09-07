@@ -285,6 +285,34 @@ gint gst_terminal_line_len(GstTerminal *term, gint row);
 /* Key-to-escape-sequence translation */
 
 /**
+ * gst_terminal_key_event:
+ * @self: a #GstTerminal
+ * @keyval: unshifted X11-compatible keysym (Unicode keysyms for non-Latin text)
+ * @keycode: optional hardware keycode, or zero; currently reserved
+ * @state: normalized X11 modifier bits: Shift, Lock, Control, Mod1 (Alt),
+ *   Mod2 (NumLock), Mod3 (Hyper), Mod4 (Super), Mod5 (Meta)
+ * @event_type: 1 for press, 2 for repeat, 3 for release
+ * @text: (nullable): committed UTF-8 text, not a legacy control sequence
+ *
+ * Encodes negotiated Kitty keyboard events through the response signal.
+ * The driver must supply post-event modifier state and retain normal text,
+ * Ctrl/Alt, application-keypad and cursor-mode handling when this returns
+ * %FALSE. Releases are consumed even when reporting is disabled. No text is
+ * retained. Call after local shortcut interception, before legacy encoding.
+ *
+ * Returns: %TRUE if consumed (possibly without output), %FALSE for legacy fallback
+ */
+gboolean
+gst_terminal_key_event(
+	GstTerminal *self,
+	guint keyval,
+	guint keycode,
+	guint state,
+	guint event_type,
+	const gchar *text
+);
+
+/**
  * gst_terminal_key_to_escape:
  * @term: a #GstTerminal
  * @keysym: X11/xkb keysym value

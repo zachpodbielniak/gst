@@ -70,6 +70,10 @@ gst_selection_dispose(GObject *object)
 {
 	GstSelection *sel = GST_SELECTION(object);
 
+	if (sel->term != NULL) {
+		g_signal_handlers_disconnect_by_data(sel->term, sel);
+		g_object_remove_weak_pointer(G_OBJECT(sel->term), (gpointer *)&sel->term);
+	}
 	sel->term = NULL;
 
 	G_OBJECT_CLASS(gst_selection_parent_class)->dispose(object);
@@ -108,6 +112,16 @@ gst_selection_init(GstSelection *sel)
 	sel->alt = FALSE;
 }
 
+/* Reflow invalidates physical selection coordinates; never select other text. */
+static void
+sel_terminal_resized(GstTerminal *term, gint cols, gint rows, GstSelection *sel)
+{
+	(void)term;
+	(void)cols;
+	(void)rows;
+	gst_selection_clear(sel);
+}
+
 /**
  * gst_selection_new:
  * @term: a #GstTerminal
@@ -127,6 +141,8 @@ gst_selection_new(GstTerminal *term)
 
 	sel = (GstSelection *)g_object_new(GST_TYPE_SELECTION, NULL);
 	sel->term = term;
+	g_object_add_weak_pointer(G_OBJECT(term), (gpointer *)&sel->term);
+	g_signal_connect_object(term, "resize", G_CALLBACK(sel_terminal_resized), sel, 0);
 
 	return sel;
 }
@@ -489,6 +505,9 @@ gst_selection_selected(
 	gint         col,
 	gint         row
 ){
+	gint left, right;
+	const GstGlyph *glyph;
+
 	g_return_val_if_fail(GST_IS_SELECTION(sel), FALSE);
 
 	if (sel->mode == GST_SELECTION_EMPTY || sel->ob.x == -1) {
@@ -501,14 +520,23 @@ gst_selection_selected(
 		return FALSE;
 	}
 
+	left = right = col;
+	glyph = sel->term != NULL ? gst_terminal_get_glyph(sel->term, col, row) : NULL;
+	if (glyph != NULL) {
+		if (glyph->attr & GST_GLYPH_ATTR_WDUMMY) {
+			left--;
+		} else if (glyph->attr & GST_GLYPH_ATTR_WIDE) {
+			right++;
+		}
+	}
 	if (sel->type == GST_SELECTION_TYPE_RECTANGULAR) {
 		return BETWEEN(row, sel->nb.y, sel->ne.y) &&
-		       BETWEEN(col, sel->nb.x, sel->ne.x);
+		       right >= sel->nb.x && left <= sel->ne.x;
 	}
 
 	return BETWEEN(row, sel->nb.y, sel->ne.y) &&
-	       (row != sel->nb.y || col >= sel->nb.x) &&
-	       (row != sel->ne.y || col <= sel->ne.x);
+	       (row != sel->nb.y || right >= sel->nb.x) &&
+	       (row != sel->ne.y || left <= sel->ne.x);
 }
 
 /**
@@ -543,12 +571,11 @@ gst_selection_is_empty(GstSelection *sel)
 gchar *
 gst_selection_get_text(GstSelection *sel)
 {
-	gchar *str;
-	gchar *ptr;
+	GString *str;
+	gchar buffer[7];
 	gint y;
 	gint lastx;
 	gint linelen;
-	gint bufsize;
 	gint cols;
 	gint start_x;
 	const GstGlyph *gp;
@@ -568,20 +595,19 @@ gst_selection_get_text(GstSelection *sel)
 
 	cols = gst_terminal_get_cols(sel->term);
 
-	/* Allocate worst-case buffer */
-	bufsize = (cols + 1) * (sel->ne.y - sel->nb.y + 1) * UTF_SIZ;
-	ptr = str = (gchar *)g_malloc((gsize)bufsize + 1);
+	/* Clusters have no fixed byte limit; grow rather than assuming UTF_SIZ/cell. */
+	str = g_string_new(NULL);
 
 	for (y = sel->nb.y; y <= sel->ne.y; y++) {
 		line = gst_terminal_get_line(sel->term, y);
 		if (line == NULL) {
-			*ptr++ = '\n';
+			g_string_append_c(str, '\n');
 			continue;
 		}
 
 		linelen = gst_terminal_line_len(sel->term, y);
 		if (linelen == 0) {
-			*ptr++ = '\n';
+			g_string_append_c(str, '\n');
 			continue;
 		}
 
@@ -594,16 +620,24 @@ gst_selection_get_text(GstSelection *sel)
 			lastx = (sel->ne.y == y) ? sel->ne.x : cols - 1;
 		}
 
+		start_x = CLAMP(start_x, 0, cols - 1);
+		/* Selecting either half of a wide cell selects its whole cluster. */
+		if (start_x > 0 && (line->glyphs[start_x].attr & GST_GLYPH_ATTR_WDUMMY)) {
+			start_x--;
+		}
 		first = gst_line_get_glyph_const(line, start_x);
 		last = gst_line_get_glyph_const(line, MIN(lastx, linelen - 1));
 
 		if (first == NULL || last == NULL) {
-			*ptr++ = '\n';
+			g_string_append_c(str, '\n');
 			continue;
 		}
 
 		/* Trim trailing spaces */
-		while (last >= first && last->rune == ' ') {
+		while (last >= first && last->rune == ' ' && last->cluster == NULL) {
+			if (last == first) {
+				break;
+			}
 			--last;
 		}
 
@@ -612,7 +646,10 @@ gst_selection_get_text(GstSelection *sel)
 			if (gp->attr & GST_GLYPH_ATTR_WDUMMY) {
 				continue;
 			}
-			ptr += gst_utf8_encode(gp->rune, ptr);
+			if (gp == first && gp == last && gp->rune == ' ' && gp->cluster == NULL) {
+				continue;
+			}
+			g_string_append(str, gst_glyph_get_text(gp, buffer));
 		}
 
 		/*
@@ -623,20 +660,18 @@ gst_selection_get_text(GstSelection *sel)
 		if ((y < sel->ne.y || lastx >= linelen) &&
 		    (sel->type == GST_SELECTION_TYPE_RECTANGULAR ||
 		     last < first ||
-		     !(last->attr & GST_GLYPH_ATTR_WRAP))) {
-			*ptr++ = '\n';
+		     !(line->glyphs[cols - 1].attr & GST_GLYPH_ATTR_WRAP))) {
+			g_string_append_c(str, '\n');
 		}
 	}
 
-	*ptr = '\0';
-
 	/* Return NULL for empty result */
-	if (ptr == str) {
-		g_free(str);
+	if (str->len == 0) {
+		g_string_free(str, TRUE);
 		return NULL;
 	}
 
-	return str;
+	return g_string_free(str, FALSE);
 }
 
 /**

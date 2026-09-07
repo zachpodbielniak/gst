@@ -287,6 +287,7 @@ modules: lib $(OUTDIR)/modules
 		if [ -d "$$dir" ] && [ -f "$$dir/Makefile" ]; then \
 			echo "Building module: $$(basename $$dir)"; \
 			$(MAKE) -C "$$dir" \
+				CC="$(CC)" \
 				OUTDIR=$(abspath $(OUTDIR)/modules) \
 				LIBDIR=$(abspath $(OUTDIR)) \
 				CFLAGS="$(MODULE_CFLAGS)" \
@@ -328,10 +329,26 @@ endif
 $(OBJDIR)/tests/test-sixel.o: modules/sixel/gst-sixel-module.c modules/sixel/gst-sixel-module.h
 $(OBJDIR)/tests/test-externalpipe.o: modules/externalpipe/gst-externalpipe-module.c modules/externalpipe/gst-externalpipe-module.h
 $(OBJDIR)/tests/test-kitty-cache.o: $(wildcard modules/kittygfx/*.[ch])
+$(OBJDIR)/tests/test-history.o: $(wildcard modules/search/*.[ch] modules/scrollback/*.[ch] modules/shell_integration/*.[ch])
+$(OBJDIR)/tests/test-wayland-input.o: src/window/gst-wayland-window.c src/window/gst-wayland-window.h $(wildcard src/wayland-protocols/*.[ch])
+$(OBJDIR)/tests/test-graphics-consumers.o: $(wildcard modules/ligatures/*.[ch] modules/urlclick/*.[ch])
+$(OBJDIR)/tests/test-input-integration.o: src/main.c modules/search/gst-search-module.c modules/search/gst-search-module.h modules/scrollback/gst-history.h $(OUTDIR)/gst-default-config.h
+
+# Exercise optional exporters in the same configurations that ship them.
+$(OBJDIR)/tests/test-graphics-consumers.o: tests/test-graphics-consumers.c $(wildcard modules/mcp/*.[ch] modules/webview/*.[ch]) | $(OBJDIR)
+	@$(MKDIR_P) $(dir $@)
+	$(CC) $(TEST_CFLAGS) $(if $(filter 1,$(MCP_AVAILABLE)),-DGST_TEST_MCP $(MCP_CFLAGS)) $(if $(filter 1,$(WEBVIEW_AVAILABLE)),-DGST_TEST_WEBVIEW $(WEBVIEW_CFLAGS)) -MMD -MP -c $< -o $@
+
+$(OUTDIR)/test-graphics-consumers: $(OBJDIR)/tests/test-graphics-consumers.o $(OUTDIR)/$(LIB_SHARED_FULL)
+	$(CC) -o $@ $< $(TEST_LDFLAGS) $(MCP_LDFLAGS) $(WEBVIEW_LDFLAGS)
+
+.PHONY: test-backends
+test-backends: lib $(OUTDIR)/test-backend-visual
+	bash tests/run-backend-tests.sh --binary "$(OUTDIR)/test-backend-visual" $(BACKEND_TEST_ARGS)
 
 ifeq ($(WEBVIEW_AVAILABLE),1)
 $(OBJDIR)/tests/test-webview.o: tests/test-webview.c $(wildcard modules/webview/*.[ch]) | $(OBJDIR)
-	$(CC) $(TEST_CFLAGS) $(WEBVIEW_CFLAGS) -c $< -o $@
+	$(CC) $(TEST_CFLAGS) $(WEBVIEW_CFLAGS) -MMD -MP -c $< -o $@
 
 $(OUTDIR)/test-webview: $(OBJDIR)/tests/test-webview.o $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(CC) -o $@ $< $(TEST_LDFLAGS) $(WEBVIEW_LDFLAGS)
@@ -341,12 +358,13 @@ endif
 ifeq ($(MCP_AVAILABLE),1)
 # The module's own Makefile supplies MCP-specific compiler and linker flags.
 # Order this prerequisite after modules instead of using the generic .so rule.
+$(OUTDIR)/test-graphics-consumers: | mcp-glib
 $(OUTDIR)/modules/mcp.so: | modules
 	@test -f $@
 
 $(OBJDIR)/tests/test-mcp-module.o: tests/test-mcp-module.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
-	$(CC) $(TEST_CFLAGS) $(MCP_CFLAGS) -c $< -o $@
+	$(CC) $(TEST_CFLAGS) $(MCP_CFLAGS) -MMD -MP -c $< -o $@
 
 $(OUTDIR)/test-mcp-module: $(OBJDIR)/tests/test-mcp-module.o $(OUTDIR)/modules/mcp.so $(OUTDIR)/$(LIB_SHARED_FULL)
 	$(CC) -o $@ $(OBJDIR)/tests/test-mcp-module.o \
@@ -383,6 +401,7 @@ help:
 	@echo "  gir        - Generate GObject Introspection data"
 	@echo "  modules    - Build all modules"
 	@echo "  test/tests - Build and run the test suite"
+	@echo "  test-backends - Run isolated graphical tests (BACKEND_TEST_ARGS=--require for CI)"
 	@echo "  install    - Install to PREFIX ($(PREFIX))"
 	@echo "  uninstall  - Remove installed files"
 	@echo "  clean      - Remove build artifacts"
@@ -409,4 +428,5 @@ help:
 ifeq ($(filter clean clean-all,$(MAKECMDGOALS)),)
 -include $(LIB_OBJS:.o=.d)
 -include $(MAIN_OBJ:.o=.d)
+-include $(TEST_OBJS:.o=.d)
 endif

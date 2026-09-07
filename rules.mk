@@ -50,9 +50,10 @@ $(OBJDIR)/util/%.o: src/util/%.c | $(OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Test compilation
+.SECONDARY: $(TEST_OBJS)
 $(OBJDIR)/tests/%.o: tests/%.c | $(OBJDIR)
 	@$(MKDIR_P) $(dir $@)
-	$(CC) $(TEST_CFLAGS) -c $< -o $@
+	$(CC) $(TEST_CFLAGS) -MMD -MP -c $< -o $@
 
 # Module compilation (generic rule)
 $(OUTDIR)/modules/%.so: modules/%/*.c | $(OUTDIR)/modules

@@ -50,6 +50,7 @@ gst_config_dispose(GObject *object)
 	self = GST_CONFIG(object);
 
 	g_clear_pointer(&self->shell, g_free);
+	g_clear_pointer(&self->editor, g_free);
 	g_clear_pointer(&self->term_name, g_free);
 	g_clear_pointer(&self->title, g_free);
 	g_clear_pointer(&self->font_primary, g_free);
@@ -120,6 +121,7 @@ gst_config_init(GstConfig *self)
 	/* Terminal defaults */
 	env_shell = g_getenv("SHELL");
 	self->shell = g_strdup((env_shell != NULL) ? env_shell : "/bin/bash");
+	self->editor = g_strdup("emacsclient");
 	self->term_name = g_strdup("st-256color");
 	self->tabspaces = 8;
 
@@ -340,6 +342,11 @@ gst_config_init(GstConfig *self)
 
 		gst_keybind_parse("Ctrl+Shift+0", "zoom_reset", &kb);
 		g_array_append_val(self->keybinds, kb);
+
+		gst_keybind_parse("Ctrl+Shift+y", "copy-command-output", &kb);
+		g_array_append_val(self->keybinds, kb);
+		gst_keybind_parse("Ctrl+Shift+o", "export-command-output", &kb);
+		g_array_append_val(self->keybinds, kb);
 	}
 
 	/* Default mouse bindings */
@@ -389,6 +396,12 @@ load_terminal_section(
 			g_free(self->shell);
 			self->shell = g_strdup(str_val);
 		}
+	}
+
+	if (yaml_mapping_has_member(section, "editor")) {
+		str_val = yaml_mapping_get_string_member(section, "editor");
+		if (str_val != NULL)
+			gst_config_set_editor(self, str_val);
 	}
 
 	if (yaml_mapping_has_member(section, "term")) {
@@ -1670,6 +1683,8 @@ build_terminal_section(
 
 	yaml_builder_set_member_name(builder, "shell");
 	yaml_builder_add_string_value(builder, self->shell);
+	yaml_builder_set_member_name(builder, "editor");
+	yaml_builder_add_string_value(builder, self->editor);
 
 	yaml_builder_set_member_name(builder, "term");
 	yaml_builder_add_string_value(builder, self->term_name);
@@ -2099,6 +2114,27 @@ gst_config_get_shell(GstConfig *self)
 	g_return_val_if_fail(GST_IS_CONFIG(self), "/bin/bash");
 
 	return self->shell;
+}
+
+const gchar *
+gst_config_get_editor(GstConfig *self)
+{
+	/* Borrowed configuration storage, matching the other string getters. */
+	g_return_val_if_fail(GST_IS_CONFIG(self), NULL);
+	return self->editor;
+}
+
+void
+gst_config_set_editor(GstConfig *self, const gchar *editor)
+{
+	gchar *copy;
+
+	/* Duplicate first so passing the current borrowed value remains safe. */
+	g_return_if_fail(GST_IS_CONFIG(self));
+	g_return_if_fail(editor != NULL);
+	copy = g_strdup(editor);
+	g_free(self->editor);
+	self->editor = copy;
 }
 
 /**

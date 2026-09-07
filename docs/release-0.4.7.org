@@ -1,0 +1,76 @@
+#+title: GST 0.4.7 Release Notes
+#+description: Implemented features, upgrade requirements, verification and remaining validation
+#+authors: GST contributors
+#+categories: gst release
+#+created: 2026-09-07T00:00:00+00:00
+#+updated: 2026-09-07T00:00:00+00:00
+#+version: 0.4.7
+
+* Upgrade Requirement
+Perform a clean rebuild of GST and *all external modules*. The public =GstGlyph= layout changed to own complete UTF-8 clusters, with length/capacity metadata; old module binaries are not compatible. Rebuild and replace modules in user, system and =GST_MODULE_PATH= locations before loading them with 0.4.7. New code should initialize glyphs with =GST_GLYPH_INIT= and use the documented deep-copy/cleanup APIs rather than shallow owning copies. See [[file:unicode-reflow.org][glyph ownership]].
+
+* Features
+- Complete Unicode clusters survive split PTY input, selection, scrollback and text export; X11, Wayland and LRG shape clusters with HarfBuzz. Combining marks, emoji sequences and wide-cell editing/reflow have regression coverage. Fontconfig matched-pattern leaks in production font caches are fixed.
+- Primary live-grid resize repacks soft-wrapped paragraphs, preserves hard breaks, attributes, explicit spaces and cursor anchors, and sends displaced rows to active scrollback. Alternate-screen resize remains fixed-grid.
+- Search spans retained history and live rows with cluster-aware highlighting. OSC 133 shell integration navigates prompts and copies or opens completed command output in an editor.
+- Negotiated Kitty keyboard flags 1, 2, 8 and 16 support disambiguation, repeat/release events, report-all and associated text, with legacy input fallback. Flag 4 is not supported. Local shortcuts, modal search, keyboard lock and shutdown gate child input.
+- Wayland supports Compose/dead keys, transactional text-input-v3 preedit/commit, candidate positioning and integer/fractional backing-buffer scaling in logical coordinates. Main input and redraw handling are connected.
+- Kitty Unicode image placeholders, ordinary overwrite/scroll notifications, LRG RGBA image drawing, glyph-ID drawing and LRG ligature dispatch are integrated. Animation is not supported; animation actions return explicit =ENOTSUP= unless errors are suppressed with =q=2=.
+
+* Controls
+Enable =scrollback=, =search= and =shell_integration= as needed; command zones require OSC 133 A/B/C/D markers from the shell. =Ctrl+Shift+f= opens search, Enter/Shift+Enter navigate matches, and Escape leaves search. =Ctrl+Shift+Up/Down= selects the previous/next prompt. =Ctrl+Shift+y= copies selected command output and =Ctrl+Shift+o= exports it; without a selected command, actions use the latest completed command.
+
+=terminal.editor= defaults to =emacsclient=. Configure an executable plus arguments, not the Bash function =emacsclient_tty=; no shell expansion occurs. The temporary filename is appended as one argument and removed after editor completion. Do not use =--no-wait=; finish an Emacs client edit with =C-x #=. A terminal-only editor needs a waiting terminal-launch wrapper. Custom =keybinds= maps replace all default bindings, so retain any defaults you still want. See [[file:history-workflows.org][history workflows]] and [[file:application-input.org][input integration]].
+
+* Build and Runtime Verification
+Fedora base build packages: =gcc make pkgconf-pkg-config glib2-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel libyaml-devel json-glib-devel pango-devel harfbuzz-devel=. Wayland adds =wayland-devel libxkbcommon-devel cairo-devel libdecor-devel=; protocol regeneration and Compose tests use =wayland-protocols-devel xkeyboard-config=. LRG adds =mesa-libGL-devel cairo-devel= and the initialized libregnum/graylib/raylib submodules. MCP needs the mcp-glib submodule and =libsoup3-devel libdex-devel libpng-devel=; WEBVIEW needs =libsoup3-devel=. Initialize the yaml-glib and crispy submodules as well. Include dependencies in the OS image; no host mutation is required by these instructions.
+
+Run configurations sequentially, cleaning before changing flags. These are reproducible commands, not a claim that every command below has just been rerun:
+
+#+begin_src bash
+make clean
+make LRG_BACKEND=1 MCP=1 WEBVIEW=1 CC='gcc -Werror' all tests
+
+make DEBUG=1 clean
+make DEBUG=1 LRG_BACKEND=1 MCP=1 WEBVIEW=1 CC='gcc -Werror' all tests
+./build/debug/test-input-integration
+./build/debug/test-history
+./build/debug/test-keyboard-protocol
+./build/debug/test-wayland-input
+
+bash tests/run-backend-tests.sh \
+    --binary build/debug/test-backend-visual \
+    --lrg-binary build/debug/test-lrg-backend --require --keep-logs
+
+make DEBUG=1 clean
+make DEBUG=1 ASAN=1 BUILD_WAYLAND=1 LRG_BACKEND=0 MCP=0 WEBVIEW=0 \
+    CC='gcc -Werror' all tests
+#+end_src
+
+For interactive checks after the non-sanitized combined build, run one backend at a time in a suitable graphical session:
+
+#+begin_src bash
+./build/debug/gst --x11 --config data/all-modules.yaml
+./build/debug/gst --wayland --config data/all-modules.yaml
+./build/debug/gst --lrg --config data/all-modules.yaml
+#+end_src
+
+The isolated runner accepts =--backend all|x11|wayland|lrg=, =--binary=, =--lrg-binary=, =--require= and =--keep-logs=, plus =--help= and =--license=. It starts private Xvfb/Weston servers or falls back to headless gowl with Xwayland for X11/LRG; it does not connect to the desktop. =--require= makes missing backend prerequisites fail, but does not turn unsupported clipboard subtests into passes. See [[file:backend-testing.org][backend testing]] for runtime packages and isolation details.
+
+* Recorded Evidence
+Verification performed on 2026-09-07. Temporary session logs are not distributed with the release; the configurations and outcomes below are the durable record. Use the commands above to produce fresh logs on another system.
+
+- Clean release and debug all/tests with =LRG_BACKEND=1 MCP=1 WEBVIEW=1 CC='gcc -Werror'= passed: 309 executed tests per configuration, with three opt-in graphical tests skipped in the headless suite and exercised separately below.
+- ASan+UBSan default Wayland tests with =CC='gcc -Werror'= passed. LRG, MCP and WEBVIEW were not enabled in this sanitizer configuration.
+- Main input regression tests executed and passed; the suites exercise real main callbacks with captured PTY writes, not just syntax checks.
+- Final release and debug graphical reruns passed four checks each: X11 visual, X11 clipboard, Wayland visual and LRG image upload. Wayland clipboard skipped because the headless seat supplies no input serial. Runner details are in [[file:backend-testing.org][backend testing]].
+- Separate X11-only and LRG-without-Wayland all/tests builds passed with =CC='gcc -Werror'=.
+
+* Remaining Limits and Validation
+Existing history retains its saved widths: core reflows only the primary live grid and does not pull history back when the window grows. Search is physical-row-local even at soft wraps. Shell command zones invalidate on resize; reset/destructive editing has no general semantic-anchor remapping contract. History is not persistent across process restart.
+
+Graphics do not provide animation, complete ordinary-placement resize/reflow or scrollback anchoring, nonzero underline-color placeholder placement selection, automatic =C=0= cursor advancement, or a complete behind-text pass. LRG's per-frame image uploads/cluster shaping can be expensive. See [[file:graphics-parity.org][graphics limits]] rather than interpreting the release as full Kitty parity.
+
+Wayland does not send surrounding text or implement surrounding deletion/reconversion. Manual CJK IME, candidate positioning, focus/lock/shutdown transactions and mixed 100/125/150/200 percent monitor checks remain pending. Check grid stability, selection coordinates, decorations and retained-buffer lifecycle on real compositors. Search has no IME context; other local input modules do not all expose IME ownership.
+
+Manual validation also remains for editor launch/file cleanup, command-output clipboard delivery across backends, live search/marker overlays under scrolling output, emoji/font appearance at margins and through resize, unusual XKB/AltGr layouts, long XIM input and LRG simultaneous/non-US key input. Native buffer assertions are not compositor screenshots or proof of typographic correctness; the LRG test is GPU upload/readback, not full terminal framebuffer parity.

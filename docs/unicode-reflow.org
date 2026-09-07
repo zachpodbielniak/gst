@@ -1,0 +1,75 @@
+#+title: Unicode Clusters and Primary Reflow
+#+description: Storage ownership, Unicode input, rendering, selection and resize contracts
+#+authors: Zach Podbielniak
+#+categories: gst terminal unicode
+#+created: 2026-09-07T00:00:00+00:00
+#+updated: 2026-09-07T00:00:00+00:00
+#+version: 1
+
+* Storage and Ownership
+
+=GstGlyph.rune= always contains the first Unicode scalar. A single-scalar cell has a NULL =cluster=; a multi-scalar cell owns a dynamically allocated, complete UTF-8 =cluster=, including the first scalar. There is no fixed codepoint or byte limit. Wide dummy cells carry no cluster text. No global interning is used, so clearing a screen or dropping history releases its text.
+
+Initialize stack glyphs with =GST_GLYPH_INIT=, heap arrays with zero initialization or line constructors, and independent heap glyphs with =gst_glyph_new()=. Positional glyph initializers must include NULL cluster storage and zero byte-length/capacity fields; prefer =GST_GLYPH_INIT= instead. All modules must be rebuilt because the public glyph layout changes. The cached length and geometrically grown capacity make text appending amortized linear; deep copies reset capacity to their actual allocation rather than inheriting the source's spare capacity.
+
+=gst_glyph_get_text(const GstGlyph *glyph, gchar *buffer)= returns borrowed complete UTF-8 text. The caller supplies at least seven bytes of scratch space for single-scalar encoding. A dummy returns an empty string. The returned pointer must not be freed and is invalidated by mutation or destruction of the glyph (or by reuse of the scratch buffer).
+
+=gst_glyph_assign(GstGlyph *dest, const GstGlyph *src)= duplicates owned text into an initialized destination and supports self-assignment. =gst_glyph_clear()= frees only the text field. =gst_glyph_reset()= frees text and resets an initialized glyph to default space. =gst_glyph_append()= extends a cluster without changing =rune=. Boxed glyph, cursor and line copies all duplicate owned text. A temporary by-value copy used only to adjust rendering attributes may borrow the text, but must not be cleared, retained past the source lifetime, or passed to a mutating glyph API.
+
+Line insert/delete operations transfer ownership with their overlapping moves: discarded cells are freed before the move, duplicate tail/head slots are initialized without freeing transferred pointers. Line resize transfers the retained prefix and frees only the discarded suffix. Wide-cell repair prevents orphan dummy or head cells after clipping and editing.
+
+=GstLine.used= records the written column extent, including explicitly printed spaces, separately from allocation padding. Code mutating raw glyph arrays must maintain this extent if it wants explicit trailing spaces preserved. =gst_line_set_glyph()= maintains it automatically. =GST_LINE_FLAG_WRAPPED= and the final cell's =GST_GLYPH_ATTR_WRAP= both mean that this row continues onto the following row, not that it continues from the preceding row.
+
+* Unicode Input
+
+Pango's Unicode cursor/grapheme boundaries join combining marks, variation selectors, emoji modifiers, regional-indicator pairs, ZWJ emoji, Hangul and other supported Unicode graphemes. The boundary analysis uses the preceding complete cluster plus the newly decoded scalar. UTF-8 sequences and clusters survive arbitrary PTY write boundaries; an active primary cluster anchor is remapped across resize as well. Terminal control sequences, explicit cursor motion and destructive edits end the active join context. An unattached zero-width scalar occupies its own cell instead of being silently lost.
+
+Nonspacing/enclosing marks following non-control scalars take the Unicode GB9 extension fast path instead of repeatedly scanning the accumulated text. REP maintains independently owned, incrementally appended text, so long combining runs do not repeatedly duplicate their entire prefix. Complex graphemes still fall back to full-cluster Pango analysis: adversarial extended ZWJ sequences can remain quadratic, and total cluster storage remains intentionally unbounded. The Kitty U+10EEEE placeholder plus row/column combining marks is retained as one cluster; recognizing and painting that placeholder remains a renderer responsibility.
+
+The initial scalar determines the initial terminal width using the existing locale-aware =gst_wcwidth()=. Emoji presentation selectors, keycaps, wide joined scalars and flag pairs may promote a one-cell cluster to two cells. Combining marks on a pending-wrap cell stay attached to that cell, not the cell to its left; marks on a wide cell never replace its dummy. A late width promotion at the right margin moves the complete cluster to the next row and records the vacated cell as non-text wrap padding. REP repeats the complete previous cluster using the current attributes.
+
+Grapheme boundaries follow the installed Pango Unicode data. Width is deliberately a terminal one/two-cell policy, not a general proportional text-layout measurement; variation-selector text presentation does not retroactively shrink a wide cell. A one-column primary grid retains wide heads without a dummy so that widening can restore their two-column representation.
+
+* Rendering and Selection
+
+X11 isolates multi-scalar cells from scalar runs and shapes each complete cluster with HarfBuzz. Fontconfig receives the visible scalars of the complete cluster rather than only the first scalar, and VS16 requests a color-capable font. Glyph offsets and advances come from HarfBuzz; terminal cell advance still comes from the grid. Existing foreground/background resolution, reverse selection, clipping and decorations remain in the renderer. Scalar-only module transformers are bypassed for multi-scalar cells.
+
+=gst_font_cache_draw_cluster(cache, draw, color, text, style, x, baseline)= draws a complete cluster to Xft. =gst_cairo_font_cache_draw_cluster(cache, cr, text, style, x, baseline)= provides the equivalent Cairo operation using the caller's source color. Both return a boolean and require the caller to establish clipping and background. The Cairo operation saves/restores the Cairo state. X11 and Wayland render-context scalar hooks recognize a cluster when =current_line= and =current_col= identify that cell; callers without that metadata must use a full-cluster backend API. These functions perform font matching and shaping per draw rather than retaining an unbounded cluster cache.
+
+Wayland and LRG render complete clusters, and scrollback uses =gst_render_context_draw_cell()= to retain cluster text and cell metadata. Selection, external-pipe, URL, MCP and webview consumers use complete cluster text rather than exporting only =rune=. New module exporters must likewise use =gst_glyph_get_text()=. Exact emoji presentation depends on installed fonts and backend color-font support; manual graphical verification is still required. Shaping does not add paragraph bidi reordering or cross-cell font fallback runs. Fontconfig matched-pattern lifetime leaks in the production font caches are fixed.
+
+Selection grows a =GString= rather than allocating a fixed number of bytes per cell. Text extraction preserves complete clusters and omits dummy cells and wrap padding. Selecting either half of a wide glyph copies and highlights its complete cluster. Soft wraps do not add newlines to regular selections; hard breaks and rectangular selection rows do. A resize clears coordinate-based selections instead of letting stale coordinates select unrelated reflowed text; clipboard copies already taken remain independent.
+
+* Resize Semantics
+
+Primary resize reconstructs logical paragraphs from soft-wrap markers, preserves hard breaks, colors, attributes, clusters and explicit trailing spaces, and packs complete wide cells without splitting their dummy from the head. Blank allocation padding below the content and cursor is discarded before selecting the visible viewport. Live primary, saved primary and streaming cluster anchors are mapped through the repacking; pending wrap is represented as an insertion point after the final cell. Scroll margins reset to the full new screen.
+
+A cursor on the non-text padding before a wide wrap maps to the insertion point before that wide glyph, not to the origin. Saved primary insertion points that reflow exactly to the new right edge retain pending wrap on restore, avoiding an overwrite of the preceding cell. Ordinary saves without intervening reflow retain the existing st-compatible restore behavior of clearing pending wrap. DEC 1047 does not implicitly save or restore the cursor: an explicitly saved primary cursor is remapped while alternate is active and can be restored with DECRC after exit. DEC 1049 saves on entry and restores after returning to primary. Reset invalidates and releases both saved snapshots.
+
+Rows displaced above the new viewport are emitted, in order, through the existing synchronous =line-scrolled-out(GstLine *, gint cols)= signal before their temporary storage is freed. The supplied column count is the new physical width, and consumers must copy the line during the callback. This includes primary displacement during resize while the alternate screen is active: history consumers must not reject these events merely because the current mode is alternate. The scrollback module owns persistence and capacity policy; with no connected history consumer, core cannot retain emitted history indefinitely.
+
+During those history callbacks, terminal getters still expose the old grid and dimensions; only the supplied line and width describe the new packing. The subsequent =resize= notification publishes the new screen, dimensions and remapped cursors together. Callbacks must not recursively mutate or resize the terminal during this operation; no reentrant resize transaction is provided.
+
+The newest packed rows remain visible. If an application has moved its cursor above content that must stay in the viewport, a cursor displaced into history is clamped to the first visible row. Growing the terminal does not pull rows back out of module-owned history, and existing history is not globally reflowed by core: the current signal API has no history-pop/reflow transaction. Logical wraps spanning the history/live boundary remain represented by their wrap marker.
+
+Alternate resize deliberately remains a fixed-grid top-left copy: widening adds blank cells, narrowing clips right-hand content, shrinking clips bottom rows, and wrap metadata is cleared. Wide cells clipped at the edge are erased rather than left half-valid. Live and saved alternate cursors are clamped and pending wrap is cleared. Ordinary alternate scrolling, and scrolling inside a restricted primary margin, do not emit scrollback history. Switching screens otherwise retains the existing DEC mode behavior.
+
+* Integration and Verification
+
+Core now requires pkg-config packages =pango= and =harfbuzz= in common compilation and library/test link flags. Fedora development packages are =pango-devel= and =harfbuzz-devel=, in addition to the existing =gcc=, =make=, =pkgconf-pkg-config=, =glib2-devel=, =libX11-devel=, =libXft-devel=, =fontconfig-devel=, =freetype-devel= and =libyaml-devel=. Cairo/Wayland builds additionally use =cairo-devel=, =wayland-devel=, =wayland-protocols-devel= and =libxkbcommon-devel=. Emoji visual tests need a suitable font such as =google-noto-color-emoji-fonts=.
+
+Use a clean build when changing flags or upgrading the public glyph layout. Run build commands sequentially:
+
+#+begin_src sh
+make clean
+make DEBUG=1 CC='gcc -Werror' all tests
+LD_LIBRARY_PATH=build/debug ./build/debug/test-glyph
+LD_LIBRARY_PATH=build/debug ./build/debug/test-terminal -p /terminal/unicode
+LD_LIBRARY_PATH=build/debug ./build/debug/test-terminal -p /terminal/reflow
+LD_LIBRARY_PATH=build/debug ./build/debug/test-selection
+LD_LIBRARY_PATH=build/debug ./build/debug/test-terminal-edge
+#+end_src
+
+The executed tests cover deep ownership through glyph/line/cursor copies and destructive moves, byte-split marks and emoji sequences, flag pairing, wide/pending-wrap attachment, late width promotion, primary logical reflow, hard breaks, cursor save/restore, narrow one-column reflow, resize history lifetime, alternate history isolation and grid semantics, explicit spaces, REP, long selection clusters and wide-half selection. Clean release/debug suites and default Wayland AddressSanitizer/UndefinedBehaviorSanitizer tests passed; see [[file:release-0.4.7.org][release verification]] for exact configurations and logs. Manual checks with combining Latin, flags, keycaps, modifier emoji and ZWJ emoji at both margins and through resize remain necessary.
+
+Additional executed regressions exercise 65,536-mark glyph growth with a structural logarithmic-allocation assertion, appending to deep glyph/line/cursor copies, 32,768-mark terminal input and REP through destructive edits, saved primary cursors across both 1047 and 1049 resize/roundtrip paths, wide-padding cursor mapping, history-before-resize publication and complete extracted data, reset of cursor-owned clusters, and placeholder-mark selection. Runtime assertions do not establish typographic correctness on every font/backend.

@@ -21,6 +21,11 @@ A GObject-based terminal emulator with modular extensibility. GST is a reimpleme
 - *libregnum (LRG) backend*: Optional 2D rendering through the libregnum/raylib game engine (=--lrg=, build with =LRG_BACKEND=1=) — see [[file:docs/lrg-backend.org][LRG Backend]]
 - *GObject Introspection*: Full GIR support for language bindings
 
+** Release 0.4.7
+Complete Unicode clusters, primary live-grid reflow, history search and command-output actions, negotiated Kitty keyboard input, Wayland Compose/IME/scaling, and graphics/LRG integration are implemented. See [[file:docs/release-0.4.7.org][0.4.7 Release Notes]] for controls, verification evidence and explicit remaining limits.
+
+*A clean rebuild of GST and all external modules is required*: the public =GstGlyph= layout changed. Existing saved history is not globally reflowed or pulled back on growth; this release does not claim full Kitty graphics/keyboard parity or completed manual IME/monitor validation.
+
 ** Building
 :PROPERTIES:
 :CUSTOM_ID: building
@@ -30,23 +35,15 @@ A GObject-based terminal emulator with modular extensibility. GST is a reimpleme
 :CUSTOM_ID: dependencies
 :END:
 - glib-2.0, gobject-2.0, gio-2.0, gmodule-2.0
-- x11, xft, fontconfig
+- x11, xft, xrender, fontconfig
 - libyaml (yaml-0.1), json-glib-1.0
+- pango, harfbuzz
 - gcc (gnu89)
 - gobject-introspection (optional, for GIR generation)
 
-On Fedora:
+Fedora packages for the base build: =gcc make pkgconf-pkg-config glib2-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel libyaml-devel json-glib-devel pango-devel harfbuzz-devel=. GIR generation additionally needs =gobject-introspection-devel=. Initialize the =yaml-glib= and =crispy= submodules.
 
-#+begin_src sh
-sudo dnf install gcc make \
-    glib2-devel \
-    gobject-introspection-devel \
-    libX11-devel \
-    libXft-devel \
-    fontconfig-devel \
-    libyaml-devel \
-    json-glib-devel
-#+end_src
+Wayland adds =wayland-devel libxkbcommon-devel cairo-devel libdecor-devel=; protocol regeneration and Compose tests use =wayland-protocols-devel xkeyboard-config=. LRG adds =mesa-libGL-devel cairo-devel= and initialized libregnum/graylib/raylib submodules. MCP adds =libsoup3-devel libdex-devel libpng-devel= and the mcp-glib submodule; WEBVIEW adds =libsoup3-devel=. Include packages in the OS image on immutable Fedora systems. See [[file:docs/backend-testing.org][backend testing]] for fonts and isolated graphical-test dependencies.
 
 *** Build Commands
 :PROPERTIES:
@@ -169,6 +166,8 @@ gst/
 :CUSTOM_ID: documentation
 :END:
 - [[file:docs/quickstart.org][Quick Start Guide]] - Get up and running
+- [[file:docs/release-0.4.7.org][0.4.7 Release Notes]] - Upgrade requirements, features, controls and validation limits
+- [[file:docs/backend-testing.org][Backend Testing]] - Isolated graphical regression runner and explicit skips
 - [[file:docs/cli.org][CLI Reference]] - All command-line options
 - [[file:docs/configuration.org][Configuration Reference]] - Every config option explained
 - [[file:docs/keybindings.org][Keybindings]] - Keyboard and mouse bindings

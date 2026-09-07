@@ -70,6 +70,7 @@ struct _GstLrgWindow
 	gboolean     pointer_motion;
 	gboolean     focused;
 	gboolean     visible;
+	guint        keysyms[512]; /* original keysyms for release delivery */
 
 	/* Pointer state for motion dedup + button-mask synthesis */
 	gint         last_mouse_x;
@@ -103,6 +104,14 @@ lrg_keysym_for(GrlKey key)
 	case GRL_KEY_END:        return LRG_XK_End;
 	case GRL_KEY_INSERT:     return LRG_XK_Insert;
 	case GRL_KEY_DELETE:     return LRG_XK_Delete;
+	case GRL_KEY_LEFT_SHIFT: return 0xffe1;
+	case GRL_KEY_RIGHT_SHIFT: return 0xffe2;
+	case GRL_KEY_LEFT_CONTROL: return 0xffe3;
+	case GRL_KEY_RIGHT_CONTROL: return 0xffe4;
+	case GRL_KEY_LEFT_ALT: return 0xffe9;
+	case GRL_KEY_RIGHT_ALT: return 0xffea;
+	case GRL_KEY_LEFT_SUPER: return 0xffeb;
+	case GRL_KEY_RIGHT_SUPER: return 0xffec;
 	default:
 		if (key >= GRL_KEY_F1 && key <= GRL_KEY_F12) {
 			return LRG_XK_F1 + (guint)(key - GRL_KEY_F1);
@@ -135,20 +144,12 @@ lrg_current_mods(void)
 	return mods;
 }
 
-/* Non-text keys that should auto-repeat while held (the press queue only
- * fires on the initial press). */
-static const GrlKey lrg_repeat_keys[] = {
-	GRL_KEY_BACKSPACE, GRL_KEY_DELETE, GRL_KEY_LEFT, GRL_KEY_RIGHT,
-	GRL_KEY_UP, GRL_KEY_DOWN, GRL_KEY_PAGE_UP, GRL_KEY_PAGE_DOWN,
-	GRL_KEY_ENTER, GRL_KEY_TAB,
-};
-
 /*
  * lrg_emit_key:
  * Dispatch one non-character GrlKey (special key, or Ctrl/Alt + printable).
  */
 static void
-lrg_emit_key(GstLrgWindow *self, GrlKey key, guint mods)
+lrg_emit_key(GstLrgWindow *self, GrlKey key, guint mods, guint event_type)
 {
 	GstWindow *win = GST_WINDOW(self);
 	guint keysym = lrg_keysym_for(key);
@@ -157,7 +158,8 @@ lrg_emit_key(GstLrgWindow *self, GrlKey key, guint mods)
 
 	if (keysym != 0) {
 		/* Mapped function key: no text. */
-		g_signal_emit_by_name(win, "key-press", keysym, mods, "", 0);
+		self->keysyms[key] = keysym;
+		gst_window_emit_key_event(win, keysym, keysym, (guint)key, mods, event_type, "", 0);
 		return;
 	}
 
@@ -199,13 +201,15 @@ lrg_emit_key(GstLrgWindow *self, GrlKey key, guint mods)
 
 		if (len > 0) {
 			text[len] = '\0';
-			g_signal_emit_by_name(win, "key-press", ks, mods, text, len);
+			gst_window_emit_key_event(win, ks, (guint)g_unichar_tolower((gunichar)key),
+				(guint)key, mods, event_type, text, len);
 		} else {
-			g_signal_emit_by_name(win, "key-press", ks, mods, "", 0);
+			gst_window_emit_key_event(win, ks, (guint)g_unichar_tolower((gunichar)key),
+				(guint)key, mods, event_type, "", 0);
 		}
+		self->keysyms[key] = ks;
 	}
-	/* Plain printable (no ctrl/alt) is handled via the char queue; modifier
-	 * keys themselves are ignored. */
+	/* Plain printable (no ctrl/alt) is handled via the char queue. */
 }
 
 /*
@@ -219,6 +223,9 @@ lrg_window_forward_input(GstLrgWindow *self)
 	guint mods = lrg_current_mods();
 	gint ch;
 	GrlKey key;
+	guint text_key = 0;
+	guint text_candidates = 0;
+	guint text_event = 1;
 	guint i;
 	gint mx;
 	gint my;
@@ -231,25 +238,52 @@ lrg_window_forward_input(GstLrgWindow *self)
 	};
 	gboolean any_button = FALSE;
 
+	/* Raylib has separate text/key queues. Associate text only when the
+	 * frame has one unambiguous printable physical key; never guess layout. */
+	for (i = GRL_KEY_SPACE; i <= GRL_KEY_GRAVE; i++) {
+		if (grl_input_is_key_pressed((GrlKey)i) ||
+		    grl_input_is_key_pressed_repeat((GrlKey)i)) {
+			text_key = i;
+			text_candidates++;
+			text_event = grl_input_is_key_pressed((GrlKey)i) ? 1 : 2;
+		}
+	}
+	if (text_candidates != 1)
+		text_key = 0;
+
 	/* --- Keyboard: printable text from the char queue --- */
 	while ((ch = grl_input_get_char_pressed()) != 0) {
 		gchar text[8];
 		gint len;
+		guint keysym;
 
+		/* Modified physical keys below already supply their control text. */
+		if (mods & (LRG_CONTROL_MASK | LRG_MOD1_MASK | LRG_MOD4_MASK))
+			continue;
 		len = g_unichar_to_utf8((gunichar)ch, text);
 		text[len] = '\0';
-		g_signal_emit_by_name(win, "key-press", (guint)ch, mods, text, len);
+		keysym = ch <= 0xff ? (guint)ch : (0x01000000u | (guint)ch);
+		gst_window_emit_key_event(win, keysym,
+			text_key != 0 && ch < 0x80 && (mods & LRG_SHIFT_MASK)
+				? (guint)g_unichar_tolower((gunichar)text_key) : keysym, text_key, mods,
+			text_key != 0 ? text_event : 1, text, len);
+		if (text_key != 0)
+			self->keysyms[text_key] = keysym;
 	}
 
 	/* --- Keyboard: special keys + Ctrl/Alt-modified printables --- */
 	while ((key = grl_input_get_key_pressed()) != 0) {
-		lrg_emit_key(self, key, mods);
+		if ((guint)key < G_N_ELEMENTS(self->keysyms))
+			lrg_emit_key(self, key, mods, 1);
 	}
 
-	/* Auto-repeat held navigation/editing keys. */
-	for (i = 0; i < G_N_ELEMENTS(lrg_repeat_keys); i++) {
-		if (grl_input_is_key_pressed_repeat(lrg_repeat_keys[i])) {
-			lrg_emit_key(self, lrg_repeat_keys[i], mods);
+	/* Poll repeats/releases for every physical key, not only navigation. */
+	for (i = 1; i < G_N_ELEMENTS(self->keysyms); i++) {
+		if (grl_input_is_key_pressed_repeat((GrlKey)i))
+			lrg_emit_key(self, (GrlKey)i, mods, 2);
+		if (self->keysyms[i] != 0 && grl_input_is_key_released((GrlKey)i)) {
+			gst_window_emit_key_event(win, self->keysyms[i], 0, i, mods, 3, NULL, 0);
+			self->keysyms[i] = 0;
 		}
 	}
 

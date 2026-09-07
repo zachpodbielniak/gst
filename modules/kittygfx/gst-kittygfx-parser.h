@@ -118,6 +118,7 @@ typedef struct
 
 	/* Cursor movement */
 	gint     cursor_movement; /* 'C' key: 0=move cursor, 1=don't */
+	gint     virtual_placement; /* 'U' key: Unicode placeholder prototype */
 
 	/* Quiet mode */
 	gint     quiet;           /* 'q' key: 0=all responses, 1=suppress OK, 2=suppress errors */

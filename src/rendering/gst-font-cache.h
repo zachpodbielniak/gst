@@ -224,6 +224,25 @@ gst_font_cache_load_spare_fonts(
 	const gchar *const  *fonts
 );
 
+/**
+ * gst_font_cache_draw_cluster:
+ * @self: font cache
+ * @draw: Xft drawing target with caller's clip installed
+ * @color: resolved foreground color
+ * @text: complete UTF-8 cluster
+ * @style: font style
+ * @x: pixel origin
+ * @baseline: pixel baseline
+ *
+ * Shapes a full cluster with HarfBuzz, retaining combining offsets and emoji
+ * substitutions. Fontconfig chooses a font covering the complete cluster.
+ *
+ * Returns: whether a font was available and drawing was attempted
+ */
+gboolean gst_font_cache_draw_cluster(GstFontCache *self, XftDraw *draw,
+	const XftColor *color, const gchar *text, GstFontStyle style,
+	gint x, gint baseline);
+
 G_END_DECLS
 
 #endif /* GST_FONT_CACHE_H */

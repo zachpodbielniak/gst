@@ -10,6 +10,12 @@
 # IMPORTANT: When adding a new module, add its section here with
 # enabled: true and reasonable test-safe defaults.
 
+terminal:
+  # Real executable; must wait for the file, with no shell expansion.
+  editor: emacsclient
+
+# Built-in configurable bindings: Ctrl+Shift+y = copy-command-output,
+# Ctrl+Shift+o = export-command-output. A keybinds map replaces defaults.
 modules:
   scrollback:
     enabled: true

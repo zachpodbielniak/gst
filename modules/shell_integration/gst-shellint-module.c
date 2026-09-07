@@ -13,13 +13,17 @@
  *   OSC 133;C  - output start   (record output_row)
  *   OSC 133;D;N - command done  (record end_row, exit code N)
  *
- * The module stores a dynamic array of semantic zones, adjusts
- * row indices when lines scroll out of the buffer, provides
+ * The module stores a bounded array of semantic zones, adjusts
+ * signed row indices through retained scrollback, provides
  * Ctrl+Shift+Up/Down navigation between prompts, and renders
  * small colored markers in the left margin at prompt rows.
  */
 
 #include "gst-shellint-module.h"
+#include "../scrollback/gst-history.h"
+#include "../../src/window/gst-window.h"
+#include <gio/gio.h>
+#include <glib/gstdio.h>
 #include "../../src/module/gst-module-manager.h"
 #include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
@@ -47,10 +51,10 @@
 
 /*
  * GstSemanticZone:
- * @prompt_row: row where the prompt starts (OSC 133;A), -1 if unknown
- * @command_row: row where the command starts (OSC 133;B), -1 if unknown
- * @output_row: row where command output starts (OSC 133;C), -1 if unknown
- * @end_row: row where the command completed (OSC 133;D), -1 if unknown
+ * @prompt_row: signed prompt row (OSC 133;A), UNKNOWN_ROW if absent
+ * @command_row: signed command row (OSC 133;B), UNKNOWN_ROW if absent
+ * @output_row: signed output row (OSC 133;C), UNKNOWN_ROW if absent
+ * @end_row: signed completion row (OSC 133;D), UNKNOWN_ROW if absent
  * @exit_code: exit code from OSC 133;D;N, -1 if not yet completed
  *
  * Represents one shell prompt/command/output cycle. Rows are
@@ -64,7 +68,12 @@ typedef struct
 	gint output_row;
 	gint end_row;
 	gint exit_code;
+	gint output_col;
+	gint end_col;
 } GstSemanticZone;
+
+#define UNKNOWN_ROW (G_MININT)
+#define MAX_ZONES (4096)
 
 /* ===== Default configuration ===== */
 
@@ -92,6 +101,9 @@ struct _GstShellintModule
 
 	GArray   *zones;            /* array of GstSemanticZone */
 	gulong    scroll_sig_id;    /* signal handler for line-scrolled-out */
+	gulong    resize_sig_id;
+	gint      retention;
+	gint      navigation_row;
 
 	/* Configuration */
 	gboolean  mark_prompts;     /* render prompt markers */
@@ -206,9 +218,8 @@ get_current_cursor_row(void)
 /*
  * on_line_scrolled_out:
  *
- * Signal callback for "line-scrolled-out". Decrements all row
- * indices in the zone array by one and removes zones that have
- * scrolled entirely off-screen (all rows < 0).
+ * Signal callback for "line-scrolled-out". Shift known boundaries,
+ * retaining negative rows until the configured history horizon expires.
  */
 static void
 on_line_scrolled_out(
@@ -232,15 +243,22 @@ on_line_scrolled_out(
 
 		zone = &g_array_index(self->zones, GstSemanticZone, i);
 
-		if (zone->prompt_row >= 0)  zone->prompt_row--;
-		if (zone->command_row >= 0) zone->command_row--;
-		if (zone->output_row >= 0)  zone->output_row--;
-		if (zone->end_row >= 0)     zone->end_row--;
+		/* Saturate old boundaries: an open command can run indefinitely. */
+		if (zone->prompt_row != UNKNOWN_ROW)
+			zone->prompt_row = MAX(zone->prompt_row - 1, -self->retention - 1);
+		if (zone->command_row != UNKNOWN_ROW)
+			zone->command_row = MAX(zone->command_row - 1, -self->retention - 1);
+		if (zone->output_row != UNKNOWN_ROW)
+			zone->output_row = MAX(zone->output_row - 1, -self->retention - 1);
+		if (zone->end_row != UNKNOWN_ROW)
+			zone->end_row = MAX(zone->end_row - 1, -self->retention - 1);
 	}
+	if (self->navigation_row != UNKNOWN_ROW)
+		self->navigation_row = MAX(self->navigation_row - 1, -self->retention - 1);
 
 	/*
-	 * Remove zones that have completely scrolled off. A zone is
-	 * considered gone when all its set rows have gone negative.
+	 * Remove zones whose output end (or next prompt for abandoned cycles)
+	 * has expired. An open command stays available for a later D marker.
 	 * Walk backwards to safely remove during iteration.
 	 */
 	for (i = self->zones->len; i > 0; i--) {
@@ -249,11 +267,10 @@ on_line_scrolled_out(
 
 		zone = &g_array_index(self->zones, GstSemanticZone, i - 1);
 
-		all_gone = TRUE;
-		if (zone->prompt_row >= 0)  all_gone = FALSE;
-		if (zone->command_row >= 0) all_gone = FALSE;
-		if (zone->output_row >= 0)  all_gone = FALSE;
-		if (zone->end_row >= 0)     all_gone = FALSE;
+		all_gone = zone->end_row != UNKNOWN_ROW &&
+			zone->end_row < -self->retention;
+		if (zone->end_row == UNKNOWN_ROW && i < self->zones->len)
+			all_gone = g_array_index(self->zones, GstSemanticZone, i).prompt_row < -self->retention;
 
 		if (all_gone) {
 			g_array_remove_index(self->zones, i - 1);
@@ -262,6 +279,20 @@ on_line_scrolled_out(
 }
 
 /* ===== GstEscapeHandler interface ===== */
+
+/* Live reflow changes physical row/column boundaries. Until core supplies
+ * an anchor remapping signal, invalidate zones rather than export wrong text. */
+static void
+on_history_resize(GstTerminal *term, gint cols, gint rows, gpointer data)
+{
+	GstShellintModule *self = (GstShellintModule *)data;
+	(void)term;
+	(void)cols;
+	(void)rows;
+	if (self->zones != NULL)
+		g_array_set_size(self->zones, 0);
+	self->navigation_row = UNKNOWN_ROW;
+}
 
 /*
  * handle_escape_string:
@@ -291,8 +322,9 @@ gst_shellint_module_handle_escape_string(
 	const gchar *rest;
 	gchar subcmd;
 	gint cur_row;
-
-	(void)terminal;
+	gint cur_col;
+	GstTerminal *term;
+	g_autofree gchar *sequence = NULL;
 
 	self = GST_SHELLINT_MODULE(handler);
 
@@ -304,6 +336,9 @@ gst_shellint_module_handle_escape_string(
 	if (buf == NULL || len < 4) {
 		return FALSE;
 	}
+	/* Escape handlers receive bounded buffers, not necessarily C strings. */
+	sequence = g_strndup(buf, len);
+	buf = sequence;
 
 	/* Parse the OSC number */
 	osc_num = (gint)strtol(buf, &endptr, 10);
@@ -322,8 +357,16 @@ gst_shellint_module_handle_escape_string(
 		return FALSE;
 	}
 	subcmd = *rest;
+	if (rest[1] != '\0' && rest[1] != ';')
+		return FALSE;
 
-	cur_row = get_current_cursor_row();
+	term = (GstTerminal *)terminal;
+	if (term == NULL || self->zones == NULL || gst_terminal_is_altscreen(term))
+		return FALSE;
+	cur_row = gst_terminal_get_cursor(term)->y;
+	cur_col = gst_terminal_get_cursor(term)->x;
+	if (gst_terminal_get_cursor(term)->state & GST_CURSOR_STATE_WRAPNEXT)
+		cur_col++;
 
 	switch (subcmd) {
 	case 'A': {
@@ -331,10 +374,14 @@ gst_shellint_module_handle_escape_string(
 		GstSemanticZone zone;
 
 		zone.prompt_row = cur_row;
-		zone.command_row = -1;
-		zone.output_row = -1;
-		zone.end_row = -1;
+		zone.command_row = UNKNOWN_ROW;
+		zone.output_row = UNKNOWN_ROW;
+		zone.end_row = UNKNOWN_ROW;
 		zone.exit_code = -1;
+		zone.output_col = 0;
+		zone.end_col = 0;
+		if (self->zones->len == MAX_ZONES)
+			g_array_remove_index(self->zones, 0);
 		g_array_append_val(self->zones, zone);
 
 		g_debug("shell_integration: prompt start at row %d", cur_row);
@@ -364,6 +411,7 @@ gst_shellint_module_handle_escape_string(
 			zone = &g_array_index(self->zones,
 				GstSemanticZone, self->zones->len - 1);
 			zone->output_row = cur_row;
+			zone->output_col = cur_col;
 
 			g_debug("shell_integration: output start at row %d",
 				cur_row);
@@ -379,7 +427,12 @@ gst_shellint_module_handle_escape_string(
 
 		/* Check for ";N" after the D */
 		if (*(rest + 1) == ';' && *(rest + 2) != '\0') {
-			exit_code = (gint)strtol(rest + 2, NULL, 10);
+			gchar *status_end;
+			gint64 status = g_ascii_strtoll(rest + 2, &status_end, 10);
+			if (status_end == rest + 2 || (*status_end != '\0' && *status_end != ';') ||
+				status < 0 || status > G_MAXINT)
+				return FALSE;
+			exit_code = (gint)status;
 		}
 
 		if (self->zones->len > 0) {
@@ -388,6 +441,7 @@ gst_shellint_module_handle_escape_string(
 			zone = &g_array_index(self->zones,
 				GstSemanticZone, self->zones->len - 1);
 			zone->end_row = cur_row;
+			zone->end_col = cur_col;
 			zone->exit_code = exit_code;
 
 			g_debug("shell_integration: command done at row %d, "
@@ -431,13 +485,14 @@ find_prev_prompt(GstShellintModule *self, gint current_row)
 	gint best;
 	guint i;
 
-	best = -1;
+	best = UNKNOWN_ROW;
 
 	for (i = 0; i < self->zones->len; i++) {
 		GstSemanticZone *zone;
 
 		zone = &g_array_index(self->zones, GstSemanticZone, i);
-		if (zone->prompt_row >= 0 && zone->prompt_row < current_row) {
+		if (zone->prompt_row != UNKNOWN_ROW && zone->prompt_row < current_row &&
+			zone->prompt_row >= -self->retention) {
 			best = zone->prompt_row;
 		}
 	}
@@ -463,12 +518,12 @@ find_next_prompt(GstShellintModule *self, gint current_row)
 		GstSemanticZone *zone;
 
 		zone = &g_array_index(self->zones, GstSemanticZone, i);
-		if (zone->prompt_row >= 0 && zone->prompt_row > current_row) {
+		if (zone->prompt_row != UNKNOWN_ROW && zone->prompt_row > current_row) {
 			return zone->prompt_row;
 		}
 	}
 
-	return -1;
+	return UNKNOWN_ROW;
 }
 
 /*
@@ -493,19 +548,27 @@ gst_shellint_module_handle_key_event(
 	GstShellintModule *self;
 	gint cur_row;
 	gint target_row;
+	GstTerminal *term;
 
 	(void)keycode;
+	self = GST_SHELLINT_MODULE(handler);
+	term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+	if (term == NULL || gst_terminal_is_altscreen(term) || self->zones == NULL)
+		return FALSE;
 
 	/* Only handle Ctrl+Shift combinations */
 	if (!(state & ControlMask) || !(state & ShiftMask)) {
+		self->navigation_row = UNKNOWN_ROW;
 		return FALSE;
 	}
 
-	self = GST_SHELLINT_MODULE(handler);
-
-	cur_row = get_current_cursor_row();
-	if (cur_row < 0) {
-		cur_row = 0;
+	cur_row = self->navigation_row;
+	if (cur_row == UNKNOWN_ROW) {
+		GstModule *history;
+		const GstHistoryApi *api = gst_history_lookup(&history);
+		cur_row = get_current_cursor_row() + 1;
+		if (api != NULL && api->offset(history) > 0)
+			cur_row = -api->offset(history);
 	}
 
 	switch (keyval) {
@@ -519,26 +582,23 @@ gst_shellint_module_handle_key_event(
 		return FALSE;
 	}
 
-	if (target_row < 0) {
+	if (target_row == UNKNOWN_ROW) {
 		/* No prompt found in that direction */
 		return TRUE;
 	}
 
 	/*
-	 * Move the cursor to the target prompt row. We set the
-	 * cursor position directly so the terminal view follows.
-	 * Column 0 puts the cursor at the start of the prompt.
+	 * Change only the history viewport, never the application's cursor.
 	 */
 	{
-		GstModuleManager *mgr;
-		GstTerminal *term;
+		GstModule *history;
+		const GstHistoryApi *api;
 
-		mgr = gst_module_manager_get_default();
-		term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
-		if (term != NULL) {
-			gst_terminal_set_cursor_pos(term, 0, target_row);
-			mark_all_dirty();
-		}
+		api = gst_history_lookup(&history);
+		if (api != NULL)
+			api->set_offset(history, -target_row);
+		self->navigation_row = target_row;
+		mark_all_dirty();
 	}
 
 	return TRUE;
@@ -620,6 +680,8 @@ gst_shellint_module_render(
 		return;
 	}
 
+	if (gst_terminal_is_altscreen(term) || self->zones == NULL)
+		return;
 	rows = gst_terminal_get_rows(term);
 
 	for (i = 0; i < self->zones->len; i++) {
@@ -634,7 +696,11 @@ gst_shellint_module_render(
 		zone = &g_array_index(self->zones, GstSemanticZone, i);
 
 		/* Only render if the prompt row is visible */
-		row = zone->prompt_row;
+		{
+			GstModule *history;
+			const GstHistoryApi *api = gst_history_lookup(&history);
+			row = zone->prompt_row + (api != NULL ? api->offset(history) : 0);
+		}
 		if (row < 0 || row >= rows) {
 			continue;
 		}
@@ -718,6 +784,7 @@ gst_shellint_module_activate(GstModule *module)
 	self = GST_SHELLINT_MODULE(module);
 
 	/* Initialize zone array if not already present */
+	self->navigation_row = UNKNOWN_ROW;
 	if (self->zones == NULL) {
 		self->zones = g_array_new(FALSE, TRUE,
 			sizeof(GstSemanticZone));
@@ -727,9 +794,11 @@ gst_shellint_module_activate(GstModule *module)
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
 	if (term != NULL) {
-		self->scroll_sig_id = g_signal_connect(term,
+		self->scroll_sig_id = g_signal_connect_object(term,
 			"line-scrolled-out",
-			G_CALLBACK(on_line_scrolled_out), self);
+			G_CALLBACK(on_line_scrolled_out), self, 0);
+		self->resize_sig_id = g_signal_connect_object(term, "resize",
+			G_CALLBACK(on_history_resize), self, 0);
 	}
 
 	g_debug("shell_integration: activated (mark_prompts=%d, "
@@ -765,6 +834,13 @@ gst_shellint_module_deactivate(GstModule *module)
 	}
 
 	/* Free zone array */
+	if (self->resize_sig_id != 0) {
+		mgr = gst_module_manager_get_default();
+		term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
+		if (term != NULL)
+			g_signal_handler_disconnect(term, self->resize_sig_id);
+		self->resize_sig_id = 0;
+	}
 	if (self->zones != NULL) {
 		g_array_free(self->zones, TRUE);
 		self->zones = NULL;
@@ -792,6 +868,7 @@ gst_shellint_module_configure(GstModule *module, gpointer config)
 
 	self->mark_prompts = cfg->modules.shell_integration.mark_prompts;
 	self->show_exit_code = cfg->modules.shell_integration.show_exit_code;
+	self->retention = CLAMP(cfg->modules.scrollback.lines, 1, 1000000);
 
 	/* Parse error_color if provided */
 	{
@@ -819,6 +896,216 @@ gst_shellint_module_configure(GstModule *module, gpointer config)
 
 /* ===== GObject lifecycle ===== */
 
+/**
+ * gst_shellint_module_dup_output:
+ * @self: a shell integration module
+ * @error: (out) (optional): error return
+ *
+ * Extracts the navigated command's completed output, or the most recent
+ * completed command when no prompt has been selected. Evicted prefixes are
+ * rejected rather than silently exporting incomplete output. OSC C/D cell
+ * boundaries exclude the command and following prompt.
+ *
+ * Returns: (transfer full) (nullable): UTF-8 output, or %NULL on failure
+ */
+gchar *
+gst_shellint_module_dup_output(GstShellintModule *self, GError **error)
+{
+	GstTerminal *term;
+	GstSemanticZone *zone;
+	GString *output;
+	gint i;
+	gint row;
+
+	g_return_val_if_fail(GST_IS_SHELLINT_MODULE(self), NULL);
+	term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+	zone = NULL;
+	if (self->navigation_row != UNKNOWN_ROW && self->navigation_row < -self->retention) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+			"The selected command has been evicted from scrollback");
+		return NULL;
+	}
+	if (self->zones != NULL) {
+		for (i = (gint)self->zones->len - 1; i >= 0; i--) {
+			GstSemanticZone *candidate = &g_array_index(self->zones, GstSemanticZone, i);
+			if (self->navigation_row != UNKNOWN_ROW &&
+				candidate->prompt_row != self->navigation_row)
+				continue;
+			if (candidate->output_row != UNKNOWN_ROW && candidate->end_row != UNKNOWN_ROW) {
+				zone = candidate;
+				break;
+			}
+		}
+	}
+	if (term == NULL || zone == NULL || gst_terminal_is_altscreen(term)) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+			"No completed command output is available on the primary screen");
+		return NULL;
+	}
+	if (zone->end_row < zone->output_row ||
+		(zone->end_row == zone->output_row && zone->end_col < zone->output_col)) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA,
+			"Command output boundaries were overwritten by cursor movement");
+		return NULL;
+	}
+	output = g_string_new(NULL);
+	for (row = zone->output_row; row <= zone->end_row; row++) {
+		const GstLine *line;
+		g_autofree gchar *text = NULL;
+		gint start;
+		gint end;
+		gboolean wrapped;
+
+		line = gst_history_line(term, row);
+		if (line == NULL) {
+			g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+				"Command output has been evicted from scrollback");
+			g_string_free(output, TRUE);
+			return NULL;
+		}
+		start = row == zone->output_row ? zone->output_col : 0;
+		end = row == zone->end_row ? zone->end_col : line->len;
+		wrapped = line->len > 0 &&
+			(line->glyphs[line->len - 1].attr & GST_GLYPH_ATTR_WRAP) != 0;
+		text = gst_line_to_string_range(line, start, end);
+		/* Preserve spaces at soft wraps and exact final-cell boundaries. */
+		if (row != zone->end_row && !wrapped) {
+			gsize length = strlen(text);
+			while (length > 0 && text[length - 1] == ' ')
+				text[--length] = '\0';
+		}
+		if (output->len + strlen(text) + 1 > 16 * 1024 * 1024) {
+			g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NO_SPACE,
+				"Command output exceeds the 16 MiB export limit");
+			g_string_free(output, TRUE);
+			return NULL;
+		}
+		g_string_append(output, text);
+		if (row != zone->end_row && !wrapped)
+			g_string_append_c(output, '\n');
+	}
+	return g_string_free(output, FALSE);
+}
+
+/**
+ * gst_shellint_module_copy_output:
+ * @self: a shell integration module
+ * @error: (out) (optional): error return
+ *
+ * Copies completed output to the window's CLIPBOARD selection.
+ * Returns: %TRUE when output was handed to the window
+ */
+gboolean
+gst_shellint_module_copy_output(GstShellintModule *self, GError **error)
+{
+	GstWindow *window;
+	g_autofree gchar *text = NULL;
+
+	text = gst_shellint_module_dup_output(self, error);
+	if (text == NULL)
+		return FALSE;
+	window = (GstWindow *)gst_module_manager_get_window(gst_module_manager_get_default());
+	if (window == NULL) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_CONNECTED, "No terminal window is available");
+		return FALSE;
+	}
+	gst_window_set_selection(window, text, TRUE);
+	return TRUE;
+}
+
+/* The child owns only its private filename, never a module/terminal pointer. */
+static void
+editor_finished(GObject *source, GAsyncResult *result, gpointer data)
+{
+	g_autoptr(GError) error = NULL;
+	gchar *path = (gchar *)data;
+
+	if (!g_subprocess_wait_check_finish(G_SUBPROCESS(source), result, &error))
+		g_warning("shell_integration: editor: %s", error->message);
+	if (g_unlink(path) != 0)
+		g_warning("shell_integration: could not remove output file %s", path);
+	g_free(path);
+}
+
+/**
+ * gst_shellint_module_export_output:
+ * @self: a shell integration module
+ * @editor: editor command and arguments, parsed without a shell
+ * @error: (out) (optional): error return
+ *
+ * Opens a private temporary output file in an asynchronous editor process.
+ * The editor must wait until the file is no longer needed (emacsclient does
+ * so by default). Shell functions and shell metacharacters are not expanded.
+ * Returns: %TRUE if the editor was started
+ */
+gboolean
+gst_shellint_module_export_output(GstShellintModule *self,
+	const gchar *editor, GError **error)
+{
+	g_autofree gchar *text = NULL;
+	g_autofree gchar *path = NULL;
+	g_auto(GStrv) argv = NULL;
+	g_autoptr(GFile) file = NULL;
+	g_autoptr(GFileIOStream) stream = NULL;
+	g_autoptr(GSubprocess) process = NULL;
+	gint argc;
+	gboolean written;
+
+	text = gst_shellint_module_dup_output(self, error);
+	if (text == NULL)
+		return FALSE;
+	if (editor == NULL || *editor == '\0') {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+			"Configure an editor executable, for example emacsclient");
+		return FALSE;
+	}
+	if (!g_shell_parse_argv(editor, &argc, &argv, error))
+		return FALSE;
+	file = g_file_new_tmp("gst-command-XXXXXX", &stream, error);
+	if (file == NULL)
+		return FALSE;
+	path = g_file_get_path(file);
+	written = g_output_stream_write_all(g_io_stream_get_output_stream(G_IO_STREAM(stream)),
+		text, strlen(text), NULL, NULL, error);
+	if (!g_io_stream_close(G_IO_STREAM(stream), NULL, written ? error : NULL))
+		written = FALSE;
+	if (written) {
+		argv = g_realloc_n(argv, (gsize)argc + 2, sizeof(gchar *));
+		argv[argc] = g_strdup(path);
+		argv[argc + 1] = NULL;
+		process = g_subprocess_newv((const gchar * const *)argv,
+			G_SUBPROCESS_FLAGS_NONE, error);
+	}
+	if (process == NULL) {
+		g_unlink(path);
+		return FALSE;
+	}
+	g_subprocess_wait_check_async(process, NULL, editor_finished, g_steal_pointer(&path));
+	return TRUE;
+}
+
+/* GObject action signals let the driver bind actions without linking an
+ * optional module into the executable. Detailed failures go to stderr. */
+static gboolean
+copy_output_action(GstShellintModule *self)
+{
+	g_autoptr(GError) error = NULL;
+	gboolean ok = gst_shellint_module_copy_output(self, &error);
+	if (!ok)
+		g_warning("shell_integration: %s", error->message);
+	return ok;
+}
+
+static gboolean
+export_output_action(GstShellintModule *self, const gchar *editor)
+{
+	g_autoptr(GError) error = NULL;
+	gboolean ok = gst_shellint_module_export_output(self, editor, &error);
+	if (!ok)
+		g_warning("shell_integration: %s", error->message);
+	return ok;
+}
+
 static void
 gst_shellint_module_dispose(GObject *object)
 {
@@ -826,11 +1113,7 @@ gst_shellint_module_dispose(GObject *object)
 
 	self = GST_SHELLINT_MODULE(object);
 
-	if (self->zones != NULL) {
-		g_array_free(self->zones, TRUE);
-		self->zones = NULL;
-	}
-
+	gst_shellint_module_deactivate(GST_MODULE(self));
 	G_OBJECT_CLASS(gst_shellint_module_parent_class)->dispose(object);
 }
 
@@ -849,6 +1132,12 @@ gst_shellint_module_class_init(GstShellintModuleClass *klass)
 	module_class->activate = gst_shellint_module_activate;
 	module_class->deactivate = gst_shellint_module_deactivate;
 	module_class->configure = gst_shellint_module_configure;
+	g_signal_new_class_handler("copy-command-output", G_TYPE_FROM_CLASS(klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK(copy_output_action),
+		NULL, NULL, NULL, G_TYPE_BOOLEAN, 0);
+	g_signal_new_class_handler("export-command-output", G_TYPE_FROM_CLASS(klass),
+		G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, G_CALLBACK(export_output_action),
+		NULL, NULL, NULL, G_TYPE_BOOLEAN, 1, G_TYPE_STRING);
 }
 
 static void
@@ -856,6 +1145,8 @@ gst_shellint_module_init(GstShellintModule *self)
 {
 	self->zones = NULL;
 	self->scroll_sig_id = 0;
+	self->retention = 10000;
+	self->navigation_row = UNKNOWN_ROW;
 	self->mark_prompts = DEFAULT_MARK_PROMPTS;
 	self->show_exit_code = DEFAULT_SHOW_EXIT_CODE;
 	self->error_r = DEFAULT_ERROR_R;

@@ -1,0 +1,69 @@
+#+title: Application Input Integration
+#+description: Application behavior for keyboard protocols, Wayland IME/scaling, and command history actions
+#+authors: GST contributors
+#+categories: gst application input
+#+created: 2026-09-07T00:00:00+00:00
+#+updated: 2026-09-07T00:00:00+00:00
+#+version: 2
+
+* Input Dispatch
+
+=gst_window_emit_key_event(window, keysym, base_keysym, keycode, state, event_type, text, len)= offers a boolean =key-event= signal with seven parameters: translated X11 keysym, unshifted X11 keysym, physical key identifier, X11 modifier mask, event type, UTF-8 text and byte length. Event types are 1 press, 2 repeat and 3 release. A TRUE handler result consumes the signal; otherwise presses and repeats fall back to the original =key-press(keysym, state, text, len)= signal. Releases never become legacy presses. Existing standalone consumers of =key-press= therefore continue to receive input; main connects both signals without processing an extended event twice. Module input hooks remain the existing press-only interface and receive repeats as presses, never releases.
+
+Main passes normal keys through module interception and configured actions before =gst_terminal_key_event()=. Its FALSE result retains the existing key table and raw text/Ctrl/Alt fallback. Translated keysyms remain available to search and legacy shortcuts while unshifted keysyms go to the protocol encoder. The window boundary adjusts paired Shift/Control/Alt/Super/Hyper/Meta key transitions to post-event state; focus loss clears its paired-key bookkeeping. Native modifier layout interpretation beyond these transitions still follows each backend's X11-mask convention.
+
+The application remembers forwarded physical presses and their original unshifted keysyms. Intercepted local presses do not produce child releases, and their repeats cannot become child input merely because shortcut modifiers were released. Local repeat hooks still run. Focus loss discards forwarded-key bookkeeping because releases may never arrive. Releases during keyboard lock or shutdown are discarded. Search still allows releases for presses already forwarded before it opened, preventing stuck child modifiers, but does not forward releases for presses intercepted by search itself. A child using event reporting must treat focus loss as invalidating held keys; GST does not synthesize a complete release stream at focus loss.
+
+Wayland emits repeat type 2 from its repeat timer and release type 3 from wl_keyboard. Completed Compose text retains NoSymbol and bypasses Kitty encoding, including on repeat; composing/cancelled intermediate keys have no matching child press. While search owns input, completed Compose text is translated to Unicode keysyms for its existing input interface. X11 distinguishes autorepeat release/press pairs from actual release, tracks repeated presses, and uses Xutf8LookupString with a dynamically expanded buffer for long XIM results. LRG polls physical repeats and releases, includes modifier keys, and converts non-Latin text to X11 Unicode keysyms rather than sending bare Unicode integers as keysyms.
+
+* Wayland Lifecycle
+
+Main connects =scale-changed= and =preedit-changed= to its expose/redraw scheduler. Scale changes never call configure and never multiply logical font metrics. After terminal, renderer, PTY, modules and handlers exist, it reads =gst_wayland_window_get_logical_size()= and applies the initial logical configure, covering libdecor configuration before driver signal connection. The renderer retains ownership of preedit drawing and backing-buffer scaling.
+
+Before enabling terminal text input, main initializes the logical candidate rectangle from border padding, terminal cursor and font cell size. The renderer subsequently updates cursor placement during drawing. Input policy is re-evaluated after keyboard dispatch, terminal mode changes and PTY output. Terminal IME is disabled for keyboard lock, local search, child exit, window close, termination signals and cleanup before PTY release. Asynchronous clipboard replies are also rejected during lock/search/shutdown.
+
+=text-commit= validates policy, invokes the normal module typed-input side effects with NoSymbol, then writes the complete UTF-8 string directly with =gst_pty_write()=. It is not bracketed paste and never enters keysym/Kitty encoding. Committed text is not logged. Search has no separate IME context, so entering search disables terminal IME instead of sending query commits to the child.
+
+* History Actions
+
+The default bindings are =Ctrl+Shift+y: copy-command-output= and =Ctrl+Shift+o: export-command-output=. Bindings are configurable through =keybinds=; as before, supplying that map replaces rather than extends defaults. =terminal.editor= defaults to =emacsclient= and is available through =gst_config_get_editor()= and =gst_config_set_editor()=. It is loaded/saved with the terminal YAML section, and its field is appended to the public config structure to retain existing compiled C configuration field offsets.
+
+Only an active =shell_integration= module receives the =copy-command-output= or =export-command-output= action signal. Export receives the configured editor argv string. A missing/inactive module or FALSE action result produces a diagnostic rather than sending the shortcut to the shell. Configured output actions skip shell integration's ordinary key handler so a custom binding without Ctrl+Shift does not clear the selected command before exporting it.
+
+The editor command names a real executable, not the interactive Bash function =emacsclient_tty=. The module tokenizes it without shell expansion, appends the temporary filename as one argument, and deletes the file after the editor process exits. The editor must wait: do not use =emacsclient --no-wait=. Terminal-only editors need an external terminal-launch wrapper which waits for the editor, not access to GST's child input stream.
+
+The manager assigns search input the earliest automatic key-hook priority, scrollback overlay the earliest overlay priority, shell markers the penultimate priority and search highlights the last priority. Other hooks retain their module priority; equal priorities use module names rather than filesystem enumeration order. Search is therefore able to consume its modal input before scrollback/shell handlers and highlights paint over saved rows.
+
+* Limits
+
+Search owns the read-only boolean =input-active= GObject property and emits =notify::input-active= when entering search, leaving with Escape, or deactivating directly. Return navigates results without leaving search. Module activation resets the modal state; repeating activation while already activated remains a no-op through GstModule. The manager reads this property plus module activation on each =gst_module_manager_has_local_input()= query; it no longer infers state from consumed keys. Its =local-input-changed= signal relays property notifications without linking any search symbols, and main subscribes to update IME policy and redraw even outside keyboard dispatch. Keyboard-select and third-party local input modules do not yet expose an IME ownership contract.
+
+Raylib exposes separate physical-key and character queues without an association or an unshifted layout lookup. LRG associates printable text only when a frame has exactly one printable press/repeat candidate. Ambiguous frames retain text delivery with keycode zero but cannot provide reliable physical releases/repeat types for that text. Shifted ASCII punctuation uses the raylib physical key value; non-US layout correctness for that unshifted identity requires a richer graylib input API. Modifier masks on unusual XKB layouts, including AltGr/Meta distinctions, need compositor/X11 validation rather than assuming native Mod5 always means Meta.
+
+Main obtains selection text through =gst_selection_get_text()= and command output through module actions; both paths preserve complete Unicode clusters. Keyboard negotiation supports flags 1, 2, 8 and 16, not alternate-key metadata flag 4; see [[file:keyboard-protocol.org][keyboard protocol details]].
+
+The public keyboard API, shaping dependencies, generated default YAML header and explicit Wayland/history/input-test dependencies are integrated into the normal build. Generated protocol private-code files remain included only by the Wayland window, not separately compiled. No additional protocol generation is required to build this source snapshot.
+
+* Verification
+
+Main input regression tests were added, executed and passed. Clean release/debug suites and default Wayland ASan/UBSan tests passed as recorded in [[file:release-0.4.7.org][release verification]]. =tests/test-input-integration.c= includes the real private main callbacks and search implementation, replacing only PTY write sinks with a byte capture; no display, shell child or module .so is needed at runtime. Main itself is renamed inside the test, not exposed as production API.
+
+Fedora packages for the combined syntax/build path are =gcc=, =make=, =pkgconf-pkg-config=, =glib2-devel=, =json-glib-devel=, =libX11-devel=, =libXft-devel=, =libXrender-devel=, =fontconfig-devel=, =freetype-devel=, =libyaml-devel=, =pango-devel=, =harfbuzz-devel=, =wayland-devel=, =libxkbcommon-devel=, =cairo-devel= and =libdecor-devel=. Protocol regeneration/Compose tests additionally need =wayland-protocols-devel= and =xkeyboard-config=. LRG linking also needs =mesa-libGL-devel= and the initialized vendored libregnum/graylib/raylib sources. No new dependency is introduced by these tests and no packages were installed.
+
+Executed regression coverage includes seven-argument extended signal delivery and press/repeat-only legacy fallback, handled-event suppression, all six left/right modifier pairs and focus reset, search-before-ordinary-handler order, synchronous modal notifications, Return/Escape/direct deactivate/reactivate/unregister, custom output actions without Ctrl+Shift and their local releases, modal interception of output actions, original keysym on release, repeats after local modifiers are released, NoSymbol Compose fallback, repeated keyboard-lock set/reset and shutdown gating. Direct IME callback tests under Kitty and bracketed-paste modes check unwrapped committed bytes; pending paste/IME replies are gated during search, lock and shutdown. Config/keybind tests cover exact output action names and editor setter/YAML load/save round trips. Real compositor IME transactions and graphical lifecycle remain manual validation tasks.
+
+** Runtime Commands
+
+The Makefile tracks the included private implementations and generated default configuration header. To rebuild and execute the combined suite, run sequentially from the repository root:
+
+#+begin_src bash
+make clean
+make DEBUG=1 BUILD_WAYLAND=1 LRG_BACKEND=1 MCP=1 WEBVIEW=1 CC='gcc -Werror' all tests
+./build/debug/test-input-integration
+./build/debug/test-config
+./build/debug/test-keybind
+#+end_src
+
+Clean before switching optional backend or sanitizer flags; do not treat a stale executable as verification of changed sources. The isolated graphical runner and its explicit skip policy are described in [[file:backend-testing.org][backend testing]].
+
+Manual checks must exercise per-backend copy/paste and command-output export, editor file cleanup, search while output scrolls, shell markers/highlights over retained rows, initial compositor configure, integer/fractional monitor moves with constant PTY grid dimensions, long XIM text, Wayland preedit/commit exactly once, candidate positioning, lock/unlock and shutdown during pending IME/paste transactions. LRG checks must include simultaneous printable keys and non-US layouts as explicit limitations, not claim headless syntax checking establishes protocol fidelity.

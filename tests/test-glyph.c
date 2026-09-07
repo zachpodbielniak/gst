@@ -7,6 +7,8 @@
 
 #include <glib.h>
 #include "boxed/gst-glyph.h"
+#include "boxed/gst-cursor.h"
+#include "core/gst-line.h"
 
 static void
 test_glyph_new(void)
@@ -154,6 +156,107 @@ test_glyph_gtype(void)
     g_assert_cmpstr(g_type_name(type), ==, "GstGlyph");
 }
 
+/* Exercise independent ownership through every boxed copy and line move. */
+static void
+test_glyph_cluster_ownership(void)
+{
+	GstGlyph glyph = GST_GLYPH_INIT;
+	GstGlyph *copy;
+	GstLine *line;
+	GstLine *saved;
+	GstCursor *cursor;
+	GstCursor *saved_cursor;
+	gchar buffer[7];
+	gchar *text;
+	gint i;
+
+	glyph.rune = 'e';
+	gst_glyph_append(&glyph, 0x301);
+	copy = gst_glyph_copy(&glyph);
+	g_assert_true(gst_glyph_equal(&glyph, copy));
+	g_assert_true(copy->cluster != glyph.cluster);
+	gst_glyph_assign(&glyph, &glyph);
+	gst_glyph_append(&glyph, 0x308);
+	g_assert_cmpstr(gst_glyph_get_text(copy, buffer), ==, "e\314\201");
+	g_assert_false(gst_glyph_equal(&glyph, copy));
+
+	line = gst_line_new(6);
+	for (i = 0; i < 6; i++) {
+		gst_line_set_glyph(line, i, copy);
+	}
+	saved = gst_line_copy(line);
+	gst_line_delete_chars(line, 1, 2);
+	gst_line_insert_blanks(line, 1, 2);
+	gst_line_resize(line, 3);
+	gst_line_resize(line, 8);
+	gst_line_clear_range(line, 0, 2);
+	gst_line_clear(line);
+	gst_line_free(line);
+	text = gst_line_to_string(saved);
+	g_assert_cmpstr(text, ==, "e\314\201e\314\201e\314\201e\314\201e\314\201e\314\201");
+	g_free(text);
+	gst_line_free(saved);
+
+	cursor = gst_cursor_new();
+	gst_glyph_assign(&cursor->glyph, copy);
+	saved_cursor = gst_cursor_copy(cursor);
+	gst_cursor_reset(cursor);
+	gst_cursor_restore(cursor, saved_cursor);
+	gst_cursor_free(saved_cursor);
+	g_assert_cmpstr(gst_glyph_get_text(&cursor->glyph, buffer), ==, "e\314\201");
+	gst_cursor_free(cursor);
+	gst_glyph_reset(&glyph);
+	g_assert_null(glyph.cluster);
+	gst_glyph_free(copy);
+}
+
+/* Copies must describe their own allocation, not the source's spare capacity. */
+static void
+test_cluster_growth_copies(void)
+{
+	GstGlyph glyph = GST_GLYPH_INIT;
+	GstGlyph *copy;
+	GstLine *line, *line_copy;
+	GstCursor *cursor, *cursor_copy;
+	gsize capacity;
+	guint i, growths = 0;
+
+	glyph.rune = 'e';
+	capacity = 0;
+	for (i = 0; i < 65536; i++) {
+		gst_glyph_append(&glyph, 0x301);
+		if (capacity != glyph.cluster_capacity) {
+			capacity = glyph.cluster_capacity;
+			growths++;
+		}
+	}
+	g_assert_cmpuint(growths, <, 20);
+	g_assert_cmpuint(glyph.cluster_len, ==, 131073);
+	g_assert_cmpuint(strlen(glyph.cluster), ==, glyph.cluster_len);
+	copy = gst_glyph_copy(&glyph);
+	line = gst_line_new(2);
+	gst_line_set_glyph(line, 0, &glyph);
+	line_copy = gst_line_copy(line);
+	cursor = gst_cursor_new();
+	gst_glyph_assign(&cursor->glyph, &glyph);
+	cursor_copy = gst_cursor_copy(cursor);
+	gst_glyph_assign(&glyph, &glyph);
+	gst_glyph_append(&glyph, 0x308);
+	gst_glyph_append(copy, 0x308);
+	gst_glyph_append(&line_copy->glyphs[0], 0x308);
+	gst_glyph_append(&cursor_copy->glyph, 0x308);
+	g_assert_true(gst_glyph_equal(&glyph, copy));
+	g_assert_true(gst_glyph_equal(&glyph, &line_copy->glyphs[0]));
+	g_assert_true(gst_glyph_equal(&glyph, &cursor_copy->glyph));
+	g_assert_cmpuint(line->glyphs[0].cluster_len, ==, 131073);
+	gst_glyph_clear(&glyph);
+	gst_glyph_free(copy);
+	gst_line_free(line);
+	gst_line_free(line_copy);
+	gst_cursor_free(cursor);
+	gst_cursor_free(cursor_copy);
+}
+
 int
 main(
     int     argc,
@@ -170,6 +273,8 @@ main(
     g_test_add_func("/glyph/wide", test_glyph_wide);
     g_test_add_func("/glyph/reset", test_glyph_reset);
     g_test_add_func("/glyph/gtype", test_glyph_gtype);
+	g_test_add_func("/glyph/cluster-ownership", test_glyph_cluster_ownership);
+	g_test_add_func("/glyph/cluster-growth-copies", test_cluster_growth_copies);
 
     return g_test_run();
 }

@@ -535,12 +535,53 @@ test_selection_altscreen(void)
 	g_object_unref(term);
 }
 
+/* No fixed UTF-8-per-cell bound, and selecting a dummy selects its base. */
+static void
+test_selection_clusters(void)
+{
+	GstTerminal *term;
+	GstSelection *sel;
+	GString *expected;
+	gchar *text;
+	gint i;
+
+	term = gst_terminal_new(8, 3);
+	sel = gst_selection_new(term);
+	expected = g_string_new("e");
+	for (i = 0; i < 256; i++) {
+		g_string_append(expected, "\314\201");
+	}
+	gst_terminal_write(term, expected->str, (gssize)expected->len);
+	gst_selection_set_range(sel, 0, 0, 0, 0);
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, expected->str);
+	g_free(text);
+	g_string_free(expected, TRUE);
+	gst_terminal_write(term, "\360\237\221\251\342\200\215\360\237\222\273", -1);
+	gst_selection_set_range(sel, 2, 0, 2, 0);
+	g_assert_true(gst_selection_selected(sel, 1, 0));
+	g_assert_true(gst_selection_selected(sel, 2, 0));
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "\360\237\221\251\342\200\215\360\237\222\273");
+	g_free(text);
+	gst_terminal_reset(term, TRUE);
+	gst_terminal_resize(term, 4, 3);
+	gst_terminal_write(term, "abcd\314\201ef", -1);
+	gst_selection_set_range(sel, 0, 0, 1, 1);
+	text = gst_selection_get_text(sel);
+	g_assert_cmpstr(text, ==, "abcd\314\201ef");
+	g_free(text);
+	g_object_unref(sel);
+	g_object_unref(term);
+}
+
 int
 main(
 	int     argc,
 	char    **argv
 ){
 	g_test_init(&argc, &argv, NULL);
+	g_test_add_func("/selection/clusters", test_selection_clusters);
 
 	g_test_add_func("/selection/new", test_selection_new);
 	g_test_add_func("/selection/start", test_selection_start);

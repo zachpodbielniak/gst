@@ -1,0 +1,86 @@
+#+title: Wayland Input and Monitor Scaling
+#+description: Logical geometry, buffer scaling, Compose and text-input-v3 integration contract
+#+authors: GST contributors
+#+created: 2026-09-07
+#+updated: 2026-09-07
+
+* Scope and Status
+The Wayland window remains a libdecor-managed content surface. GST implements monitor membership tracking, integer and fractional backing-buffer scaling, xkbcommon Compose/dead-key processing, and the client side of text-input-v3 with transactional preedit and commit delivery. The renderer draws preedit without modifying terminal contents and updates the candidate rectangle. Main connects commit/redraw handlers and enables text input after initializing the input policy and candidate rectangle; the standalone window defaults to disabled.
+
+Clean release/debug suites and default Wayland ASan/UBSan tests passed; [[file:release-0.4.7.org][release verification]] records configurations and logs. Isolated Wayland rendering passed, but real CJK IME and mixed-monitor scaling validation remain pending. A headless listener test does not establish compositor/input-method interoperability.
+
+* Coordinate Contract
+All libdecor content dimensions, configure signals, window resize requests, font cell dimensions, border padding, mouse events, module drawing coordinates and IME cursor rectangles are logical surface coordinates. The terminal grid is computed from logical content dimensions divided by logical cell dimensions. Moving a window between monitors must not resize the PTY or change its row/column count solely because of scale.
+
+Every advertised wl_output is bound at min(advertised version, 2). Its scale starts at one until reported otherwise; changes are applied on output.done. Surface enter/leave events track which outputs actually intersect this content surface. The integer fallback is the largest scale among entered outputs, or one when none are entered. Removing an output removes its membership immediately. A surface older than version 3 cannot set buffer_scale and falls back to one.
+
+Fractional scaling is used only when both wp_fractional_scale_manager_v1 and wp_viewporter are available. Both managers and their child objects are used at version 1. The compositor's preferred_scale in 120ths supersedes the integer fallback; zero is ignored. Before a preferred scale arrives, integer output scale remains effective. Manager advertisement order is irrelevant, including advertisement after surface creation. Bound manager resources are retained until teardown if their registry global disappears; registry removal does not revoke existing bound resources. The implementation manages one seat, recreating text input if that seat disappears and a replacement seat is subsequently advertised.
+
+The renderer allocates ceil(logical_extent * scale / 120) buffer pixels in each dimension with overflow checks against Cairo stride and the signed wl_shm pool-size limit. Cairo device scale is buffer_width/logical_width and buffer_height/logical_height, accounting for independent fractional rounding. This keeps modules and fonts in logical coordinates while rasterizing at buffer resolution. With a viewport, buffer_scale is one and viewport destination is the logical content size. Otherwise buffer_scale is the negotiated integer. Scale and viewport state are set immediately before attach/commit, not independently in an output callback. Damage is in buffer coordinates on surface version 4, and logical coordinates on older surfaces. Screenshots return actual buffer pixel dimensions.
+
+The renderer listens for scale-changed, invalidates terminal rows, and reallocates at the next start_draw. It owns a reference to the Wayland window and disconnects its handlers on disposal. It does not write to a submitted buffer before wl_buffer.release. If the compositor retains a buffer when another frame is needed, the renderer copies the current image into a new allocation and retires the old proxy and client mapping; the compositor retains its own mapping until finished. This is a correctness-first allocation strategy, not an optimized multi-buffer pool. Cursor-theme images remain at their existing logical size and are compositor-scaled; content scaling does not yet reload a higher-resolution pointer theme.
+
+* Compose and Dead Keys
+The window creates an xkb Compose table for the active LC_CTYPE locale after creating the xkb context. main.c already calls setlocale(LC_ALL, ""); the window does not change process-global locale itself. xkbcommon handles locale Compose tables and the user's XCOMPOSEFILE. Missing Compose data logs a warning and leaves ordinary xkb input working.
+
+Composing sequences suppress intermediate text. A completed sequence emits the full UTF-8 result with NoSymbol; main preserves normal text fallback and bypasses Kitty encoding, including on repeat. Cancelled sequences emit no text and reset the compose state. Focus loss, keymap replacement and Control/Alt/Super shortcuts reset composition. Intermediate and cancelled composition are not repeated; completed composed text is cached for repeat without refeeding the sequence. Keyboard capability loss cancels repeat. The renderer's glyph path uses GstGlyph.cluster and gst_cairo_font_cache_draw_cluster() for full terminal clusters.
+
+* Text Input Lifecycle
+The text-input manager is bound at version 1 even when a newer protocol version is advertised. Its get_text_input request is issued once a seat and manager both exist. The window does not enable IME just because the protocol exists. gst_wayland_window_set_text_input_enabled(window, TRUE) allows activation; the compositor's text-input enter event for this surface then sends enable, terminal content purpose, content hints, cursor rectangle and commit. Leave, explicit disable and disposal disable and commit, clear all pending/current preedit, and cancel repeat/composition. Seat removal additionally destroys the text-input object and resets its client commit serial.
+
+preedit_string and commit_string replace pending values. done atomically installs the pending preedit and delivers text-commit once, then clears pending values. Preedit and commit UTF-8 are validated before use. A done serial that is older than the latest client commit still delivers its text, as required by the protocol; cursor-state requests are deferred until a matching done arrives. Ordinary wl_keyboard events forwarded by the compositor are not globally suppressed when IME is enabled: they are the unconsumed keys, and suppressing them would lose shortcuts and normal typing when no input method is active.
+
+** Surrounding Text Policy
+GST is not an editable text widget. Its terminal screen contains remote application output, not an authoritative input buffer; it cannot implement arbitrary deletion or reconversion by translating byte counts into backspaces. Accordingly, set_surrounding_text is deliberately never sent. text-input-v3 explicitly defines omission of this request as lack of surrounding-text support. delete_surrounding_text is ignored, not converted into terminal input, and no screen/scrollback contents are leaked to an IME. Completion, reconversion, arbitrary surrounding deletion and application-specific password-mode detection are not supported. A future editable local command widget needs its own surrounding-text/deletion contract rather than reusing terminal output.
+
+** Preedit Presentation
+The renderer overlays preedit after terminal and module drawing. It uses the core Cairo/HarfBuzz cluster helper to shape the complete preedit string, paints its background, underlines it and highlights the byte-offset cursor range. A collapsed nonnegative range draws a caret; -1 offsets hide it. Preedit is clipped to the current terminal row and content edge, not wrapped. The renderer updates gst_wayland_window_set_text_cursor() from the terminal cursor and logical font metrics on every render; unchanged rectangles do not send redundant commits. Preedit invalidation marks the whole terminal dirty so clearing or moving preedit restores overwritten cells.
+
+Cursor-range decoration uses terminal cell widths, so caret/selection geometry is approximate for proportional fallback fonts, bidi and complex multi-scalar ligatures even though the string itself is shaped. This is not a general bidi text widget. The public get_preedit getter returns borrowed UTF-8 and byte offsets if a future richer presentation is needed; no separate driver preedit drawing is required for the current renderer.
+
+* Application Integration
+** main.c
+Main connects scale-changed and preedit-changed to on_expose, scheduling a draw after the renderer invalidates rows. Scale changes do not call on_configure: they are not logical resizes.
+
+Main connects text-commit to a policy-checked callback that preserves normal typed-input side effects and writes complete UTF-8 directly via gst_pty_write(). Commits do not pass through selection-notify, bracketed paste, keysym mapping or Kitty key encoding, and committed text is not logged.
+
+Before enabling text input, main initializes the cursor rectangle from logical border, cursor and cell dimensions. It disables terminal IME during keyboard lock, local search, child exit and shutdown before PTY release, including asynchronous local-input changes. Search has no separate IME commit context. The renderer continues updating candidate positioning as the terminal cursor moves.
+
+Main reads gst_wayland_window_get_logical_size() and applies initial logical on_configure after terminal/PTY/renderer construction, covering early libdecor configuration. Configure, renderer resize and pixel-to-cell mouse calculations use logical dimensions without multiplying font or cell dimensions by get_scale().
+
+** Build Rules and Headers
+The actual protocol directory is src/wayland-protocols/, not protocols/. Six new generated files are supplied: fractional-scale-v1-client-protocol.h, fractional-scale-v1-protocol.c, viewporter-client-protocol.h, viewporter-protocol.c, text-input-unstable-v3-client-protocol.h and text-input-unstable-v3-protocol.c. Existing primary-selection, xdg-shell and xdg-decoration files are untouched. Like the existing primary-selection implementation, their private-code files are included by gst-wayland-window.c; do not also compile them as separate translation units.
+
+The Makefile discovers tests/test-*.c automatically, includes conditional Wayland compile/link dependencies, and explicitly tracks the private window implementation and protocol headers used by tests/test-wayland-input.c:
+
+#+begin_src makefile
+$(OBJDIR)/tests/test-wayland-input.o: src/window/gst-wayland-window.c src/window/gst-wayland-window.h $(wildcard src/wayland-protocols/*.[ch])
+#+end_src
+
+The test is guarded by GST_HAVE_WAYLAND and runs no Wayland tests in an X11-only build. Public functions are declared in gst-wayland-window.h. The renderer uses the integrated cluster API and common Pango/HarfBuzz dependencies.
+
+Generated protocol files are supplied with the source; compilation does not require regeneration. To regenerate them, locate the XML base with pkg-config --variable=pkgdatadir wayland-protocols and run wayland-scanner client-header and private-code for these three inputs:
+
+The 0.4.7 generated files use XML from wayland-protocols 1.49 and wayland-scanner 1.25.0. Generated sources retain upstream license notices.
+
+- staging/fractional-scale/fractional-scale-v1.xml
+- stable/viewporter/viewporter.xml
+- unstable/text-input/text-input-unstable-v3.xml
+
+The usual Fedora XML base is /usr/share/wayland-protocols. Fedora packages for the Wayland path are gcc, make, pkgconf-pkg-config, glib2-devel, wayland-devel, wayland-protocols-devel, libxkbcommon-devel, xkeyboard-config, cairo-devel, fontconfig-devel, freetype-devel and libdecor-devel; core shaping additionally needs pango-devel and harfbuzz-devel. Existing project-wide X11/YAML dependencies are listed in README.org.
+
+* Verification and Manual Checks
+Run builds sequentially and clean when switching flags:
+
+#+begin_src bash
+make clean
+make DEBUG=1 BUILD_WAYLAND=1 CC='gcc -Werror' all tests
+LD_LIBRARY_PATH=build/debug ./build/debug/test-wayland-input
+git diff --check
+#+end_src
+
+The executed headless tests cover overflow-safe fractional rounding; entered-output maximum and fractional preference; atomic preedit/commit including stale serial delivery; actual client-proxy enable/disable, cursor commits, deferred state, seat removal/recreation; and dead-key/Compose output, repeat and focus reset. The lifecycle test uses a socketpair and actual Wayland client proxies without a server roundtrip: it checks client state and request marshaling, not compositor acceptance. Real compositor checks remain mandatory.
+
+On a compositor advertising fractional-scale and text-input-v3, move and span the terminal across 100%, 125%, 150% and 200% monitors while observing WAYLAND_DEBUG=client. Check logical row/column counts remain constant for scale-only moves, buffers round up at odd dimensions, mouse selection stays under the pointer, backgrounds and module overlays cover the surface, libdecor retains correct decorations, and captures have scaled buffer dimensions. Repeat with only integer output scaling and on a compositor lacking both optional protocols. Exercise output unplug/replug, configure/resize storms and shutdown while buffers are retained.
+
+With an active FOSS input method such as IBus or Fcitx5 supporting the compositor's text-input-v3 bridge, check preedit, candidate positioning, commit exactly once, cancellation, focus loss, focus re-entry, and switching back to ordinary keyboard input. Exercise accented dead keys, a configured Compose key, repeated composed characters, CJK conversion and modifier shortcuts. Verify no preedit bytes reach the PTY before commit and no bracketed-paste wrappers or Kitty key sequences surround IME commits. Test unsupported reconversion/deletion as an explicit limitation rather than claiming editable surrounding text support.

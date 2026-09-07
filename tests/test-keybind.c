@@ -150,6 +150,14 @@ test_action_from_string_valid(void)
 		==, GST_ACTION_ZOOM_OUT);
 	g_assert_cmpint(gst_action_from_string("zoom_reset"),
 		==, GST_ACTION_ZOOM_RESET);
+	g_assert_cmpint(gst_action_from_string("copy-command-output"),
+		==, GST_ACTION_COPY_COMMAND_OUTPUT);
+	g_assert_cmpint(gst_action_from_string("export-command-output"),
+		==, GST_ACTION_EXPORT_COMMAND_OUTPUT);
+	g_assert_cmpstr(gst_action_to_string(GST_ACTION_COPY_COMMAND_OUTPUT),
+		==, "copy-command-output");
+	g_assert_cmpstr(gst_action_to_string(GST_ACTION_EXPORT_COMMAND_OUTPUT),
+		==, "export-command-output");
 }
 
 /* ===== Test: action from string — invalid ===== */
@@ -183,6 +191,8 @@ test_action_roundtrip(void)
 		GST_ACTION_ZOOM_IN,
 		GST_ACTION_ZOOM_OUT,
 		GST_ACTION_ZOOM_RESET,
+		GST_ACTION_COPY_COMMAND_OUTPUT,
+		GST_ACTION_EXPORT_COMMAND_OUTPUT,
 	};
 	guint i;
 

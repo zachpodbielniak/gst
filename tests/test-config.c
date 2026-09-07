@@ -48,6 +48,7 @@ test_config_defaults(void)
 	g_assert_nonnull(gst_config_get_shell(config));
 	g_assert_cmpstr(gst_config_get_term_name(config), ==, "st-256color");
 	g_assert_cmpuint(gst_config_get_tabspaces(config), ==, 8);
+	g_assert_cmpstr(gst_config_get_editor(config), ==, "emacsclient");
 
 	/* Window defaults */
 	g_assert_cmpstr(gst_config_get_title(config), ==, "gst");
@@ -729,6 +730,11 @@ test_config_load_selection(void)
 static void
 assert_roundtrip_settings(GstConfig *config)
 {
+	g_assert_cmpstr(gst_config_get_editor(config), ==, "emacsclient -t --alternate-editor=''");
+	g_assert_cmpint(gst_config_lookup_key_action(config, XK_F7, 0),
+		==, GST_ACTION_COPY_COMMAND_OUTPUT);
+	g_assert_cmpint(gst_config_lookup_key_action(config, XK_F8, Mod1Mask),
+		==, GST_ACTION_EXPORT_COMMAND_OUTPUT);
 	g_assert_cmpuint(gst_config_get_min_latency(config), ==, 12);
 	g_assert_cmpuint(gst_config_get_max_latency(config), ==, 47);
 
@@ -780,6 +786,7 @@ test_config_save_roundtrip(void)
 	/* Load a config */
 	load_path = write_temp_yaml(
 		"terminal:\n"
+		"  editor: \"emacsclient -t --alternate-editor=''\"\n"
 		"  shell: /bin/zsh\n"
 		"  term: xterm-256color\n"
 		"  tabspaces: 4\n"
@@ -815,6 +822,8 @@ test_config_save_roundtrip(void)
 		"      read_screen: true\n"
 		"keybinds:\n"
 		"  Ctrl+Shift+F6: clipboard_copy\n"
+		"  F7: copy-command-output\n"
+		"  Alt+F8: export-command-output\n"
 		"mousebinds:\n"
 		"  Alt+Button3: paste_primary\n"
 		"colors:\n"
@@ -827,6 +836,11 @@ test_config_save_roundtrip(void)
 	config1 = gst_config_new();
 	g_assert_true(gst_config_load_from_path(config1, load_path, &error));
 	g_assert_no_error(error);
+	assert_roundtrip_settings(config1);
+	/* Exercise the public setter as well as YAML serialization/reloading. */
+	gst_config_set_editor(config1, "emacsclient");
+	g_assert_cmpstr(gst_config_get_editor(config1), ==, "emacsclient");
+	gst_config_set_editor(config1, "emacsclient -t --alternate-editor=''");
 	assert_roundtrip_settings(config1);
 
 	/* Save to a new temp file */

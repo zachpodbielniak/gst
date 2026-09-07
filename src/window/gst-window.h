@@ -78,6 +78,24 @@ struct _GstWindowClass
 GType
 gst_window_get_type(void) G_GNUC_CONST;
 
+/**
+ * gst_window_emit_key_event:
+ * @self: a window
+ * @keyval: X11 keysym, or zero for composed text
+ * @base_keyval: unshifted X11 keysym for extended protocol encoding
+ * @keycode: physical key identifier, or zero if unavailable
+ * @state: X11 modifier mask
+ * @event_type: 1 press, 2 repeat, 3 release
+ * @text: (nullable): UTF-8 text
+ * @len: text length in bytes
+ *
+ * Offers the event to extended handlers, falling back to key-press for
+ * unhandled presses/repeats. Releases never become legacy presses.
+ */
+void
+gst_window_emit_key_event(GstWindow *self, guint keyval, guint base_keyval, guint keycode,
+	guint state, guint event_type, const gchar *text, gint len);
+
 void
 gst_window_show(GstWindow *self);
 

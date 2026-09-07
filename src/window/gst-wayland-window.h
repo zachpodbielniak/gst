@@ -94,6 +94,84 @@ gst_wayland_window_get_shm(GstWaylandWindow *self);
 gdouble
 gst_wayland_window_get_opacity(GstWaylandWindow *self);
 
+/**
+ * gst_wayland_scaled_size:
+ * @logical: positive logical extent
+ * @scale: scale in 120ths
+ *
+ * Returns: rounded-up buffer extent, or zero on invalid input/overflow
+ */
+gint
+gst_wayland_scaled_size(gint logical, guint scale);
+
+/**
+ * gst_wayland_window_get_scale:
+ * @self: a window
+ *
+ * Returns: effective buffer scale in 120ths
+ */
+guint
+gst_wayland_window_get_scale(GstWaylandWindow *self);
+
+/**
+ * gst_wayland_window_get_logical_size:
+ * @self: a window
+ * @width: (out) (optional): configured logical width
+ * @height: (out) (optional): configured logical height
+ *
+ * Retrieves libdecor content geometry, not backing-buffer pixels.
+ */
+void
+gst_wayland_window_get_logical_size(GstWaylandWindow *self, gint *width, gint *height);
+
+/**
+ * gst_wayland_window_prepare_surface:
+ * @self: a window
+ * @width: logical width
+ * @height: logical height
+ *
+ * Sets pending scale/viewport state immediately before attaching a buffer.
+ */
+void
+gst_wayland_window_prepare_surface(GstWaylandWindow *self, gint width, gint height);
+
+/**
+ * gst_wayland_window_set_text_input_enabled:
+ * @self: a window
+ * @enabled: whether terminal text input is allowed
+ *
+ * Opt in only after connecting text-commit and preedit-changed handlers.
+ * Focus enter/leave then enables/disables text-input-v3 automatically.
+ * No editable surrounding text is advertised: a PTY cannot implement deletion.
+ */
+void
+gst_wayland_window_set_text_input_enabled(GstWaylandWindow *self, gboolean enabled);
+
+/**
+ * gst_wayland_window_set_text_cursor:
+ * @self: a window
+ * @x: logical cursor x
+ * @y: logical cursor y
+ * @width: logical cursor width
+ * @height: logical cursor height
+ *
+ * Updates the IME candidate rectangle in surface coordinates.
+ */
+void
+gst_wayland_window_set_text_cursor(GstWaylandWindow *self,
+	gint x, gint y, gint width, gint height);
+
+/**
+ * gst_wayland_window_get_preedit:
+ * @self: a window
+ * @begin: (out) (optional): cursor start byte offset, or -1
+ * @end: (out) (optional): cursor end byte offset, or -1
+ *
+ * Returns: (transfer none): current UTF-8 preedit, never NULL
+ */
+const gchar *
+gst_wayland_window_get_preedit(GstWaylandWindow *self, gint *begin, gint *end);
+
 G_END_DECLS
 
 #endif /* GST_WAYLAND_WINDOW_H */

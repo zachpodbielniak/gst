@@ -395,6 +395,8 @@ As defense-in-depth, the PTY layer temporarily disables =ECHO= via =tcsetattr()=
 The following kitty graphics protocol features are not yet supported:
 
 - *Animation*: Frame management (=a=f=), animation control (=a=a=), composition mode (=a=c=)
-- *Unicode placeholders*: Virtual placement via U+10EEEE codepoints with =U=1= -- images track with text reflow
-- *Cell-based placement tracking*: Automatic cleanup when cells under a placement are overwritten by text
+- *Complete placeholder placement selection*: U+10EEEE virtual placements with =U=1= are supported in 0.4.7, but nonzero underline-color placement IDs are not.
+- *Complete ordinary placement tracking*: Overwrite cleanup and region scrolling are supported in 0.4.7; ordinary placement resize/reflow and scrollback anchoring remain incomplete.
 - *Shared memory object naming*: The =t=s= transfer path is gated by config but the actual shm_open logic is not implemented
+
+See [[file:../graphics-parity.org][Graphics and LRG Integration]] for 0.4.7 placeholder behavior, overwrite semantics, backend support and the complete current limitations.

@@ -19,6 +19,10 @@
 | =Ctrl+Shift+plus=      | =zoom_in=         | Increase font size           |
 | =Ctrl+Shift+minus=     | =zoom_out=        | Decrease font size           |
 | =Ctrl+Shift+0=         | =zoom_reset=      | Reset font size to default   |
+| =Ctrl+Shift+y=         | =copy-command-output= | Copy selected or latest completed command output |
+| =Ctrl+Shift+o=         | =export-command-output= | Open command output in the configured editor |
+
+Command-output actions require active =shell_integration= and OSC 133 command markers. Configure the waiting editor command with =terminal.editor= (default =emacsclient=); see [[file:history-workflows.org][history workflows]] for selection, retention and cleanup behavior.
 
 ** Default Mouse Bindings
 :PROPERTIES:
@@ -42,6 +46,8 @@ Some modules add their own keybindings. These are not part of the configurable k
 | =Ctrl+Shift+u=      | [[file:modules/urlclick.org][urlclick]]               | Open first detected URL         |
 | =Ctrl+Shift+e=      | [[file:modules/externalpipe.org][externalpipe]]       | Pipe screen to external command |
 | =Ctrl+Shift+Escape= | [[file:modules/keyboard-select.org][keyboard_select]] | Enter keyboard selection mode   |
+| =Ctrl+Shift+f= | =search= | Search retained history and live rows |
+| =Ctrl+Shift+Up/Down= | =shell_integration= | Select previous/next prompt |
 
 ** Available Actions
 :PROPERTIES:
@@ -63,6 +69,8 @@ These are all the actions you can bind to keys or mouse buttons:
 | =zoom_in=          | Increase font size                                 |
 | =zoom_out=         | Decrease font size                                 |
 | =zoom_reset=       | Reset font size to the configured default          |
+| =copy-command-output= | Copy selected or latest completed OSC 133 output |
+| =export-command-output= | Export completed OSC 133 output to =terminal.editor= |
 
 ** Customizing Keybindings
 :PROPERTIES:
@@ -88,6 +96,8 @@ keybinds:
   "Ctrl+Shift+plus": zoom_in
   "Ctrl+Shift+minus": zoom_out
   "Ctrl+Shift+0": zoom_reset
+  "Ctrl+Shift+y": copy-command-output
+  "Ctrl+Shift+o": export-command-output
 #+end_src
 
 Mouse bindings work the same way in the =mousebinds:= section:

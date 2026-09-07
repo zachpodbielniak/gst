@@ -90,8 +90,7 @@ collect_screen_text(void)
 
 		for (x = 0; x < cols; x++) {
 			GstGlyph *g;
-			gchar utf8_buf[6];
-			gint utf8_len;
+			gchar utf8_buf[7];
 
 			g = gst_line_get_glyph(line, x);
 			/* Wide padding uses rune zero, so test its attribute first. */
@@ -103,8 +102,7 @@ collect_screen_text(void)
 				continue;
 			}
 
-			utf8_len = g_unichar_to_utf8(g->rune, utf8_buf);
-			g_string_append_len(buf, utf8_buf, utf8_len);
+			g_string_append(buf, gst_glyph_get_text(g, utf8_buf));
 		}
 
 		g_string_append_c(buf, '\n');

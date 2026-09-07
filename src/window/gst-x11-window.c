@@ -55,6 +55,7 @@ struct _GstX11Window
 	/* Input method */
 	XIM xim;
 	XIC xic;
+	gboolean keys_down[256];
 
 	/* Selection */
 	Atom xtarget;          /* UTF8_STRING or XA_STRING */
@@ -109,27 +110,59 @@ on_x11_event(
 		case KeyPress:
 			{
 				XKeyEvent *ke = &ev.xkey;
-				KeySym ksym;
+				KeySym ksym = NoSymbol;
+				KeySym base_ksym;
+				XKeyEvent base_event;
 				gchar buf[64];
+				gchar *text = buf;
+				g_autofree gchar *expanded = NULL;
 				gint len;
 				Status status;
 
 				if (self->xic != NULL) {
-					len = XmbLookupString(self->xic, ke, buf,
-						(gint)sizeof(buf), &ksym, &status);
+					len = Xutf8LookupString(self->xic, ke, buf,
+						(gint)sizeof(buf) - 1, &ksym, &status);
+					if (status == XBufferOverflow && len > 0 && len < G_MAXINT) {
+						expanded = g_malloc((gsize)len + 1);
+						text = expanded;
+						len = Xutf8LookupString(self->xic, ke, text,
+							len, &ksym, &status);
+					}
+					if (status == XBufferOverflow || status == XLookupNone)
+						len = 0;
 				} else {
-					len = XLookupString(ke, buf, (gint)sizeof(buf),
+					len = XLookupString(ke, buf, (gint)sizeof(buf) - 1,
 						&ksym, NULL);
 				}
 
 				/* Null-terminate for signal emission */
-				if (len >= 0 && len < (gint)sizeof(buf)) {
-					buf[len] = '\0';
-				}
+				len = MAX(len, 0);
+				text[len] = '\0';
 
-				g_signal_emit_by_name(self, "key-press",
-					(guint)ksym, (guint)ke->state, buf, len);
+				/* Lookup without Shift/Lock retains the current layout modifiers. */
+				base_event = *ke;
+				base_event.state &= ~(ShiftMask | LockMask);
+				XLookupString(&base_event, NULL, 0, &base_ksym, NULL);
+				gst_window_emit_key_event(GST_WINDOW(self), (guint)ksym, (guint)base_ksym,
+					ke->keycode, (guint)ke->state,
+					self->keys_down[ke->keycode & 255] ? 2 : 1, text, len);
+				self->keys_down[ke->keycode & 255] = TRUE;
 			}
+			break;
+
+		case KeyRelease:
+			/* Traditional X autorepeat is a same-time release/press pair. */
+			if (XPending(self->display)) {
+				XEvent next;
+				XPeekEvent(self->display, &next);
+				if (next.type == KeyPress && next.xkey.keycode == ev.xkey.keycode &&
+				    next.xkey.time == ev.xkey.time)
+					break;
+			}
+			self->keys_down[ev.xkey.keycode & 255] = FALSE;
+			gst_window_emit_key_event(GST_WINDOW(self),
+				(guint)XLookupKeysym(&ev.xkey, 0), 0, ev.xkey.keycode,
+				ev.xkey.state, 3, NULL, 0);
 			break;
 
 		case ButtonPress:
@@ -171,6 +204,7 @@ on_x11_event(
 			if (ev.xfocus.mode == NotifyGrab) {
 				break;
 			}
+			memset(self->keys_down, 0, sizeof(self->keys_down));
 			if (self->xic != NULL) {
 				XUnsetICFocus(self->xic);
 			}

@@ -20,6 +20,7 @@
  */
 
 #include "gst-search-module.h"
+#include "../scrollback/gst-history.h"
 #include "../../src/module/gst-module-manager.h"
 #include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
@@ -50,7 +51,7 @@
 
 /*
  * SearchMatch:
- * @line_idx: terminal row index where the match occurs
+ * @line_idx: terminal-relative row, negative for saved history
  * @col_start: starting column of the match (inclusive)
  * @col_end: ending column of the match (exclusive)
  *
@@ -85,6 +86,9 @@ struct _GstSearchModule
 
 	gboolean  match_case;         /* case-sensitive matching */
 	gboolean  use_regex;          /* use GRegex instead of plain text */
+	gboolean  results_dirty;
+	gulong    contents_sig_id;
+	gulong    resize_sig_id;
 };
 
 /* Forward declarations for interface implementations */
@@ -101,6 +105,33 @@ G_DEFINE_TYPE_WITH_CODE(GstSearchModule, gst_search_module,
 		gst_search_module_overlay_init))
 
 /* ===== Internal helpers ===== */
+
+/* The optional-module boundary uses property introspection, not .so symbols. */
+static void
+search_set_active(GstSearchModule *self, gboolean active)
+{
+	if (self->active == active)
+		return;
+	self->active = active;
+	g_object_notify(G_OBJECT(self), "input-active");
+}
+
+/* Terminal mutations invalidate row offsets; viewport-only redraws do not
+ * need to scan the entire history again. */
+static void
+search_contents_changed(GstTerminal *term, gpointer data)
+{
+	(void)term;
+	((GstSearchModule *)data)->results_dirty = TRUE;
+}
+
+static void
+search_resized(GstTerminal *term, gint cols, gint rows, gpointer data)
+{
+	(void)cols;
+	(void)rows;
+	search_contents_changed(term, data);
+}
 
 /*
  * mark_all_dirty:
@@ -167,7 +198,7 @@ parse_hex_color(
  * perform_search:
  * @self: the search module
  *
- * Searches all visible terminal lines for the current query string.
+ * Searches saved history and live rows for the current query string.
  * Populates self->matches with SearchMatch entries for each hit.
  * Supports both plain text (case-insensitive by default) and
  * regex matching modes.
@@ -178,11 +209,15 @@ perform_search(GstSearchModule *self)
 	GstModuleManager *mgr;
 	GstTerminal *term;
 	gint rows;
-	gint cols;
+	gint history_count;
 	gint y;
+	GstModule *history;
+	const GstHistoryApi *api;
+	g_autofree gchar *pattern = NULL;
 	g_autoptr(GRegex) regex = NULL;
 
 	/* Clear previous results */
+	self->results_dirty = FALSE;
 	g_array_set_size(self->matches, 0);
 	self->current_match_idx = -1;
 
@@ -197,10 +232,15 @@ perform_search(GstSearchModule *self)
 		return;
 	}
 
-	gst_terminal_get_size(term, &cols, &rows);
+	rows = gst_terminal_get_rows(term);
+	api = gst_history_lookup(&history);
+	history_count = api != NULL ? api->count(history) : 0;
+	if (gst_terminal_is_altscreen(term))
+		history_count = 0;
 
-	/* Compile regex if in regex mode */
-	if (self->use_regex) {
+	/* Escaped literals use the same original-byte offsets as regex matches;
+	 * caseless matching must not map offsets in a case-converted string. */
+	{
 		GRegexCompileFlags flags;
 		GError *err = NULL;
 
@@ -209,7 +249,9 @@ perform_search(GstSearchModule *self)
 			flags |= G_REGEX_CASELESS;
 		}
 
-		regex = g_regex_new(self->query->str, flags, 0, &err);
+		pattern = self->use_regex ? g_strdup(self->query->str) :
+			g_regex_escape_string(self->query->str, -1);
+		regex = g_regex_new(pattern, flags, 0, &err);
 		if (regex == NULL) {
 			g_debug("search: invalid regex '%s': %s",
 				self->query->str,
@@ -219,18 +261,20 @@ perform_search(GstSearchModule *self)
 		}
 	}
 
-	/* Search each visible line */
-	for (y = 0; y < rows; y++) {
+	/* Oldest retained row first; cap result storage for broad patterns. */
+	for (y = -history_count; y < rows && self->matches->len < 100000; y++) {
 		g_autofree gchar *text = NULL;
-		GstLine *line;
+		const GstLine *line;
+		g_autoptr(GArray) starts = g_array_new(FALSE, FALSE, sizeof(gint));
+		g_autoptr(GArray) ends = g_array_new(FALSE, FALSE, sizeof(gint));
 		gint text_len;
 
-		line = gst_terminal_get_line(term, y);
+		line = gst_history_line(term, y);
 		if (line == NULL) {
 			continue;
 		}
 
-		text = gst_line_to_string(line);
+		text = gst_history_line_text(line, starts, ends);
 		if (text == NULL) {
 			continue;
 		}
@@ -240,32 +284,30 @@ perform_search(GstSearchModule *self)
 			continue;
 		}
 
-		if (self->use_regex && regex != NULL) {
+		{
 			/*
 			 * Regex matching: iterate over all matches in the line.
 			 * GMatchInfo provides byte offsets; we convert them to
-			 * column positions by counting UTF-8 characters.
+			 * column positions using the cell maps, including wide/cluster cells.
 			 */
 			GMatchInfo *match_info = NULL;
 
 			g_regex_match(regex, text, 0, &match_info);
-			while (g_match_info_matches(match_info)) {
+			while (g_match_info_matches(match_info) && self->matches->len < 100000) {
 				gint start_byte;
 				gint end_byte;
 				SearchMatch m;
 
 				if (g_match_info_fetch_pos(match_info, 0,
-					&start_byte, &end_byte))
+					&start_byte, &end_byte) && end_byte > start_byte)
 				{
 					/*
 					 * Convert byte offsets to column positions.
-					 * Count UTF-8 characters up to each offset.
+					 * Include every cell touched by a nonempty match.
 					 */
 					m.line_idx = y;
-					m.col_start = (gint)g_utf8_pointer_to_offset(
-						text, text + start_byte);
-					m.col_end = (gint)g_utf8_pointer_to_offset(
-						text, text + end_byte);
+					m.col_start = g_array_index(starts, gint, start_byte);
+					m.col_end = g_array_index(ends, gint, end_byte - 1);
 					g_array_append_val(self->matches, m);
 				}
 
@@ -273,58 +315,6 @@ perform_search(GstSearchModule *self)
 			}
 
 			g_match_info_free(match_info);
-		} else {
-			/*
-			 * Plain text matching: scan the line for all
-			 * occurrences of the query string.
-			 */
-			const gchar *haystack;
-			const gchar *needle;
-			g_autofree gchar *lower_text = NULL;
-			g_autofree gchar *lower_query = NULL;
-
-			if (self->match_case) {
-				haystack = text;
-				needle = self->query->str;
-			} else {
-				lower_text = g_utf8_strdown(text, -1);
-				lower_query = g_utf8_strdown(self->query->str, -1);
-				haystack = lower_text;
-				needle = lower_query;
-			}
-
-			{
-				const gchar *pos;
-				gint needle_len;
-
-				needle_len = (gint)strlen(needle);
-				pos = haystack;
-
-				while ((pos = g_strstr_len(pos, -1, needle)) != NULL) {
-					SearchMatch m;
-					gint byte_start;
-					gint byte_end;
-
-					byte_start = (gint)(pos - haystack);
-					byte_end = byte_start + needle_len;
-
-					/*
-					 * Convert byte offsets to column positions
-					 * using the original text for correct UTF-8
-					 * character counting.
-					 */
-					m.line_idx = y;
-					m.col_start = (gint)g_utf8_pointer_to_offset(
-						haystack, haystack + byte_start);
-					m.col_end = (gint)g_utf8_pointer_to_offset(
-						haystack, haystack + byte_end);
-
-					g_array_append_val(self->matches, m);
-
-					/* Advance past this match to find the next */
-					pos = g_utf8_next_char(pos);
-				}
-			}
 		}
 	}
 
@@ -363,6 +353,17 @@ navigate_match(
 		self->current_match_idx = count - 1;
 	}
 
+	{
+		GstModule *history;
+		const GstHistoryApi *api;
+		GstTerminal *term;
+
+		api = gst_history_lookup(&history);
+		term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+		if (api != NULL && term != NULL && !gst_terminal_is_altscreen(term))
+			api->set_offset(history, -g_array_index(self->matches,
+				SearchMatch, self->current_match_idx).line_idx);
+	}
 	mark_all_dirty();
 }
 
@@ -405,11 +406,11 @@ gst_search_module_handle_key_event(
 
 	/* Toggle activation: Ctrl+Shift+f */
 	if (!self->active) {
-		if (keyval == XK_f &&
-			(clean_state & (ControlMask | ShiftMask)) ==
+		if ((keyval == XK_f || keyval == XK_F) &&
+			clean_state ==
 			(ControlMask | ShiftMask))
 		{
-			self->active = TRUE;
+			search_set_active(self, TRUE);
 			g_string_truncate(self->query, 0);
 			g_array_set_size(self->matches, 0);
 			self->current_match_idx = -1;
@@ -426,7 +427,7 @@ gst_search_module_handle_key_event(
 
 	/* Escape: deactivate search */
 	if (keyval == XK_Escape) {
-		self->active = FALSE;
+		search_set_active(self, FALSE);
 		g_string_truncate(self->query, 0);
 		g_array_set_size(self->matches, 0);
 		self->current_match_idx = -1;
@@ -437,6 +438,9 @@ gst_search_module_handle_key_event(
 
 	/* Enter: navigate matches */
 	if (keyval == XK_Return || keyval == XK_KP_Enter) {
+		gint previous = self->current_match_idx;
+		perform_search(self);
+		self->current_match_idx = MIN(previous, (gint)self->matches->len - 1);
 		if (clean_state & ShiftMask) {
 			navigate_match(self, -1);
 		} else {
@@ -466,6 +470,7 @@ gst_search_module_handle_key_event(
 			}
 
 			perform_search(self);
+			navigate_match(self, 0);
 			mark_all_dirty();
 		}
 		return TRUE;
@@ -505,9 +510,12 @@ gst_search_module_handle_key_event(
 			gint utf8_len;
 
 			utf8_len = g_unichar_to_utf8(uc, utf8_buf);
+			if (self->query->len + (gsize)utf8_len > GST_SEARCH_MAX_QUERY_LEN)
+				return TRUE;
 			g_string_append_len(self->query, utf8_buf, utf8_len);
 
 			perform_search(self);
+			navigate_match(self, 0);
 			mark_all_dirty();
 		}
 	}
@@ -573,6 +581,9 @@ gst_search_module_render(
 	gint text_x;
 	gint q_len;
 	gint q_idx;
+	gint offset;
+	GstModule *history;
+	const GstHistoryApi *api;
 
 	self = GST_SEARCH_MODULE(overlay);
 
@@ -581,6 +592,19 @@ gst_search_module_render(
 	}
 
 	ctx = (GstRenderContext *)render_context;
+	/* Recompute before painting: output/eviction may have invalidated rows. */
+	if (self->results_dirty) {
+		gint previous = self->current_match_idx;
+		perform_search(self);
+		self->current_match_idx = MIN(MAX(previous, 0), (gint)self->matches->len - 1);
+	}
+	api = gst_history_lookup(&history);
+	offset = api != NULL ? api->offset(history) : 0;
+	{
+		GstTerminal *term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+		if (term != NULL && gst_terminal_is_altscreen(term))
+			offset = 0;
+	}
 
 	/* ===== Draw match highlight rectangles ===== */
 
@@ -591,9 +615,12 @@ gst_search_module_render(
 		gint pw;
 
 		m = &g_array_index(self->matches, SearchMatch, i);
+		if (m->line_idx + offset < 0 ||
+			(ctx->borderpx + (m->line_idx + offset) * ctx->ch) >= height)
+			continue;
 
 		px = ctx->borderpx + m->col_start * ctx->cw;
-		py = ctx->borderpx + m->line_idx * ctx->ch;
+		py = ctx->borderpx + (m->line_idx + offset) * ctx->ch;
 		pw = (m->col_end - m->col_start) * ctx->cw;
 
 		if ((gint)i == self->current_match_idx) {
@@ -731,13 +758,22 @@ static gboolean
 gst_search_module_activate(GstModule *module)
 {
 	GstSearchModule *self;
+	GstTerminal *term;
 
 	self = GST_SEARCH_MODULE(module);
 
-	self->active = FALSE;
+	search_set_active(self, FALSE);
 	g_string_truncate(self->query, 0);
 	g_array_set_size(self->matches, 0);
 	self->current_match_idx = -1;
+	self->results_dirty = TRUE;
+	term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+	if (term != NULL) {
+		self->contents_sig_id = g_signal_connect_object(term, "contents-changed",
+			G_CALLBACK(search_contents_changed), self, 0);
+		self->resize_sig_id = g_signal_connect_object(term, "resize",
+			G_CALLBACK(search_resized), self, 0);
+	}
 
 	g_debug("search: activated");
 	return TRUE;
@@ -752,13 +788,24 @@ static void
 gst_search_module_deactivate(GstModule *module)
 {
 	GstSearchModule *self;
+	GstTerminal *term;
 
 	self = GST_SEARCH_MODULE(module);
+	term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+	if (term != NULL) {
+		if (self->contents_sig_id != 0)
+			g_signal_handler_disconnect(term, self->contents_sig_id);
+		if (self->resize_sig_id != 0)
+			g_signal_handler_disconnect(term, self->resize_sig_id);
+	}
+	self->contents_sig_id = 0;
+	self->resize_sig_id = 0;
 
-	self->active = FALSE;
+	search_set_active(self, FALSE);
 	g_string_truncate(self->query, 0);
 	g_array_set_size(self->matches, 0);
 	self->current_match_idx = -1;
+	mark_all_dirty();
 
 	g_debug("search: deactivated");
 }
@@ -855,6 +902,7 @@ gst_search_module_dispose(GObject *object)
 	self = GST_SEARCH_MODULE(object);
 
 	if (self->query != NULL) {
+		gst_search_module_deactivate(GST_MODULE(self));
 		g_string_free(self->query, TRUE);
 		self->query = NULL;
 	}
@@ -868,6 +916,17 @@ gst_search_module_dispose(GObject *object)
 }
 
 static void
+gst_search_module_get_property(GObject *object, guint prop_id,
+	GValue *value, GParamSpec *pspec)
+{
+	/* Read-only modal state is distinct from GstModule activation. */
+	if (prop_id == 1)
+		g_value_set_boolean(value, GST_SEARCH_MODULE(object)->active);
+	else
+		G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
+}
+
+static void
 gst_search_module_class_init(GstSearchModuleClass *klass)
 {
 	GObjectClass *object_class;
@@ -875,6 +934,16 @@ gst_search_module_class_init(GstSearchModuleClass *klass)
 
 	object_class = G_OBJECT_CLASS(klass);
 	object_class->dispose = gst_search_module_dispose;
+	object_class->get_property = gst_search_module_get_property;
+	/**
+	 * GstSearchModule:input-active:
+	 *
+	 * Whether search currently owns keyboard input. Notifications also cover
+	 * direct module deactivation; consumers need not link search symbols.
+	 */
+	g_object_class_install_property(object_class, 1,
+		g_param_spec_boolean("input-active", "Input active", "Search owns keyboard input",
+			FALSE, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
 	module_class = GST_MODULE_CLASS(klass);
 	module_class->get_name = gst_search_module_get_name;

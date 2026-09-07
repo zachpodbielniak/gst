@@ -183,6 +183,24 @@ gst_cairo_font_cache_load_spare_fonts(
 	const gchar *const      *fonts
 );
 
+/**
+ * gst_cairo_font_cache_draw_cluster:
+ * @self: font cache
+ * @cr: Cairo target with resolved source color and cell clip installed
+ * @text: complete UTF-8 cluster
+ * @style: font style
+ * @x: pixel origin
+ * @baseline: pixel baseline
+ *
+ * Shapes the complete cluster using HarfBuzz and a fontconfig coverage match.
+ * The caller retains control of colors, background, clipping and cell advance.
+ *
+ * Returns: whether a font was available and drawing was attempted
+ */
+gboolean gst_cairo_font_cache_draw_cluster(GstCairoFontCache *self,
+	cairo_t *cr, const gchar *text, GstFontStyle style,
+	gdouble x, gdouble baseline);
+
 G_END_DECLS
 
 #endif /* GST_CAIRO_FONT_CACHE_H */

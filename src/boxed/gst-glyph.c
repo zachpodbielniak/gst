@@ -9,6 +9,7 @@
  */
 
 #include "gst-glyph.h"
+#include <string.h>
 
 G_DEFINE_BOXED_TYPE(GstGlyph, gst_glyph, gst_glyph_copy, gst_glyph_free)
 
@@ -38,6 +39,9 @@ gst_glyph_new(
     glyph->attr = attr;
     glyph->fg = fg;
     glyph->bg = bg;
+	glyph->cluster = NULL;
+	glyph->cluster_len = 0;
+	glyph->cluster_capacity = 0;
 
     return glyph;
 }
@@ -78,6 +82,9 @@ gst_glyph_copy(const GstGlyph *glyph)
     copy->attr = glyph->attr;
     copy->fg = glyph->fg;
     copy->bg = glyph->bg;
+	copy->cluster = g_strdup(glyph->cluster);
+	copy->cluster_len = copy->cluster != NULL ? strlen(copy->cluster) : 0;
+	copy->cluster_capacity = copy->cluster != NULL ? copy->cluster_len + 1 : 0;
 
     return copy;
 }
@@ -92,6 +99,7 @@ void
 gst_glyph_free(GstGlyph *glyph)
 {
     if (glyph != NULL) {
+		gst_glyph_clear(glyph);
         g_slice_free(GstGlyph, glyph);
     }
 }
@@ -122,7 +130,8 @@ gst_glyph_equal(
     return (a->rune == b->rune &&
             a->attr == b->attr &&
             a->fg == b->fg &&
-            a->bg == b->bg);
+            a->bg == b->bg &&
+			g_strcmp0(a->cluster, b->cluster) == 0);
 }
 
 /**
@@ -140,8 +149,8 @@ gst_glyph_is_empty(const GstGlyph *glyph)
 {
     g_return_val_if_fail(glyph != NULL, TRUE);
 
-    return (glyph->rune == ' ' ||
-            glyph->rune == '\0' ||
+    return ((glyph->cluster == NULL && (glyph->rune == ' ' ||
+            glyph->rune == '\0')) ||
             (glyph->attr & GST_GLYPH_ATTR_WDUMMY));
 }
 
@@ -246,8 +255,67 @@ gst_glyph_reset(GstGlyph *glyph)
 {
     g_return_if_fail(glyph != NULL);
 
+	gst_glyph_clear(glyph);
     glyph->rune = ' ';
     glyph->attr = GST_GLYPH_ATTR_NONE;
     glyph->fg = GST_COLOR_DEFAULT_FG;
     glyph->bg = GST_COLOR_DEFAULT_BG;
+}
+
+void
+gst_glyph_clear(GstGlyph *glyph)
+{
+	g_clear_pointer(&glyph->cluster, g_free);
+	glyph->cluster_len = 0;
+	glyph->cluster_capacity = 0;
+}
+
+void
+gst_glyph_assign(GstGlyph *dest, const GstGlyph *src)
+{
+	gchar *text;
+
+	/* Duplicate first: source may be the destination itself. */
+	text = g_strdup(src->cluster);
+	gst_glyph_clear(dest);
+	*dest = *src;
+	dest->cluster = text;
+	dest->cluster_len = text != NULL ? strlen(text) : 0;
+	dest->cluster_capacity = text != NULL ? dest->cluster_len + 1 : 0;
+}
+
+const gchar *
+gst_glyph_get_text(const GstGlyph *glyph, gchar *buffer)
+{
+	if (glyph->attr & GST_GLYPH_ATTR_WDUMMY) {
+		return "";
+	}
+	if (glyph->cluster != NULL) {
+		return glyph->cluster;
+	}
+	buffer[g_unichar_to_utf8(glyph->rune, buffer)] = '\0';
+	return buffer;
+}
+
+void
+gst_glyph_append(GstGlyph *glyph, GstRune rune)
+{
+	gchar suffix[7];
+	gsize length, needed;
+
+	/* Geometric growth keeps unbounded combining runs amortized linear. */
+	length = (gsize)g_unichar_to_utf8(rune, suffix);
+	if (glyph->cluster == NULL) {
+		glyph->cluster_capacity = 32;
+		glyph->cluster = g_malloc(glyph->cluster_capacity);
+		glyph->cluster_len = (gsize)g_unichar_to_utf8(glyph->rune, glyph->cluster);
+	}
+	needed = glyph->cluster_len + length + 1;
+	if (needed > glyph->cluster_capacity) {
+		glyph->cluster_capacity = MAX(needed, glyph->cluster_capacity * 2);
+		glyph->cluster = g_realloc(glyph->cluster, glyph->cluster_capacity);
+	}
+	memcpy(glyph->cluster + glyph->cluster_len, suffix, length);
+	glyph->cluster_len += length;
+	glyph->cluster[glyph->cluster_len] = '\0';
 }

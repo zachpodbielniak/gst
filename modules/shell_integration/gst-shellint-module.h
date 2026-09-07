@@ -41,6 +41,16 @@ G_DECLARE_FINAL_TYPE(GstShellintModule, gst_shellint_module,
 G_MODULE_EXPORT GType
 gst_module_register(void);
 
+gchar *
+gst_shellint_module_dup_output(GstShellintModule *self, GError **error);
+
+gboolean
+gst_shellint_module_copy_output(GstShellintModule *self, GError **error);
+
+gboolean
+gst_shellint_module_export_output(GstShellintModule *self,
+	const gchar *editor, GError **error);
+
 G_END_DECLS
 
 #endif /* GST_SHELLINT_MODULE_H */

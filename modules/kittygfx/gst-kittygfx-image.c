@@ -55,6 +55,31 @@ placement_free(gpointer data)
 	g_free(data);
 }
 
+/* Explicit placement IDs replace rather than accumulate. Anonymous puts
+ * remain independent. Reusing storage also resets all placement metadata. */
+static GstImagePlacement *
+new_placement(GstKittyImageCache *cache, guint32 image_id, guint32 placement_id)
+{
+	GList *l;
+	GstImagePlacement *pl;
+
+	for (l = cache->placements; placement_id != 0 && l != NULL; l = l->next) {
+		pl = (GstImagePlacement *)l->data;
+		if (pl->image_id == image_id && pl->placement_id == placement_id) {
+			memset(pl, 0, sizeof(*pl));
+			return pl;
+		}
+	}
+	if ((gint)g_list_length(cache->placements) >= cache->max_placements &&
+	    cache->placements != NULL) {
+		placement_free(cache->placements->data);
+		cache->placements = g_list_delete_link(cache->placements, cache->placements);
+	}
+	pl = g_new0(GstImagePlacement, 1);
+	cache->placements = g_list_append(cache->placements, pl);
+	return pl;
+}
+
 /*
  * evict_lru:
  *
@@ -302,6 +327,20 @@ finalize_upload(
 		previous = g_hash_table_lookup(cache->images,
 			GUINT_TO_POINTER(upload->image_id));
 		if (previous != NULL) {
+			GList *l;
+			GList *next;
+
+			/* A fresh transmission invalidates placements of the old image. */
+			for (l = cache->placements; l != NULL; l = next) {
+				GstImagePlacement *pl;
+
+				next = l->next;
+				pl = (GstImagePlacement *)l->data;
+				if (pl->image_id == upload->image_id) {
+					placement_free(pl);
+					cache->placements = g_list_delete_link(cache->placements, l);
+				}
+			}
 			cache->total_ram -= previous->data_size;
 			g_hash_table_remove(cache->images,
 				GUINT_TO_POINTER(upload->image_id));
@@ -456,6 +495,7 @@ handle_transmit(
 		upload->y_offset = cmd->y_offset;
 		upload->z_index = cmd->z_index;
 		upload->cursor_movement = cmd->cursor_movement;
+		upload->virtual_placement = cmd->virtual_placement;
 
 		g_hash_table_insert(cache->uploads,
 			GUINT_TO_POINTER(img_id), upload);
@@ -516,20 +556,7 @@ handle_transmit(
 		if (saved.action == 'T') {
 			GstImagePlacement *pl;
 
-			if ((gint)g_list_length(cache->placements) >=
-			    cache->max_placements) {
-				/* Remove oldest placement */
-				GList *first;
-
-				first = g_list_first(cache->placements);
-				if (first != NULL) {
-					placement_free(first->data);
-					cache->placements = g_list_delete_link(
-						cache->placements, first);
-				}
-			}
-
-			pl = g_new0(GstImagePlacement, 1);
+			pl = new_placement(cache, img_id, saved.placement_id);
 			pl->image_id = img_id;
 			pl->placement_id = saved.placement_id;
 			pl->col = cursor_col;
@@ -543,9 +570,7 @@ handle_transmit(
 			pl->x_offset = saved.x_offset;
 			pl->y_offset = saved.y_offset;
 			pl->z_index = saved.z_index;
-
-			cache->placements = g_list_append(
-				cache->placements, pl);
+			pl->virtual_placement = saved.virtual_placement != 0;
 		}
 
 		/* q=0 sends OK; q=1 and q=2 suppress it */
@@ -586,18 +611,7 @@ handle_display(
 		return TRUE;
 	}
 
-	if ((gint)g_list_length(cache->placements) >= cache->max_placements) {
-		GList *first;
-
-		first = g_list_first(cache->placements);
-		if (first != NULL) {
-			placement_free(first->data);
-			cache->placements = g_list_delete_link(
-				cache->placements, first);
-		}
-	}
-
-	pl = g_new0(GstImagePlacement, 1);
+	pl = new_placement(cache, cmd->image_id, cmd->placement_id);
 	pl->image_id = cmd->image_id;
 	pl->placement_id = cmd->placement_id;
 	pl->col = cursor_col;
@@ -611,8 +625,7 @@ handle_display(
 	pl->x_offset = cmd->x_offset;
 	pl->y_offset = cmd->y_offset;
 	pl->z_index = cmd->z_index;
-
-	cache->placements = g_list_append(cache->placements, pl);
+	pl->virtual_placement = cmd->virtual_placement != 0;
 
 	/* q=0 sends OK; q=1 and q=2 suppress it */
 	if (response != NULL && cmd->quiet == 0) {
@@ -658,11 +671,11 @@ placement_intersects_cell(
 	gint               col,
 	gint               row
 ){
-	gint end_col;
-	gint end_row;
+	gint64 end_col;
+	gint64 end_row;
 
-	end_col = pl->col + ((pl->dst_cols > 0) ? pl->dst_cols : 1);
-	end_row = pl->row + ((pl->dst_rows > 0) ? pl->dst_rows : 1);
+	end_col = (gint64)pl->col + MAX(pl->dst_cols, 1);
+	end_row = (gint64)pl->row + MAX(pl->dst_rows, 1);
 
 	return (col >= pl->col && col < end_col &&
 	        row >= pl->row && row < end_row);
@@ -735,6 +748,10 @@ delete_placements_matching(
 		next = l->next;
 		pl = (GstImagePlacement *)l->data;
 
+		if (pl->virtual_placement && cmd->delete_target != 'i' &&
+		    cmd->delete_target != 'I') {
+			continue;
+		}
 		if (match_fn(pl, cmd, cursor_col, cursor_row)) {
 			if (free_orphans) {
 				/* Track image id for orphan check */
@@ -813,13 +830,13 @@ match_at_column(GstImagePlacement *pl, GstGraphicsCommand *cmd,
                 gint cursor_col, gint cursor_row)
 {
 	gint col;
-	gint end_col;
+	gint64 end_col;
 
 	(void)cursor_col; (void)cursor_row;
 
 	/* x key is 1-indexed */
 	col = (cmd->src_x > 0) ? cmd->src_x - 1 : 0;
-	end_col = pl->col + ((pl->dst_cols > 0) ? pl->dst_cols : 1);
+	end_col = (gint64)pl->col + MAX(pl->dst_cols, 1);
 
 	return (col >= pl->col && col < end_col);
 }
@@ -829,13 +846,13 @@ match_at_row(GstImagePlacement *pl, GstGraphicsCommand *cmd,
              gint cursor_col, gint cursor_row)
 {
 	gint row;
-	gint end_row;
+	gint64 end_row;
 
 	(void)cursor_col; (void)cursor_row;
 
 	/* y key is 1-indexed */
 	row = (cmd->src_y > 0) ? cmd->src_y - 1 : 0;
-	end_row = pl->row + ((pl->dst_rows > 0) ? pl->dst_rows : 1);
+	end_row = (gint64)pl->row + MAX(pl->dst_rows, 1);
 
 	return (row >= pl->row && row < end_row);
 }
@@ -888,18 +905,34 @@ handle_delete(
 	}
 
 	is_upper = (cmd->delete_target >= 'A' && cmd->delete_target <= 'Z');
+	/* Any deletion aborts an incomplete transfer, including anonymous chunks. */
+	g_hash_table_remove_all(cache->uploads);
+	cache->last_image_id = 0;
 
 	switch (cmd->delete_target) {
 	case 'a':
 	case 'A':
-		/* Delete all placements */
-		g_list_free_full(cache->placements, placement_free);
-		cache->placements = NULL;
+		{
+			GList *l;
+			GList *next;
 
-		if (is_upper) {
-			/* Free all image data */
-			g_hash_table_remove_all(cache->images);
-			cache->total_ram = 0;
+			/* Location-based deletion must not destroy virtual prototypes. */
+			for (l = cache->placements; l != NULL; l = next) {
+				GstImagePlacement *pl;
+				guint32 image_id;
+
+				next = l->next;
+				pl = (GstImagePlacement *)l->data;
+				if (pl->virtual_placement) {
+					continue;
+				}
+				image_id = pl->image_id;
+				placement_free(pl);
+				cache->placements = g_list_delete_link(cache->placements, l);
+				if (is_upper) {
+					maybe_free_orphan_image(cache, image_id);
+				}
+			}
 		}
 		break;
 
@@ -1149,6 +1182,14 @@ gst_kitty_image_cache_process(
 	if (response != NULL) {
 		*response = NULL;
 	}
+	if (cmd->virtual_placement < 0 || cmd->virtual_placement > 1 ||
+	    (cmd->virtual_placement && (cmd->dst_cols <= 0 || cmd->dst_rows <= 0))) {
+		if (response != NULL && cmd->quiet != 2) {
+			*response = build_response(cmd->image_id, cmd->placement_id,
+				cmd->image_number, "EINVAL:virtual placement requires positive c and r");
+		}
+		return TRUE;
+	}
 
 	switch (cmd->action) {
 	case 't':
@@ -1165,6 +1206,16 @@ gst_kitty_image_cache_process(
 
 	case 'd':
 		return handle_delete(cache, cmd, cursor_col, cursor_row, response);
+
+	case 'f':
+	case 'a':
+	case 'c':
+		/* Do not silently acknowledge unsupported animation operations. */
+		if (response != NULL && cmd->quiet != 2) {
+			*response = build_response(cmd->image_id, cmd->placement_id,
+				cmd->image_number, "ENOTSUP:animation is not supported");
+		}
+		return TRUE;
 
 	default:
 		/* Unknown action - ignore */
@@ -1244,7 +1295,8 @@ gst_kitty_image_cache_get_visible_placements(
 		pl = (GstImagePlacement *)l->data;
 
 		/* Check if placement is in visible range */
-		if (pl->row >= top_row && pl->row <= bottom_row) {
+		if (!pl->virtual_placement && pl->row <= bottom_row &&
+		    (pl->dst_rows <= 0 || (gint64)pl->row + pl->dst_rows > top_row)) {
 			result = g_list_prepend(result, pl);
 		}
 	}
@@ -1274,7 +1326,10 @@ gst_kitty_image_cache_scroll(
 
 		next = l->next;
 		pl = (GstImagePlacement *)l->data;
-		pl->row -= amount;
+		if (pl->virtual_placement) {
+			continue;
+		}
+		pl->row = (gint)CLAMP((gint64)pl->row - amount, G_MININT, G_MAXINT);
 
 		/* Remove placements scrolled way off top */
 		if (pl->row < -1000) {
@@ -1294,6 +1349,55 @@ gst_kitty_image_cache_scroll(
 void
 gst_kitty_image_cache_clear_alt(GstKittyImageCache *cache)
 {
-	g_list_free_full(cache->placements, placement_free);
-	cache->placements = NULL;
+	gst_kitty_image_cache_erase(cache, G_MININT, G_MININT, G_MAXINT, G_MAXINT);
+}
+
+void
+gst_kitty_image_cache_erase(GstKittyImageCache *cache,
+	gint x1, gint y1, gint x2, gint y2)
+{
+	GList *l;
+	GList *next;
+
+	/* Delete intersecting ordinary placements, retaining decoded image data. */
+	for (l = cache->placements; l != NULL; l = next) {
+		GstImagePlacement *pl;
+
+		next = l->next;
+		pl = (GstImagePlacement *)l->data;
+		if (!pl->virtual_placement && pl->col <= x2 && pl->row <= y2 &&
+		    (gint64)pl->col + MAX(pl->dst_cols, 1) > x1 &&
+		    (gint64)pl->row + MAX(pl->dst_rows, 1) > y1) {
+			placement_free(pl);
+			cache->placements = g_list_delete_link(cache->placements, l);
+		}
+	}
+}
+
+void
+gst_kitty_image_cache_scroll_region(GstKittyImageCache *cache,
+	gint top, gint bottom, gint amount)
+{
+	GList *l;
+	GList *next;
+
+	/* Region scrolling leaves fixed content above/below the margins alone. */
+	for (l = cache->placements; l != NULL; l = next) {
+		GstImagePlacement *pl;
+		gint64 row;
+
+		next = l->next;
+		pl = (GstImagePlacement *)l->data;
+		if (pl->virtual_placement || pl->row > bottom ||
+		    (gint64)pl->row + MAX(pl->dst_rows, 1) <= top) {
+			continue;
+		}
+		row = (gint64)pl->row - amount;
+		if (row > bottom || row + MAX(pl->dst_rows, 1) <= top) {
+			placement_free(pl);
+			cache->placements = g_list_delete_link(cache->placements, l);
+		} else {
+			pl->row = (gint)row;
+		}
+	}
 }

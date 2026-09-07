@@ -55,6 +55,7 @@ typedef struct
 	gint     x_offset;    /* pixel offset within cell */
 	gint     y_offset;    /* pixel offset within cell */
 	gint32   z_index;     /* layer order */
+	gboolean virtual_placement; /* Invisible prototype for text placeholders. */
 } GstImagePlacement;
 
 /*
@@ -88,6 +89,7 @@ typedef struct
 	gint        y_offset;     /* 'Y' value: pixel offset y */
 	gint32      z_index;      /* 'z' value: z-layer */
 	gint        cursor_movement; /* 'C' value: cursor movement */
+	gint        virtual_placement;
 } GstKittyUpload;
 
 /*
@@ -216,6 +218,35 @@ gst_kitty_image_cache_scroll(
  */
 void
 gst_kitty_image_cache_clear_alt(GstKittyImageCache *cache);
+
+/**
+ * gst_kitty_image_cache_erase:
+ * @cache: image cache
+ * @x1: first overwritten column
+ * @y1: first overwritten row
+ * @x2: last overwritten column, inclusive
+ * @y2: last overwritten row, inclusive
+ *
+ * Removes ordinary placements intersecting overwritten cells. Prototypes and
+ * image data survive so Unicode placeholders are governed solely by text.
+ */
+void
+gst_kitty_image_cache_erase(GstKittyImageCache *cache,
+	gint x1, gint y1, gint x2, gint y2);
+
+/**
+ * gst_kitty_image_cache_scroll_region:
+ * @cache: image cache
+ * @top: first row in scrolling region
+ * @bottom: last row in scrolling region
+ * @amount: rows moved upward (negative for downward)
+ *
+ * Moves ordinary placement origins in the region and removes placements
+ * wholly outside it. Unicode prototypes do not have screen coordinates.
+ */
+void
+gst_kitty_image_cache_scroll_region(GstKittyImageCache *cache,
+	gint top, gint bottom, gint amount);
 
 G_END_DECLS
 

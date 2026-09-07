@@ -15,6 +15,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <X11/keysym.h>
+#include <X11/XF86keysym.h>
+#include <pango/pango.h>
 
 /* ===== Macros and constants ===== */
 
@@ -24,6 +26,10 @@
 
 /* Size of CSI buffer */
 #define CSI_BUF_SIZ    (256)
+
+/* Alternate-key reporting needs layout metadata not supplied by the driver. */
+#define GST_KEYBOARD_SUPPORTED_FLAGS (1u | 2u | 8u | 16u)
+#define GST_KEYBOARD_STACK_SIZE (32)
 
 /* Size of string escape buffer (OSC, DCS, etc.) initial alloc */
 #define STR_BUF_SIZ    (256)
@@ -61,9 +67,14 @@ struct _GstTerminalPrivate {
 	GstCursor cursor;
 	GstCursor saved_cursors[2];  /* [0]=primary, [1]=alt */
 	gboolean saved_cursor_valid[2];
+	gboolean saved_cursor_reflowed[2];
 
 	/* Mode flags */
 	GstTermMode mode;
+	/* Independent bounded stacks; depth counts saved states, not current state. */
+	guint keyboard_flags[2];
+	guint keyboard_stack[2][GST_KEYBOARD_STACK_SIZE];
+	guint keyboard_depth[2];
 
 	/* Escape state (bit flags) */
 	guint esc;
@@ -103,6 +114,10 @@ struct _GstTerminalPrivate {
 
 	/* Last printed character (for REP) */
 	GstRune lastc;
+	GstGlyph last_glyph;
+	gint cluster_x;
+	gint cluster_y;
+	gboolean cluster_valid;
 
 	/* Partial UTF-8 sequence saved across write() boundaries */
 	guchar utf8_partial[4];
@@ -135,6 +150,8 @@ enum {
 	SIGNAL_RESPONSE,
 	SIGNAL_LINE_SCROLLED_OUT,
 	SIGNAL_ESCAPE_STRING,
+	SIGNAL_REGION_ERASED,
+	SIGNAL_REGION_SCROLLED,
 	N_SIGNALS
 };
 
@@ -274,6 +291,37 @@ gst_terminal_class_init(GstTerminalClass *klass)
 	    "escape-string", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
 	    0, NULL, NULL, NULL,
 	    G_TYPE_NONE, 3, G_TYPE_CHAR, G_TYPE_STRING, G_TYPE_ULONG);
+
+	/**
+	 * GstTerminal::region-erased:
+	 * @term: the terminal
+	 * @x1: first column, inclusive
+	 * @y1: first row, inclusive
+	 * @x2: last column, inclusive
+	 * @y2: last row, inclusive
+	 *
+	 * Cells being overwritten or destroyed on the active screen. Coordinates
+	 * are zero-based. Wide-cell repair is included; redraws are not erasures.
+	 */
+	signals[SIGNAL_REGION_ERASED] = g_signal_new(
+	    "region-erased", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	    0, NULL, NULL, NULL, G_TYPE_NONE, 4,
+	    G_TYPE_INT, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT);
+
+	/**
+	 * GstTerminal::region-scrolled:
+	 * @term: the terminal
+	 * @top: first row, inclusive
+	 * @bottom: last row, inclusive
+	 * @amount: positive for upward scrolling, negative for downward
+	 *
+	 * Moves graphics before newly exposed rows emit region-erased. Retained
+	 * rows are moved, not erased. Coordinates are zero-based.
+	 */
+	signals[SIGNAL_REGION_SCROLLED] = g_signal_new(
+	    "region-scrolled", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+	    0, NULL, NULL, NULL, G_TYPE_NONE, 3,
+	    G_TYPE_INT, G_TYPE_INT, G_TYPE_INT);
 }
 
 static void
@@ -341,6 +389,10 @@ gst_terminal_finalize(GObject *object)
 	g_free(priv->icon);
 	g_free(priv->tabs);
 	g_free(priv->str_buf);
+	gst_glyph_clear(&priv->last_glyph);
+	gst_glyph_clear(&priv->cursor.glyph);
+	gst_glyph_clear(&priv->saved_cursors[0].glyph);
+	gst_glyph_clear(&priv->saved_cursors[1].glyph);
 
 	G_OBJECT_CLASS(gst_terminal_parent_class)->finalize(object);
 }
@@ -514,6 +566,176 @@ gst_terminal_new(
 
 /* ===== Dimensions ===== */
 
+/* Repack only soft-wrapped primary paragraphs; hard line breaks survive. */
+static GstLine **
+term_reflow_primary(GstTerminal *term, gint cols, gint rows)
+{
+	GstTerminalPrivate *priv;
+	GPtrArray *packed;
+	GstLine **screen;
+	GstLine *out;
+	GstCursor *cursors[3];
+	GstCursor cluster_cursor = { 0 };
+	gint mapped_x[3];
+	gint mapped_y[3];
+	gint last_row;
+	gint y, x, end, pos, width, k, drop;
+	gboolean wrapped;
+
+	priv = term->priv;
+	cursors[0] = (priv->mode & GST_MODE_ALTSCREEN) ? NULL : &priv->cursor;
+	cursors[1] = priv->saved_cursor_valid[0] ? &priv->saved_cursors[0] : NULL;
+	cluster_cursor.x = priv->cluster_x;
+	cluster_cursor.y = priv->cluster_y;
+	cursors[2] = priv->cluster_valid && cursors[0] != NULL ? &cluster_cursor : NULL;
+	for (k = 0; k < 3; k++) {
+		mapped_x[k] = 0;
+		mapped_y[k] = 0;
+	}
+	/* Remove unused bottom padding, never content or cursor-bearing rows. */
+	last_row = priv->rows - 1;
+	while (last_row > 0) {
+		GstLine *line;
+		gboolean used;
+
+		line = priv->primary[last_row];
+		used = line->used > 0;
+		for (x = 0; x < line->len; x++) {
+			GstGlyph *g = &line->glyphs[x];
+			if (!gst_glyph_is_empty(g) || g->attr != 0 ||
+			    g->bg != GST_COLOR_DEFAULT_BG || g->fg != GST_COLOR_DEFAULT_FG) {
+				used = TRUE;
+				break;
+			}
+		}
+		for (k = 0; k < 3; k++) {
+			if (cursors[k] != NULL && cursors[k]->y >= last_row) {
+				used = TRUE;
+			}
+		}
+		if (used || gst_line_is_wrapped(priv->primary[last_row - 1])) {
+			break;
+		}
+		last_row--;
+	}
+	packed = g_ptr_array_new();
+	out = gst_line_new(cols);
+	g_ptr_array_add(packed, out);
+	pos = 0;
+	for (y = 0; y <= last_row; y++) {
+		GstLine *line = priv->primary[y];
+
+		wrapped = gst_line_is_wrapped(line) ||
+		    (line->glyphs[line->len - 1].attr & GST_GLYPH_ATTR_WRAP);
+		end = line->len;
+		if (!wrapped) {
+			while (end > 0) {
+				GstGlyph *g = &line->glyphs[end - 1];
+				if (!gst_glyph_is_empty(g) || g->attr != 0 ||
+				    g->bg != GST_COLOR_DEFAULT_BG || g->fg != GST_COLOR_DEFAULT_FG) {
+					break;
+				}
+				end--;
+			}
+			end = MAX(end, line->used);
+		}
+		for (k = 0; k < 3; k++) {
+			if (cursors[k] != NULL && cursors[k]->y == y) {
+				end = MAX(end, cursors[k]->x +
+				    ((cursors[k]->state & GST_CURSOR_STATE_WRAPNEXT) ? 1 : 0));
+			}
+		}
+		for (x = 0; x <= end; x++) {
+			GstGlyph *g;
+
+			g = x < end ? &line->glyphs[x] : NULL;
+			width = g != NULL && (g->attr & GST_GLYPH_ATTR_WIDE) ? MIN(2, cols) : 1;
+			if (g != NULL && (g->attr & GST_GLYPH_ATTR_WDUMMY)) {
+				continue;
+			}
+			/* Padding has an insertion anchor but consumes no paragraph cells. */
+			if (g != NULL && g->rune == 0 && (g->attr & GST_GLYPH_ATTR_WRAP)) {
+				width = 0;
+			}
+			if (g != NULL && pos + width > cols) {
+				gst_line_set_wrapped(out, TRUE);
+				out->glyphs[cols - 1].attr |= GST_GLYPH_ATTR_WRAP;
+				if (pos < cols) {
+					out->glyphs[pos].rune = 0;
+				}
+				out = gst_line_new(cols);
+				g_ptr_array_add(packed, out);
+				pos = 0;
+			}
+			for (k = 0; k < 3; k++) {
+				gint anchor;
+
+				if (cursors[k] == NULL || cursors[k]->y != y) {
+					continue;
+				}
+				anchor = cursors[k]->x +
+				    ((cursors[k]->state & GST_CURSOR_STATE_WRAPNEXT) ? 1 : 0);
+				if (anchor == x || (g != NULL && (g->attr & GST_GLYPH_ATTR_WIDE) &&
+				    x + 1 < line->len && anchor == x + 1)) {
+					mapped_x[k] = pos + MIN(anchor - x, MAX(width - 1, 0));
+					mapped_y[k] = (gint)packed->len - 1;
+				}
+			}
+			if (g == NULL) {
+				break;
+			}
+			if (width == 0) {
+				continue;
+			}
+			gst_glyph_assign(&out->glyphs[pos], g);
+			out->glyphs[pos].attr &= ~GST_GLYPH_ATTR_WRAP;
+			if (width == 2) {
+				out->glyphs[pos + 1].rune = 0;
+				out->glyphs[pos + 1].attr = GST_GLYPH_ATTR_WDUMMY;
+				out->glyphs[pos + 1].fg = g->fg;
+				out->glyphs[pos + 1].bg = g->bg;
+			}
+			pos += width;
+			out->used = pos;
+		}
+		if (!wrapped && y < last_row) {
+			out = gst_line_new(cols);
+			g_ptr_array_add(packed, out);
+			pos = 0;
+		}
+	}
+	drop = MAX(0, (gint)packed->len - rows);
+	/* Signal arguments describe the new-width line, not the old grid. */
+	for (y = 0; y < drop; y++) {
+		out = (GstLine *)g_ptr_array_index(packed, y);
+		g_signal_emit(term, signals[SIGNAL_LINE_SCROLLED_OUT], 0, out, cols);
+		gst_line_free(out);
+	}
+	screen = g_new(GstLine *, rows);
+	for (y = 0; y < rows; y++) {
+		screen[y] = y + drop < (gint)packed->len
+		    ? (GstLine *)g_ptr_array_index(packed, y + drop) : gst_line_new(cols);
+	}
+	for (k = 0; k < 3; k++) {
+		if (cursors[k] != NULL) {
+			cursors[k]->x = MIN(mapped_x[k], cols - 1);
+			cursors[k]->y = CLAMP(mapped_y[k] - drop, 0, rows - 1);
+			cursors[k]->state &= ~GST_CURSOR_STATE_WRAPNEXT;
+			if (mapped_x[k] == cols && (priv->mode & GST_MODE_WRAP)) {
+				cursors[k]->state |= GST_CURSOR_STATE_WRAPNEXT;
+			}
+		}
+	}
+	priv->cluster_valid = cursors[2] != NULL && mapped_y[2] >= drop;
+	if (cursors[1] != NULL) {
+		priv->saved_cursor_reflowed[0] = TRUE;
+	}
+	priv->cluster_x = cluster_cursor.x;
+	priv->cluster_y = cluster_cursor.y;
+	g_ptr_array_free(packed, TRUE);
+	return screen;
+}
+
 void
 gst_terminal_resize(
     GstTerminal *term,
@@ -525,6 +747,7 @@ gst_terminal_resize(
 	GstLine **new_alt;
 	gint copy_rows;
 	gint i;
+	gint x;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	g_return_if_fail(cols > 0 && cols <= GST_MAX_COLS);
@@ -538,19 +761,23 @@ gst_terminal_resize(
 
 	gst_terminal_init_screen(term);
 
-	new_primary = gst_terminal_alloc_screen(cols, rows);
+	new_primary = term_reflow_primary(term, cols, rows);
 	new_alt = gst_terminal_alloc_screen(cols, rows);
 
 	copy_rows = MIN(priv->rows, rows);
 
 	for (i = 0; i < copy_rows; i++) {
-		gst_line_free(new_primary[i]);
-		new_primary[i] = gst_line_copy(priv->primary[i]);
-		gst_line_resize(new_primary[i], cols);
-
 		gst_line_free(new_alt[i]);
 		new_alt[i] = gst_line_copy(priv->alt[i]);
 		gst_line_resize(new_alt[i], cols);
+		/* Alternate is a fixed grid: no logical reflow or history. */
+		gst_line_set_wrapped(new_alt[i], FALSE);
+		for (x = 0; x < cols; x++) {
+			new_alt[i]->glyphs[x].attr &= ~GST_GLYPH_ATTR_WRAP;
+		}
+		if (new_alt[i]->glyphs[cols - 1].attr & GST_GLYPH_ATTR_WIDE) {
+			gst_glyph_reset(&new_alt[i]->glyphs[cols - 1]);
+		}
 	}
 
 	gst_terminal_free_screen(priv->primary, priv->rows);
@@ -567,6 +794,12 @@ gst_terminal_resize(
 
 	priv->cursor.x = MIN(priv->cursor.x, cols - 1);
 	priv->cursor.y = MIN(priv->cursor.y, rows - 1);
+	if (priv->mode & GST_MODE_ALTSCREEN) {
+		priv->cursor.state &= ~GST_CURSOR_STATE_WRAPNEXT;
+	}
+	priv->saved_cursors[1].x = MIN(priv->saved_cursors[1].x, cols - 1);
+	priv->saved_cursors[1].y = MIN(priv->saved_cursors[1].y, rows - 1);
+	priv->saved_cursors[1].state &= ~GST_CURSOR_STATE_WRAPNEXT;
 
 	g_free(priv->tabs);
 	priv->tabs = g_new0(gboolean, cols);
@@ -631,6 +864,7 @@ gst_terminal_move_to(
 	}
 
 	priv->cursor.state &= ~GST_CURSOR_STATE_WRAPNEXT;
+	priv->cluster_valid = FALSE;
 	priv->cursor.x = CLAMP(x, 0, priv->cols - 1);
 	priv->cursor.y = CLAMP(y, miny, maxy);
 }
@@ -667,6 +901,7 @@ gst_terminal_set_cursor_pos(
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
 	priv->cursor.x = CLAMP(x, 0, priv->cols - 1);
+	priv->cluster_valid = FALSE;
 	priv->cursor.y = CLAMP(y, 0, priv->rows - 1);
 	priv->cursor.state &= ~GST_CURSOR_STATE_WRAPNEXT;
 }
@@ -688,8 +923,9 @@ gst_terminal_cursor_save(GstTerminal *term)
 	priv = term->priv;
 
 	idx = (priv->mode & GST_MODE_ALTSCREEN) ? 1 : 0;
-	priv->saved_cursors[idx] = priv->cursor;
+	gst_cursor_restore(&priv->saved_cursors[idx], &priv->cursor);
 	priv->saved_cursor_valid[idx] = TRUE;
+	priv->saved_cursor_reflowed[idx] = FALSE;
 }
 
 void
@@ -703,13 +939,16 @@ gst_terminal_cursor_restore(GstTerminal *term)
 
 	idx = (priv->mode & GST_MODE_ALTSCREEN) ? 1 : 0;
 	if (priv->saved_cursor_valid[idx]) {
-		priv->cursor = priv->saved_cursors[idx];
-		/*
-		 * move_to clamps position and clears WRAPNEXT.
-		 * This matches st: tmoveto() is the final call in
-		 * tcursor(CURSOR_LOAD), so WRAPNEXT is always cleared.
-		 */
+		gboolean pending = priv->saved_cursor_reflowed[idx] &&
+		    (priv->saved_cursors[idx].state & GST_CURSOR_STATE_WRAPNEXT) != 0;
+
+		gst_cursor_restore(&priv->cursor, &priv->saved_cursors[idx]);
+		/* Reflow can map an insertion point exactly onto the new right edge.
+		 * Do not turn that saved insertion point into an overwrite on restore. */
 		gst_terminal_move_to(term, priv->cursor.x, priv->cursor.y);
+		if (pending && priv->cursor.x == priv->cols - 1 && (priv->mode & GST_MODE_WRAP)) {
+			priv->cursor.state |= GST_CURSOR_STATE_WRAPNEXT;
+		}
 	}
 }
 
@@ -770,7 +1009,8 @@ gst_terminal_line_len(
 
 	/* Find last non-space */
 	i = line->len;
-	while (i > 0 && line->glyphs[i - 1].rune == ' ') {
+	while (i > 0 && line->glyphs[i - 1].rune == ' ' &&
+	       line->glyphs[i - 1].cluster == NULL) {
 		i--;
 	}
 	return i;
@@ -813,8 +1053,10 @@ gst_terminal_set_mode(
 		gst_terminal_swap_screen(term);
 	}
 
-	if (old_mode != priv->mode) {
-		g_signal_emit(term, signals[SIGNAL_MODE_CHANGED], 0, mode, enable);
+	/* ALTSCREEN was already reported by swap_screen, exactly once. */
+	if ((old_mode ^ priv->mode) & ~GST_MODE_ALTSCREEN) {
+		g_signal_emit(term, signals[SIGNAL_MODE_CHANGED], 0,
+		    mode & ~GST_MODE_ALTSCREEN, enable);
 	}
 }
 
@@ -831,13 +1073,10 @@ void
 gst_terminal_swap_screen(GstTerminal *term)
 {
 	GstTerminalPrivate *priv;
-	GstLine **tmp;
 
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
 	gst_terminal_init_screen(term);
-
-	tmp = priv->screen;
 
 	if (priv->screen == priv->primary) {
 		priv->screen = priv->alt;
@@ -845,11 +1084,13 @@ gst_terminal_swap_screen(GstTerminal *term)
 		priv->screen = priv->primary;
 	}
 
-	/* Clear what was the inactive screen (now active) */
+	/* Switching buffers is not a text erasure. */
 	priv->mode ^= GST_MODE_ALTSCREEN;
+	priv->cluster_valid = FALSE;
 	priv->dirty = TRUE;
 	gst_terminal_mark_dirty(term, -1);
-	(void)tmp;
+	g_signal_emit(term, signals[SIGNAL_MODE_CHANGED], 0,
+	    GST_MODE_ALTSCREEN, (priv->mode & GST_MODE_ALTSCREEN) != 0);
 }
 
 /* ===== Screen Manipulation ===== */
@@ -865,6 +1106,13 @@ gst_terminal_reset(
 	g_return_if_fail(GST_IS_TERMINAL(term));
 	priv = term->priv;
 
+	if (priv->mode & GST_MODE_ALTSCREEN) {
+		gst_terminal_swap_screen(term);
+	}
+	memset(priv->keyboard_flags, 0, sizeof(priv->keyboard_flags));
+	memset(priv->keyboard_depth, 0, sizeof(priv->keyboard_depth));
+	memset(priv->saved_cursor_reflowed, 0, sizeof(priv->saved_cursor_reflowed));
+
 	priv->cursor.x = 0;
 	priv->cursor.y = 0;
 	priv->cursor.state = GST_CURSOR_STATE_VISIBLE;
@@ -876,6 +1124,8 @@ gst_terminal_reset(
 	/* No input bytes or repeat character survive a terminal reset. */
 	priv->utf8_partial_len = 0;
 	priv->lastc = 0;
+	gst_glyph_reset(&priv->last_glyph);
+	priv->cluster_valid = FALSE;
 	priv->scroll_top = 0;
 	priv->scroll_bot = priv->rows - 1;
 
@@ -890,6 +1140,8 @@ gst_terminal_reset(
 	priv->saved_cursor_valid[1] = FALSE;
 
 	gst_terminal_init_screen(term);
+	gst_cursor_reset(&priv->saved_cursors[0]);
+	gst_cursor_reset(&priv->saved_cursors[1]);
 	priv->screen = priv->primary;
 
 	/* Reset tabs */
@@ -902,6 +1154,8 @@ gst_terminal_reset(
 
 	if (full) {
 		/* Clear both screens */
+		g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+		    0, 0, priv->cols - 1, priv->rows - 1);
 		for (i = 0; i < priv->rows; i++) {
 			gst_line_clear(priv->primary[i]);
 			gst_line_clear(priv->alt[i]);
@@ -952,9 +1206,29 @@ gst_terminal_clear_region(
 	blank.attr = 0;
 	blank.fg = priv->cursor.glyph.fg;
 	blank.bg = priv->cursor.glyph.bg;
+	blank.cluster = NULL;
+	blank.cluster_len = 0;
+	blank.cluster_capacity = 0;
+	priv->cluster_valid = FALSE;
 	for (y = y1; y <= y2; y++) {
-		for (x = x1; x <= x2; x++) {
+		gint start, end, used;
+
+		start = x1;
+		end = x2;
+		used = priv->screen[y]->used;
+		if (start > 0 && (priv->screen[y]->glyphs[start].attr & GST_GLYPH_ATTR_WDUMMY)) {
+			start--;
+		}
+		if (end + 1 < priv->cols && (priv->screen[y]->glyphs[end].attr & GST_GLYPH_ATTR_WIDE)) {
+			end++;
+		}
+		g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0, start, y, end, y);
+		for (x = start; x <= end; x++) {
 			gst_line_set_glyph(priv->screen[y], x, &blank);
+		}
+		priv->screen[y]->used = end + 1 >= used ? MIN(used, start) : used;
+		if (end == priv->cols - 1) {
+			gst_line_set_wrapped(priv->screen[y], FALSE);
 		}
 	}
 	priv->dirty = TRUE;
@@ -980,7 +1254,9 @@ gst_terminal_scroll_up(
 	n = MIN(n, priv->scroll_bot - orig + 1);
 
 	/* Emit line-scrolled-out for lines about to be overwritten */
-	if (orig == priv->scroll_top)
+	if (orig == 0 && priv->scroll_top == 0 &&
+	    priv->scroll_bot == priv->rows - 1 &&
+	    !(priv->mode & GST_MODE_ALTSCREEN))
 	{
 		for (i = orig; i < orig + n; i++)
 		{
@@ -990,6 +1266,8 @@ gst_terminal_scroll_up(
 	}
 
 	/* Rotate lines up within the scroll region */
+	g_signal_emit(term, signals[SIGNAL_REGION_SCROLLED], 0,
+	    orig, priv->scroll_bot, n);
 	for (i = orig; i <= priv->scroll_bot - n; i++) {
 		tmp = priv->screen[i];
 		priv->screen[i] = priv->screen[i + n];
@@ -1026,6 +1304,8 @@ gst_terminal_scroll_down(
 	orig = CLAMP(orig, priv->scroll_top, priv->scroll_bot);
 	n = MIN(n, priv->scroll_bot - orig + 1);
 
+	g_signal_emit(term, signals[SIGNAL_REGION_SCROLLED], 0,
+	    orig, priv->scroll_bot, -n);
 	for (i = priv->scroll_bot; i >= orig + n; i--) {
 		tmp = priv->screen[i];
 		priv->screen[i] = priv->screen[i - n];
@@ -1078,6 +1358,11 @@ gst_terminal_insert_blanks(
 	if (n == 0) {
 		return;
 	}
+	/* Shifting text destroys ordinary screen-coordinate placements. */
+	g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+	    priv->cursor.x > 0 && (priv->screen[priv->cursor.y]->glyphs[priv->cursor.x].attr & GST_GLYPH_ATTR_WDUMMY)
+	        ? priv->cursor.x - 1 : priv->cursor.x,
+	    priv->cursor.y, priv->cols - 1, priv->cursor.y);
 	gst_line_insert_blanks(priv->screen[priv->cursor.y], priv->cursor.x, n);
 	gst_terminal_clear_region(term, priv->cursor.x, priv->cursor.y,
 	    priv->cursor.x + n - 1, priv->cursor.y);
@@ -1098,6 +1383,10 @@ gst_terminal_delete_chars(
 	if (n == 0) {
 		return;
 	}
+	g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+	    priv->cursor.x > 0 && (priv->screen[priv->cursor.y]->glyphs[priv->cursor.x].attr & GST_GLYPH_ATTR_WDUMMY)
+	        ? priv->cursor.x - 1 : priv->cursor.x,
+	    priv->cursor.y, priv->cols - 1, priv->cursor.y);
 	gst_line_delete_chars(priv->screen[priv->cursor.y], priv->cursor.x, n);
 	gst_terminal_clear_region(term, priv->cols - n, priv->cursor.y,
 	    priv->cols - 1, priv->cursor.y);
@@ -1146,6 +1435,7 @@ gst_terminal_put_tab(
 	gst_terminal_init_screen(term);
 
 	x = priv->cursor.x;
+	priv->cluster_valid = FALSE;
 
 	if (n > 0) {
 		while (x < priv->cols && n--) {
@@ -1369,11 +1659,15 @@ term_setchar(
 	}
 
 	/* Handle wide character cleanup */
+	g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+	    x > 0 && (g->attr & GST_GLYPH_ATTR_WDUMMY) ? x - 1 : x, y,
+	    x + 1 < priv->cols && (g->attr & GST_GLYPH_ATTR_WIDE) ? x + 1 : x, y);
 	if (g->attr & GST_GLYPH_ATTR_WIDE) {
 		/* Current cell is wide; blank the dummy cell */
 		if (x + 1 < priv->cols) {
 			GstGlyph *next = gst_line_get_glyph(line, x + 1);
 			if (next != NULL) {
+				gst_glyph_clear(next);
 				next->rune = ' ';
 				next->attr &= ~GST_GLYPH_ATTR_WDUMMY;
 			}
@@ -1383,6 +1677,7 @@ term_setchar(
 		if (x > 0) {
 			GstGlyph *prev = gst_line_get_glyph(line, x - 1);
 			if (prev != NULL) {
+				gst_glyph_clear(prev);
 				prev->rune = ' ';
 				prev->attr &= ~GST_GLYPH_ATTR_WIDE;
 			}
@@ -1390,7 +1685,9 @@ term_setchar(
 	}
 
 	gst_line_set_dirty(line, TRUE);
+	line->used = MAX(line->used, x + 1);
 
+	gst_glyph_clear(g);
 	g->rune = u;
 	g->attr = attr->attr;
 	g->fg = attr->fg;
@@ -1662,12 +1959,6 @@ term_setmode(
 				{
 					gboolean is_alt = (priv->mode & GST_MODE_ALTSCREEN) != 0;
 					/*
-					 * 1049: save/restore cursor BEFORE swap.
-					 * Matches st: tcursor() runs before tswapscreen().
-					 * On set: save to primary slot (idx=0).
-					 * On reset: restore from alt slot (idx=1).
-					 */
-					/*
 					 * 1049: save cursor BEFORE swap (on enter),
 					 * restore AFTER swap (on exit). The cursor
 					 * slot is indexed by ALTSCREEN state, so
@@ -1780,6 +2071,79 @@ term_csihandle(GstTerminal *term)
 {
 	GstTerminalPrivate *priv = term->priv;
 	gchar cmd;
+
+	/* Parse Kitty commands separately: plain CSI u remains DECRC. Reject
+	 * malformed/overflowing parameters rather than partially changing state. */
+	if (priv->csi_len >= 2 && priv->csi_buf[priv->csi_len - 1] == 'u' &&
+	    strchr("?><=", priv->csi_buf[0]) != NULL) {
+		guint values[2] = { 0, 0 };
+		guint field = 0;
+		guint idx = (priv->mode & GST_MODE_ALTSCREEN) ? 1 : 0;
+		guint *depth = &priv->keyboard_depth[idx];
+		guint *flags = &priv->keyboard_flags[idx];
+		gsize pos;
+		gchar prefix = priv->csi_buf[0];
+
+		if (prefix == '?') {
+			if (priv->csi_len == 2) {
+				gchar reply[32];
+
+				g_snprintf(reply, sizeof(reply), "\033[?%uu", *flags);
+				term_response(term, reply, -1);
+			}
+			return;
+		}
+		for (pos = 1; pos + 1 < priv->csi_len; pos++) {
+			gchar c = priv->csi_buf[pos];
+
+			if (c == ';' && prefix == '=' && field == 0) {
+				field++;
+			} else if (c >= '0' && c <= '9') {
+				guint digit = (guint)(c - '0');
+
+				if (values[field] > (G_MAXUINT - digit) / 10) {
+					return;
+				}
+				values[field] = values[field] * 10 + digit;
+			} else {
+				return;
+			}
+		}
+		if (prefix == '<') {
+			guint count = DEFAULT(values[0], 1);
+
+			if (count > *depth) {
+				*depth = 0;
+				*flags = 0;
+			} else {
+				*depth -= count;
+				*flags = priv->keyboard_stack[idx][*depth];
+			}
+		} else if (prefix == '>') {
+			if (*depth == GST_KEYBOARD_STACK_SIZE) {
+				memmove(priv->keyboard_stack[idx], priv->keyboard_stack[idx] + 1,
+				    (GST_KEYBOARD_STACK_SIZE - 1) * sizeof(guint));
+				(*depth)--;
+			}
+			priv->keyboard_stack[idx][(*depth)++] = *flags;
+			*flags = values[0] & GST_KEYBOARD_SUPPORTED_FLAGS;
+		} else {
+			switch (DEFAULT(values[1], 1)) {
+			case 1:
+				*flags = values[0] & GST_KEYBOARD_SUPPORTED_FLAGS;
+				break;
+			case 2:
+				*flags |= values[0] & GST_KEYBOARD_SUPPORTED_FLAGS;
+				break;
+			case 3:
+				*flags &= ~values[0];
+				break;
+			default:
+				break;
+			}
+		}
+		return;
+	}
 
 	term_csiparse(term);
 	cmd = priv->csi_mode[0];
@@ -1911,7 +2275,7 @@ term_csihandle(GstTerminal *term)
 
 	case 'X': /* ECH - Erase Character */
 		gst_terminal_clear_region(term, priv->cursor.x, priv->cursor.y,
-		    priv->cursor.x + DEFAULT(priv->csi_args[0], 1) - 1,
+		    priv->cursor.x + MIN(DEFAULT(priv->csi_args[0], 1), priv->cols - priv->cursor.x) - 1,
 		    priv->cursor.y);
 		break;
 
@@ -1922,8 +2286,19 @@ term_csihandle(GstTerminal *term)
 	case 'b': /* REP - Repeat previous character */
 		if (priv->lastc != 0) {
 			gint count = DEFAULT(priv->csi_args[0], 1);
+			g_autofree gchar *text = g_strdup(priv->last_glyph.cluster);
+			GstRune first = priv->lastc;
+			const gchar *p;
+
 			while (count-- > 0) {
-				gst_terminal_put_char(term, priv->lastc);
+				priv->cluster_valid = FALSE;
+				if (text != NULL) {
+					for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+						gst_terminal_put_char(term, g_utf8_get_char(p));
+					}
+				} else {
+					gst_terminal_put_char(term, first);
+				}
 			}
 		}
 		break;
@@ -2539,6 +2914,48 @@ term_controlcode(
 
 /* ===== Main Character Input (tputc equivalent) ===== */
 
+/* Pango supplies Unicode grapheme boundaries, including emoji and Indic rules. */
+static gboolean
+term_cluster_joins(const GstGlyph *glyph, GstRune rune)
+{
+	gchar buffer[7];
+	gchar suffix[7];
+	g_autofree gchar *text = NULL;
+	PangoLogAttr *attrs;
+	glong length;
+	gboolean joins;
+	GUnicodeType type;
+	GstRune last;
+
+	/* Common ASCII output needs no allocation or boundary analysis. */
+	if (glyph->cluster == NULL && glyph->rune < 0x7f && rune < 0x7f) {
+		return FALSE;
+	}
+	/* GB9 extends non-control graphemes with nonspacing/enclosing marks.
+	 * Avoid reanalyzing the entire growing string for every such mark. */
+	type = g_unichar_type(rune);
+	if (type == G_UNICODE_NON_SPACING_MARK || type == G_UNICODE_ENCLOSING_MARK) {
+		last = glyph->cluster != NULL
+		    ? g_utf8_get_char(g_utf8_find_prev_char(glyph->cluster,
+		        glyph->cluster + glyph->cluster_len)) : glyph->rune;
+		type = g_unichar_type(last);
+		if ((type != G_UNICODE_CONTROL && type != G_UNICODE_FORMAT &&
+		     type != G_UNICODE_LINE_SEPARATOR && type != G_UNICODE_PARAGRAPH_SEPARATOR) ||
+		    last == 0x200c || last == 0x200d) {
+			return TRUE;
+		}
+	}
+	suffix[g_unichar_to_utf8(rune, suffix)] = '\0';
+	text = g_strconcat(gst_glyph_get_text(glyph, buffer), suffix, NULL);
+	length = g_utf8_strlen(text, -1);
+	attrs = g_new0(PangoLogAttr, (gsize)length + 1);
+	pango_get_log_attrs(text, -1, 0, pango_language_from_string("und"),
+	    attrs, (gint)length + 1);
+	joins = !attrs[length - 1].is_cursor_position;
+	g_free(attrs);
+	return joins;
+}
+
 void
 gst_terminal_put_char(
     GstTerminal *term,
@@ -2620,6 +3037,7 @@ gst_terminal_put_char(
 
 	/* Handle control characters (< 0x20, 0x7f, or C1 0x80-0x9f) */
 	if (ISCONTROL(rune)) {
+		priv->cluster_valid = FALSE;
 		term_controlcode(term, (guchar)rune);
 		/* Control chars don't modify lastc */
 		return;
@@ -2659,6 +3077,9 @@ gst_terminal_put_char(
 	/*
 	 * Normal character output
 	 */
+	if (!g_unichar_validate(rune)) {
+		rune = 0xfffd;
+	}
 
 	/*
 	 * Get Unicode width via wcwidth (through gst_wcwidth).
@@ -2672,25 +3093,75 @@ gst_terminal_put_char(
 		width = 1;
 	}
 
-	/*
-	 * Combining character: overlay on previous cell without
-	 * advancing the cursor. Matches st's tputc behavior where
-	 * wcwidth()==0 chars are composed onto the preceding glyph.
-	 */
-	if (width == 0) {
-		if (priv->cursor.x > 0) {
-			GstGlyph *prev = gst_terminal_get_glyph(term,
-			    priv->cursor.x - 1, priv->cursor.y);
-			if (prev != NULL) {
-				prev->rune = rune;
+	if (priv->cluster_valid) {
+		GstGlyph *prev;
+		gboolean promote;
+
+		prev = gst_terminal_get_glyph(term, priv->cluster_x, priv->cluster_y);
+		if (prev != NULL && term_cluster_joins(prev, rune)) {
+			promote = !(prev->attr & GST_GLYPH_ATTR_WIDE) &&
+			    (rune == 0xfe0f || rune == 0x20e3 || width == 2 ||
+			     BETWEEN(rune, 0x1f1e6, 0x1f1ff));
+			g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+			    priv->cluster_x, priv->cluster_y,
+			    MIN(priv->cluster_x + ((prev->attr & GST_GLYPH_ATTR_WIDE) ? 1 : 0), priv->cols - 1),
+			    priv->cluster_y);
+			gst_glyph_append(prev, rune);
+			if (promote && priv->cols == 1) {
+				prev->attr |= GST_GLYPH_ATTR_WIDE;
 			}
-			line = priv->screen[priv->cursor.y];
-			if (line != NULL) {
-				gst_line_set_dirty(line, TRUE);
+			if (promote && priv->cols > 1) {
+				if (priv->cluster_x == priv->cols - 1 &&
+				    (priv->mode & GST_MODE_WRAP)) {
+					GstGlyph moved = GST_GLYPH_INIT;
+
+					gst_glyph_assign(&moved, prev);
+					gst_glyph_reset(prev);
+					prev->rune = 0; /* wrap padding, not a logical space */
+					prev->attr = GST_GLYPH_ATTR_WRAP;
+					priv->screen[priv->cluster_y]->used = priv->cluster_x;
+					gst_line_set_wrapped(priv->screen[priv->cluster_y], TRUE);
+					gst_terminal_newline(term, TRUE);
+					priv->cluster_x = 0;
+					priv->cluster_y = priv->cursor.y;
+					prev = gst_terminal_get_glyph(term, 0, priv->cursor.y);
+					term_setchar(term, 0, &priv->cursor.glyph, 0, priv->cursor.y);
+					gst_glyph_assign(prev, &moved);
+					gst_glyph_clear(&moved);
+				}
+				if (priv->cluster_x + 1 < priv->cols) {
+					GstGlyph *dummy;
+
+					prev->attr |= GST_GLYPH_ATTR_WIDE;
+					dummy = gst_terminal_get_glyph(term, priv->cluster_x + 1, priv->cluster_y);
+					/* Clear an old wide occupant beyond the new dummy as well. */
+					g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+					    priv->cluster_x, priv->cluster_y,
+					    MIN(priv->cluster_x + ((dummy->attr & GST_GLYPH_ATTR_WIDE) ? 2 : 1), priv->cols - 1),
+					    priv->cluster_y);
+					if ((dummy->attr & GST_GLYPH_ATTR_WIDE) && priv->cluster_x + 2 < priv->cols) {
+						gst_glyph_reset(gst_terminal_get_glyph(term, priv->cluster_x + 2, priv->cluster_y));
+					}
+					gst_glyph_reset(dummy);
+					dummy->rune = 0;
+					dummy->attr = GST_GLYPH_ATTR_WDUMMY;
+					priv->screen[priv->cluster_y]->used = MAX(
+					    priv->screen[priv->cluster_y]->used, priv->cluster_x + 2);
+					priv->cursor.x = MIN(priv->cluster_x + 2, priv->cols - 1);
+					priv->cursor.state &= ~GST_CURSOR_STATE_WRAPNEXT;
+					if (priv->cluster_x + 2 >= priv->cols && (priv->mode & GST_MODE_WRAP)) {
+						priv->cursor.state |= GST_CURSOR_STATE_WRAPNEXT;
+					}
+				}
 			}
+			priv->cluster_valid = TRUE;
+			gst_glyph_append(&priv->last_glyph, rune);
+			gst_terminal_mark_dirty(term, priv->cluster_y);
+			return;
 		}
-		return;
 	}
+	/* Preserve unattached zero-width scalars in a cell rather than dropping them. */
+	width = MAX(width, 1);
 
 	/* Handle WRAPNEXT state */
 	if (priv->cursor.state & GST_CURSOR_STATE_WRAPNEXT) {
@@ -2701,6 +3172,7 @@ gst_terminal_put_char(
 			if (last != NULL) {
 				last->attr |= GST_GLYPH_ATTR_WRAP;
 			}
+			gst_line_set_wrapped(line, TRUE);
 		}
 
 		gst_terminal_newline(term, TRUE);
@@ -2713,12 +3185,27 @@ gst_terminal_put_char(
 	}
 
 	/* Check if wide char fits */
-	if (priv->cursor.x + width > priv->cols) {
+	if (priv->cursor.x + MIN(width, priv->cols) > priv->cols) {
 		/* No room for wide char; fill rest with space and wrap */
+		GstGlyph *padding;
+
+		padding = gst_terminal_get_glyph(term, priv->cursor.x, priv->cursor.y);
+		g_signal_emit(term, signals[SIGNAL_REGION_ERASED], 0,
+		    priv->cursor.x, priv->cursor.y, priv->cursor.x, priv->cursor.y);
+		gst_glyph_reset(padding);
+		padding->rune = 0;
+		padding->attr = GST_GLYPH_ATTR_WRAP;
+		priv->screen[priv->cursor.y]->used = priv->cursor.x;
+		gst_line_set_wrapped(priv->screen[priv->cursor.y], TRUE);
 		gst_terminal_newline(term, TRUE);
 	}
 
 	/* Place the character */
+	if (width == 2 && priv->cursor.x + 1 < priv->cols) {
+		/* Clean both previous occupants before installing the wide pair. */
+		term_setchar(term, 0, &priv->cursor.glyph,
+		    priv->cursor.x + 1, priv->cursor.y);
+	}
 	term_setchar(term, rune, &priv->cursor.glyph,
 	    priv->cursor.x, priv->cursor.y);
 
@@ -2734,6 +3221,7 @@ gst_terminal_put_char(
 			GstGlyph *dummy = gst_terminal_get_glyph(term,
 			    priv->cursor.x + 1, priv->cursor.y);
 			if (dummy != NULL) {
+				gst_glyph_clear(dummy);
 				dummy->rune = '\0';
 				dummy->attr = GST_GLYPH_ATTR_WDUMMY;
 			}
@@ -2741,6 +3229,9 @@ gst_terminal_put_char(
 	}
 
 	/* Advance cursor */
+	priv->cluster_x = priv->cursor.x;
+	priv->cluster_y = priv->cursor.y;
+	priv->cluster_valid = TRUE;
 	priv->cursor.x += width;
 	if (priv->cursor.x >= priv->cols) {
 		if (priv->mode & GST_MODE_WRAP) {
@@ -2752,6 +3243,8 @@ gst_terminal_put_char(
 	}
 
 	priv->lastc = rune;
+	gst_glyph_reset(&priv->last_glyph);
+	priv->last_glyph.rune = gst_terminal_get_glyph(term, priv->cluster_x, priv->cluster_y)->rune;
 	priv->dirty = TRUE;
 }
 
@@ -2891,6 +3384,196 @@ gst_terminal_write(
 }
 
 /* ===== Key-to-escape-sequence mapping ===== */
+
+/**
+ * gst_terminal_key_event:
+ * @self: a #GstTerminal
+ * @keyval: unshifted X11-compatible keysym
+ * @keycode: optional hardware keycode (reserved)
+ * @state: normalized X11 modifier mask, including post-event lock state
+ * @event_type: press (1), repeat (2), or release (3)
+ * @text: (nullable): committed UTF-8 text
+ *
+ * Sends negotiated key events through response. Legacy processing remains
+ * with the caller; consuming a release without output prevents text leakage.
+ *
+ * Returns: whether the event was consumed
+ */
+gboolean
+gst_terminal_key_event(
+	GstTerminal *self,
+	guint keyval,
+	guint keycode,
+	guint state,
+	guint event_type,
+	const gchar *text
+){
+	/* Canonical Kitty functional encodings, not PUA aliases for legacy keys. */
+	static const struct {
+		guint keysym;
+		guint code;
+		gchar final;
+	} functional[] = {
+		{ XK_Escape, 27, 'u' }, { XK_Return, 13, 'u' },
+		{ XK_Tab, 9, 'u' }, { XK_ISO_Left_Tab, 9, 'u' },
+		{ XK_BackSpace, 127, 'u' },
+		{ XK_Insert, 2, '~' }, { XK_Delete, 3, '~' },
+		{ XK_Left, 1, 'D' }, { XK_Right, 1, 'C' },
+		{ XK_Up, 1, 'A' }, { XK_Down, 1, 'B' },
+		{ XK_Prior, 5, '~' }, { XK_Next, 6, '~' },
+		{ XK_Home, 1, 'H' }, { XK_End, 1, 'F' },
+		{ XK_Caps_Lock, 57358, 'u' }, { XK_Scroll_Lock, 57359, 'u' },
+		{ XK_Num_Lock, 57360, 'u' }, { XK_Print, 57361, 'u' },
+		{ XK_Pause, 57362, 'u' }, { XK_Menu, 57363, 'u' },
+		{ XK_F1, 1, 'P' }, { XK_F2, 1, 'Q' },
+		{ XK_F3, 13, '~' }, { XK_F4, 1, 'S' },
+		{ XK_F5, 15, '~' }, { XK_F6, 17, '~' },
+		{ XK_F7, 18, '~' }, { XK_F8, 19, '~' },
+		{ XK_F9, 20, '~' }, { XK_F10, 21, '~' },
+		{ XK_F11, 23, '~' }, { XK_F12, 24, '~' },
+		{ XK_KP_Decimal, 57409, 'u' }, { XK_KP_Divide, 57410, 'u' },
+		{ XK_KP_Multiply, 57411, 'u' }, { XK_KP_Subtract, 57412, 'u' },
+		{ XK_KP_Add, 57413, 'u' }, { XK_KP_Enter, 57414, 'u' },
+		{ XK_KP_Equal, 57415, 'u' }, { XK_KP_Separator, 57416, 'u' },
+		{ XK_KP_Left, 57417, 'u' }, { XK_KP_Right, 57418, 'u' },
+		{ XK_KP_Up, 57419, 'u' }, { XK_KP_Down, 57420, 'u' },
+		{ XK_KP_Prior, 57421, 'u' }, { XK_KP_Next, 57422, 'u' },
+		{ XK_KP_Home, 57423, 'u' }, { XK_KP_End, 57424, 'u' },
+		{ XK_KP_Insert, 57425, 'u' }, { XK_KP_Delete, 57426, 'u' },
+		{ XK_KP_Begin, 57427, 'u' },
+		{ XF86XK_AudioPlay, 57428, 'u' }, { XF86XK_AudioPause, 57429, 'u' },
+		{ XF86XK_AudioStop, 57432, 'u' }, { XF86XK_AudioForward, 57433, 'u' },
+		{ XF86XK_AudioRewind, 57434, 'u' }, { XF86XK_AudioNext, 57435, 'u' },
+		{ XF86XK_AudioPrev, 57436, 'u' }, { XF86XK_AudioRecord, 57437, 'u' },
+		{ XF86XK_AudioLowerVolume, 57438, 'u' }, { XF86XK_AudioRaiseVolume, 57439, 'u' },
+		{ XF86XK_AudioMute, 57440, 'u' },
+		{ XK_Shift_L, 57441, 'u' }, { XK_Control_L, 57442, 'u' },
+		{ XK_Alt_L, 57443, 'u' }, { XK_Super_L, 57444, 'u' },
+		{ XK_Hyper_L, 57445, 'u' }, { XK_Meta_L, 57446, 'u' },
+		{ XK_Shift_R, 57447, 'u' }, { XK_Control_R, 57448, 'u' },
+		{ XK_Alt_R, 57449, 'u' }, { XK_Super_R, 57450, 'u' },
+		{ XK_Hyper_R, 57451, 'u' }, { XK_Meta_R, 57452, 'u' },
+		{ XK_ISO_Level3_Shift, 57453, 'u' }, { XK_ISO_Level5_Shift, 57454, 'u' }
+	};
+	guint flags, code, mods, i;
+	gchar final;
+	gboolean special, all, valid_text;
+	const gchar *p;
+	g_autoptr(GString) encoded = NULL;
+
+	g_return_val_if_fail(GST_IS_TERMINAL(self), FALSE);
+	g_return_val_if_fail(event_type >= 1 && event_type <= 3, FALSE);
+	(void)keycode;
+	flags = self->priv->keyboard_flags[(self->priv->mode & GST_MODE_ALTSCREEN) ? 1 : 0];
+	if (self->priv->mode & GST_MODE_KBDLOCK) {
+		return TRUE;
+	}
+	if (event_type == 3 && !(flags & 2)) {
+		return TRUE;
+	}
+	if (!(flags & (1 | 2 | 8))) {
+		return FALSE;
+	}
+	all = (flags & 8) != 0;
+	code = 0;
+	final = 'u';
+	special = FALSE;
+	for (i = 0; i < G_N_ELEMENTS(functional); i++) {
+		if (functional[i].keysym == keyval) {
+			code = functional[i].code;
+			final = functional[i].final;
+			special = TRUE;
+			break;
+		}
+	}
+	if (BETWEEN(keyval, XK_F13, XK_F35)) {
+		code = 57376 + keyval - XK_F13;
+		special = TRUE;
+	} else if (BETWEEN(keyval, XK_KP_0, XK_KP_9)) {
+		code = 57399 + keyval - XK_KP_0;
+		special = TRUE;
+	} else if (!special) {
+		if (BETWEEN(keyval, 0x20, 0x7e) || BETWEEN(keyval, 0xa0, 0xff)) {
+			code = keyval;
+		} else if ((keyval & 0xff000000u) == 0x01000000u) {
+			code = keyval & 0xffffffu;
+		}
+		if (code != 0 && (!g_unichar_validate(code) || ISCONTROL(code))) {
+			code = 0;
+		}
+		code = g_unichar_tolower(code);
+	}
+	/* Normalize masks at the backend boundary; native Mod2/Mod5 mappings
+	 * vary by XKB layout and must not be guessed from a hardware keycode. */
+	mods = ((state & (1u << 0)) ? 1u : 0u) |
+	    ((state & (1u << 3)) ? 2u : 0u) |
+	    ((state & (1u << 2)) ? 4u : 0u) |
+	    ((state & (1u << 6)) ? 8u : 0u) |
+	    ((state & (1u << 5)) ? 16u : 0u) |
+	    ((state & (1u << 7)) ? 32u : 0u) |
+	    ((state & (1u << 1)) ? 64u : 0u) |
+	    ((state & (1u << 4)) ? 128u : 0u);
+	if (keyval == XK_ISO_Left_Tab) {
+		mods |= 1;
+	}
+	if (!all) {
+		if (BETWEEN(code, 57441, 57454)) {
+			return TRUE;
+		}
+		/* Unmodified recovery keys remain usable after an application crash. */
+		if (!(mods & 63) && (keyval == XK_Return || keyval == XK_Tab || keyval == XK_BackSpace)) {
+			return event_type == 3;
+		}
+		/* Text stays on the legacy path; its releases must not leak out.
+		 * With flag 2 alone, modified repeats/releases still carry event types. */
+		if ((!special && (!(mods & 62) ||
+		    (!(flags & 1) && (!(flags & 2) || event_type == 1)))) ||
+		    (!(mods & 62) && (BETWEEN(code, 57399, 57413) || BETWEEN(code, 57415, 57416))) ||
+		    (!(flags & 1) && (code == 27 || BETWEEN(code, 57399, 57427)))) {
+			return event_type == 3;
+		}
+	}
+	valid_text = text != NULL && *text != '\0' && g_utf8_validate(text, -1, NULL);
+	if (valid_text) {
+		for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+			if (ISCONTROL(g_utf8_get_char(p))) {
+				valid_text = FALSE;
+				break;
+			}
+		}
+	}
+	/* Unknown keys must not fabricate Unicode from a hardware code. A pure
+	 * IME commit (keyval zero) uses key zero and associated text when enabled. */
+	if (keyval == 0 && event_type == 3) {
+		return TRUE;
+	}
+	if (code == 0 && !(keyval == 0 && all && (flags & 16) && valid_text)) {
+		return event_type == 3 || all;
+	}
+	encoded = g_string_new("\033[");
+	/* A bare final letter is canonical when neither modifiers nor events exist. */
+	if (final == 'u' || final == '~' || mods != 0 || ((flags & 2) && event_type != 1)) {
+		g_string_append_printf(encoded, "%u", code);
+	}
+	if (mods != 0 || ((flags & 2) && event_type != 1) ||
+	    (all && (flags & 16) && valid_text && event_type != 3 && final == 'u')) {
+		g_string_append_printf(encoded, ";%u", mods + 1);
+		if ((flags & 2) && event_type != 1) {
+			g_string_append_printf(encoded, ":%u", event_type);
+		}
+	}
+	if (all && (flags & 16) && valid_text && event_type != 3 && final == 'u') {
+		gchar separator = ';';
+
+		for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+			g_string_append_printf(encoded, "%c%u", separator, g_utf8_get_char(p));
+			separator = ':';
+		}
+	}
+	g_string_append_c(encoded, final);
+	term_response(self, encoded->str, (gssize)encoded->len);
+	return TRUE;
+}
 
 /*
  * X11 modifier masks — also defined by the Wayland window backend,

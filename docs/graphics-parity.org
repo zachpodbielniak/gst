@@ -1,0 +1,81 @@
+#+title: Kitty Graphics and LRG Rendering
+#+description: Implemented graphics interoperability, integration contract, verification, and remaining limits
+#+authors: Zach Podbielniak
+#+categories: gst graphics rendering
+#+created: 2026-09-07
+#+updated: 2026-09-07
+#+version: 0.4.7
+
+* Implemented Behavior
+
+** Unicode Image Placeholders
+
+The kittygfx module implements =GstGlyphTransformer= for U+10EEEE. It reads complete UTF-8 cell clusters through =gst_glyph_get_text()=, decodes the protocol's fixed Unicode 6.0 coordinate alphabet, and draws only the image fragment represented by the current cell. Indexed foreground colors carry an 8-bit image ID; truecolor foregrounds carry 24 bits; a third coordinate diacritic supplies the high byte of a 32-bit ID. Foreground values are interpreted as IDs, not resolved palette RGB colors.
+
+Missing coordinate diacritics inherit from contiguous matching placeholder cells to the left according to the protocol's row/column/high-byte rules. Resolution reads the line itself rather than assuming a particular rendering order, so partial dirty-line redraws can resolve inherited coordinates. Malformed coordinate marks and out-of-range high bytes are rejected rather than interpreted as other images.
+
+=U=1= creates an invisible virtual placement with positive =c= and =r=. It works with both =a=p= and =a=T=, including chunked transmission whose final chunk omits the original control keys. Virtual placements are excluded from ordinary overlays. They survive location-based deletion, terminal erasure, scrolling, and alternate-screen transitions; image-ID, image-number, and ID-range deletion can remove them. Re-transmitting an image invalidates its old placements, including virtual ones.
+
+Virtual images preserve aspect ratio within their requested cell rectangle, using top-left alignment and transparent unused space. Source cropping is supported. Nearest-neighbor sampling is performed in virtual pixel coordinates, including when one source pixel spans multiple cells. Each placeholder clears its text-cell background before compositing RGBA image data. Overwriting, deleting, moving, or reflowing the underlying text therefore changes the image without keeping stale screen-coordinate placements.
+
+** Ordinary Placement Tracking
+
+Explicit nonzero =(image_id, placement_id)= pairs replace existing placements; anonymous puts remain independent. A fresh successful transmission under an existing image ID removes its old placements. Deletion aborts any incomplete upload. Partially visible placements whose origin has scrolled above the top row are included in the visible set. A single specified destination dimension preserves the source aspect ratio. Window clipping no longer shrinks the entire source into a smaller destination rectangle.
+
+=gst_kitty_image_cache_erase()= removes an entire ordinary placement if its cell rectangle intersects an overwrite rectangle, retaining the image data. This is deliberately conservative: it does not retain partially overwritten image tiles. =gst_kitty_image_cache_scroll_region()= moves intersecting placements in either direction while leaving placements entirely outside the margins alone. Virtual prototypes are unaffected by either operation. The module binds these operations to the terminal signals described below and clears ordinary placements on alternate-screen mode changes.
+
+** LRG Image and Glyph Rendering
+
+The LRG render-context =draw_image= and =draw_glyph_id= operations are implemented, not NULL. Image drawing copies strided/cropped RGBA rows when necessary, uses the vendored =grl_image_new_from_pixels()= and =grl_texture_new_from_image()= APIs, and draws a scaled texture using =grl_draw_texture_pro()=. Alpha is preserved. Negative destination coordinates are left to the backend's window clipping.
+
+Graylib queues texture draws in raylib's deferred batch. Per-frame textures are retained by the renderer until =grl_window_swap_buffers()= flushes that batch; only then are they released. They must never be freed immediately after the draw call. No vendored dependency modifications are needed.
+
+Font-internal glyph indices use the existing Cairo/FreeType glyph atlas, with the exact scaled-font identity available through =gst_grl_font_cache_draw_glyph_index()=. Atlas entries retain their scaled fonts, preventing fallback-cache eviction from recycling a pointer still used as an atlas key. Fractional glyph bearings are covered by integer ink bounds. Native-endian Cairo alpha extraction works on either byte order.
+
+The legacy render-context glyph-ID operation chooses the primary font for the requested style, matching the Wayland contract. Full terminal-cell clusters instead use =gst_cairo_font_cache_draw_cluster()=, which performs HarfBuzz shaping and full-cluster font matching. LRG converts the resulting premultiplied Cairo pixels to straight RGBA, preserving color glyphs and emoji. Consecutive wide cells use their real two-cell stride. ASCII characters reach glyph transformers, and the ligatures module accepts the LRG backend through its Cairo-cache branch.
+
+* Integrated Notifications
+
+Core supplies the complete-cluster APIs and common Pango/HarfBuzz build dependencies. The Kitty module connects to =GstTerminal::region-erased(x1, y1, x2, y2)= and =region-scrolled(top, bottom, amount)= on its first APC command. Erasure bounds are inclusive zero-based cell coordinates and include actual writes, same-character replacement, cluster edits and destructive insert/delete operations, not redraws or cursor movement. Scroll bounds are inclusive, with positive amounts for upward movement; notification precedes clearing newly exposed rows. Both full-screen and margin scrolling are covered.
+
+Every actual alternate-screen transition emits =mode-changed= with =GST_MODE_ALTSCREEN=, including direct =gst_terminal_swap_screen()= calls. Ordinary placements are therefore invalidated on screen transitions. These signals are implemented and connected; they do not provide history anchoring or resize/reflow tracking. See [[file:keyboard-protocol.org][graphics notification semantics]] for detailed bounds and ordering.
+
+Main supplies the underlying Cairo font cache for LRG, and the ligatures module selects it. The build tracks Kitty headers, including the coordinate alphabet, and links the LRG render-context/font-cache tests with graylib/raylib. =test-graphics-consumers= additionally exercises cluster-aware consumer and ligature integration, including optional exporters in enabled builds.
+
+* Verification
+
+Clean release and debug suites with =LRG_BACKEND=1 MCP=1 WEBVIEW=1= passed. The release suite used =CC='gcc -Werror'=. Default Wayland ASan/UBSan tests also passed with =-Werror=, but that sanitizer run did not enable LRG, MCP or WEBVIEW. Exact evidence is recorded in [[file:release-0.4.7.org][release verification]].
+
+The Kitty test executable now covers resident-image accounting, invalid cropping, chunked virtual-placement lifetime, explicit placement replacement, anonymous placements, re-transmission invalidation, region scrolling, partial visibility, overwrite removal, coordinate inheritance and image IDs, rendered placeholder pixel/alpha values, aspect-ratio padding, text overwrite, unsupported animation replies, and upload cancellation by deletion.
+
+The LRG tests retain enum coverage and add headless render-op/invalid-input checks. The opt-in graphics test creates a real graylib window, draws a cropped-stride RGBA image, downloads its GPU texture and checks pixel/alpha values, draws a font-internal glyph ID, flushes the frame, and releases resources before destroying the GL window. It skips unless =GST_TEST_LRG_GRAPHICS= is set; no graphical pass is claimed from a skip.
+
+Rebuild cleanly when changing flags; run these sequentially:
+
+#+begin_src bash
+make clean
+make DEBUG=1 LRG_BACKEND=1 MCP=1 WEBVIEW=1 CC='gcc -Werror' all tests
+./build/debug/test-kitty-cache
+./build/debug/test-lrg-backend
+GST_TEST_LRG_GRAPHICS=1 ./build/debug/test-lrg-backend -p /lrg/render-context/image-upload
+#+end_src
+
+For an Xvfb-backed graphics run, use =GST_TEST_LRG_GRAPHICS=1 xvfb-run -a ./build/debug/test-lrg-backend -p /lrg/render-context/image-upload=. Also inspect a real =gst --lrg= window with a 2x2 Unicode placeholder grid, text overwrites, margin scrolling, zoom, combining text, and emoji. GPU upload assertions do not replace composited-frame visual checks.
+
+Fedora build packages for the relevant paths are =gcc make pkgconf-pkg-config glib2-devel json-glib-devel libyaml-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel cairo-devel harfbuzz-devel mesa-libGL-devel=. Wayland builds additionally use =wayland-devel libxkbcommon-devel libdecor-devel=. The optional Xvfb runner needs =xorg-x11-server-Xvfb= and =xorg-x11-xauth=. Dependencies are to be included in the OS image; this change does not mutate the host or dependency checkouts.
+
+* Actual Limits
+
+- Underline-color placement-ID selection is not implemented because the current =GstGlyph= exposes no underline color. The placeholder renderer chooses the first virtual placement for an image, which is valid when the underline placement ID is omitted/zero. Supporting nonzero placement IDs requires retaining SGR 58/59 underline color in core, exposing it to the module, and using it both for prototype selection and inheritance equality.
+- Virtual placements currently require both positive =c= and =r=. Relative placements, virtual =X/Y= offsets, and additional placeholder layout modes are not implemented.
+- Ordinary overwrite and scroll tracking use the connected core signals above. Auto-sized ordinary placements currently have a conservative 1x1 cell tracking extent; exact pixel-derived extents require cell metrics at placement time. Partial-region boundary clipping, scrollback anchoring, and ordinary-placement resize/reflow are not complete. Ordinary placements are discarded rather than saved/restored across alternate-screen transitions.
+- Existing =C=0= cursor advancement is still absent; applications needing reliable placement should use =C=1= and position the cursor explicitly. Negative z ordering is sorted within the ordinary overlay, but there is no complete behind-text rendering pass. Unicode placeholder text backgrounds are honored; selection and other placeholder text attributes are not interpreted as image effects.
+- Animation frame upload, scheduling, composition, and control are not implemented. =a=f=, =a=a=, and =a=c= now return =ENOTSUP= unless =q=2= suppresses errors, rather than disappearing silently. Frame-deletion commands retain their existing no-op behavior. No animation playback support is claimed.
+- File/shared-memory transfers and validated capability-query behavior retain existing limitations; this change implements neither local transfer medium. Existing upload/decompression allocation limits are not a hardened untrusted-input budget.
+- LRG uses per-frame image uploads and per-frame cluster shaping, not a persistent image/cluster texture cache. Large placeholder grids may be expensive. Scalar glyphs and glyph IDs remain atlas-cached. The legacy glyph-ID op cannot identify arbitrary fallback fonts; callers with an exact font must use =gst_grl_font_cache_draw_glyph_index()=. Cross-cell ligatures are wired, but the existing ligatures module's style/font-selection limitations are not fixed here.
+
+* Protocol References
+
+- [[https://sw.kovidgoyal.net/kitty/graphics-protocol/][Kitty terminal graphics protocol]]
+- [[https://github.com/kovidgoyal/kitty/blob/master/gen/rowcolumn-diacritics.txt][Kitty placeholder coordinate alphabet]]
+- Vendored =deps/libregnum/deps/graylib/src/graphics/grl-image.h=, =grl-texture.h=, =drawing/grl-draw.h=, and =core/grl-window.c= define the image, texture, and batch-flush contracts used here.

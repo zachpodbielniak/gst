@@ -1,0 +1,67 @@
+#+title: Real Backend Regression Tests
+#+description: Isolated native window smoke tests and deterministic rendered-image invariants
+#+authors: Zach Podbielniak
+#+created: 2026-09-07
+#+updated: 2026-09-07
+
+* Scope
+The opt-in =tests/test-backend-visual.c= creates actual GstX11Window/GstX11Renderer or GstWaylandWindow/GstWaylandRenderer objects, loads native fonts, submits frames, pumps the GLib display event sources, and captures the renderer's RGBA output. It does not replace either backend with a mock. Normal headless GTest execution skips native display tests and opens no display. The runner never connects to the user's desktop; it starts a dedicated Xvfb or headless Weston, falling back to headless gowl when the corresponding server is absent. X11/LRG use a separate rootful Xwayland inside gowl. Private HOME/XDG directories and cleared inherited display/session endpoints isolate the processes; servers are terminated on exit.
+
+* Assertions
+- Mixed ASCII, combining accents, CJK, emoji ZWJ and regional indicators produce an image different from a blank screen; repeated clean and forced-dirty redraws are byte-identical within the same process/backend.
+- A selection spanning Unicode cells changes the image, repeated selected output is identical, and clearing selection restores the original pixels exactly.
+- A deterministic test module is registered with the production module manager and receives native render-overlay dispatch. Its opaque red rectangle has exact RGBA values, repeated overlay output is stable, and unregistering it plus repainting restores the baseline.
+- Growing the real window, terminal grid and rendering buffer gives the expected screenshot dimensions; repeated enlarged frames match, and returning to the initial geometry restores every pixel. The scene does not wrap or get clipped, so this checks buffer recreation rather than destructive reflow semantics.
+- Separate X11 windows on separate X connections exchange both CLIPBOARD and PRIMARY through SelectionRequest/SelectionNotify, including UTF-8 and the backend's LF-to-CR paste normalization. The wait is bounded at three seconds per transfer.
+
+Comparisons never cross machines or rendering backends and do not require committed font golden files. The scale-1 nested compositor, fixed font request, disabled cursor and absent blink timers remove unrelated nondeterminism. Font fallback and actual rasterization still run. Exact equality alone cannot prove that every glyph has the intended shape; this suite detects lost redraw state and restoration regressions, not typographic correctness.
+
+* Build Integration
+The root Makefile discovers and links this test with libgst and conditional native backend dependencies. Native display tests remain opt-in through the implemented target rather than opening windows during =make test=:
+
+#+begin_src makefile
+.PHONY: test-backends
+test-backends: lib $(OUTDIR)/test-backend-visual
+	bash tests/run-backend-tests.sh --binary "$(OUTDIR)/test-backend-visual" $(BACKEND_TEST_ARGS)
+#+end_src
+
+The target builds the native visual executable, not the optional LRG executable. For LRG, first build =test-lrg-backend= with =LRG_BACKEND=1= and explicitly supply =--lrg-binary=. The runner verifies the image-upload test is listed before enabling =GST_TEST_LRG_GRAPHICS=; an enum-only executable is not counted as a graphical pass. The runner only executes prebuilt binaries.
+
+* Dependencies
+Fedora build packages for the existing X11 path: =gcc make pkgconf-pkg-config glib2-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel libyaml-devel json-glib-devel harfbuzz-devel=. The yaml-glib and crispy submodules remain required. Wayland adds =wayland-devel wayland-protocols-devel libxkbcommon-devel cairo-devel libdecor-devel=. Runtime/verification packages: =xorg-x11-server-Xvfb weston dejavu-sans-mono-fonts google-noto-sans-cjk-fonts google-noto-color-emoji-fonts coreutils bash ShellCheck=. Optional LRG additionally needs the project's vendored libregnum/graylib/raylib dependencies, =mesa-libGL-devel= to build and software GL (=mesa-dri-drivers mesa-libGL=) to run. No packages are installed by the runner.
+
+An already installed =gowl= with wlroots headless/pixman support replaces Weston; together with Fedora's =xorg-x11-server-Xwayland= it also replaces Xvfb. No compositor compilation, package installation, user service startup or host configuration change is needed. The existing libgst build also uses =pango-devel=.
+
+* Execution
+After building the binaries in the selected output directory:
+
+#+begin_src bash
+bash tests/run-backend-tests.sh --help
+bash tests/run-backend-tests.sh --license
+shellcheck tests/run-backend-tests.sh
+bash tests/run-backend-tests.sh --binary build/debug/test-backend-visual
+bash tests/run-backend-tests.sh --backend x11 --binary build/debug/test-backend-visual --require
+bash tests/run-backend-tests.sh --backend wayland --binary build/debug/test-backend-visual --require
+bash tests/run-backend-tests.sh --backend lrg --lrg-binary build/debug/test-lrg-backend --require
+bash tests/run-backend-tests.sh --lrg-binary build/debug/test-lrg-backend --require --keep-logs
+#+end_src
+
+=make DEBUG=1 test-backends BACKEND_TEST_ARGS=--require= requires both X11 and Wayland. Choose =BACKEND_TEST_ARGS='--backend x11 --require'= for an X11-only build. Pass the same build flags used for the binaries to make. Relative executable paths resolve against the caller's working directory, not the script directory. The runner does not build anything.
+
+Without =--require=, absent executable, uncompiled backend or absent nested server prints =SKIP= and returns success. With =--require= those prerequisites are failures. A present server that fails startup, a failed assertion, or a test exceeding 60 seconds always fails. Server logs and =test.log= are retained in the reported temporary directory on failure or with =--keep-logs=. Each server startup waits at most ten seconds. Weston must support =--backend=headless-backend.so --renderer=pixman=; incompatible installed versions fail visibly rather than silently falling back to the desktop. Xvfb and Xwayland use =-displayfd= to select an unused display atomically, with TCP listening disabled. Collision messages while choosing the display are not connections to an existing server.
+
+* Gowl Isolation
+The fallback, tested with gowl 0.5.0, uses =WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1=, never the Wayland/X11/DRM backends. =--no-yaml-config --no-c-config= bypass all user, system and development configuration loading. Without YAML the module registry is empty, so no module loading or autostart hooks run. The default logfile resolves under the private HOME. The generated default YAML is deliberately not used because it enables autostart.
+
+=GOWL_DISABLE_SYSTEMD=1= is mandatory: gowl otherwise imports environment variables and starts user session/portal services even for headless operation. The runner additionally points the session bus address at a nonexistent private socket. Gowl's Wayland socket is discovered only inside the newly created runtime directory. The standalone rootful =Xwayland -shm= uses that private socket, not gowl's lazy rootless Xwayland, avoiding per-window tiling constraints. Software GL uses =LIBGL_ALWAYS_SOFTWARE=1=. These are isolation measures for trusted test binaries, not a security sandbox against hostile local processes; the private X server uses =-ac=.
+
+* Known Gaps And Verification
+The headless compositor has no keyboard input serial in this harness, so the Wayland clipboard subtest explicitly skips: =wl_data_device.set_selection= cannot legitimately acquire ownership without one. =--require= requires backend execution, not this unsupported subtest. Do not treat a self-cached paste or an injected selection-notify signal as a Wayland clipboard transfer. A future input-enabled nested seat harness must supply focus/input serials and transfer through another client before this gap can be closed.
+
+Screenshots capture the submitted native render buffer, not a compositor screencopy or the final decorated desktop. No claim is made about window occlusion, compositor color management, fractional scaling, IME, input-driven selection, large INCR clipboard payloads, or visual correctness of missing-font replacement glyphs. The optional LRG test validates real GPU texture upload/readback, not a complete terminal framebuffer comparison.
+
+On 2026-09-07, actual isolated execution succeeded using installed gowl and Xwayland with Xvfb/Weston absent: four tests executed and passed (X11 visual, X11 clipboard, Wayland visual, LRG image-upload); one test skipped (Wayland clipboard). LRG reported Mesa 26.1.8 llvmpipe, LLVM 22.1.8, OpenGL 4.6. Both visual tests exercised all framebuffer assertions above; no renderer defect was observed. This does not establish full LRG terminal rendering parity.
+
+The clipboard fixture explicitly flushes the receiving X connection after requesting conversion: unlike a complete application, a window-only fixture has no end-of-frame flush to send a buffered XConvertSelection. Tests verify both selections in both directions. ShellCheck and Bash syntax validation passed.
+
+Final graphical reruns against both completed release and debug builds passed the same four checks, with Wayland clipboard explicitly skipped. Xwayland emits nonfatal xkbcomp warnings; these are server diagnostics, not compiler warnings or test failures. Process inspection confirmed no runner-owned gowl/Xwayland remained. Temporary validation-session logs are not part of the repository; use =--keep-logs= to retain fresh server and test logs in the directory reported by the runner. Clean release/debug and sanitizer results are recorded in [[file:release-0.4.7.org][release verification]].

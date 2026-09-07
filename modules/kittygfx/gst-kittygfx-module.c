@@ -18,10 +18,14 @@
 #include "gst-kittygfx-module.h"
 #include "gst-kittygfx-parser.h"
 #include "gst-kittygfx-image.h"
+#include "gst-kittygfx-diacritics.h"
 
 #include "../../src/module/gst-module-manager.h"
 #include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
+#include "../../src/core/gst-line.h"
+#include "../../src/boxed/gst-glyph.h"
+#include "../../src/interfaces/gst-glyph-transformer.h"
 #include "../../src/boxed/gst-cursor.h"
 #include "../../src/rendering/gst-render-context.h"
 
@@ -37,6 +41,7 @@ struct _GstKittygfxModule
 	GstModule parent_instance;
 
 	GstKittyImageCache *cache;
+	GstTerminal *terminal; /* Weak; signal handlers are disconnected on teardown. */
 
 	/*
 	 * Queue of APC bodies (gchar*) we have sent as responses.
@@ -63,13 +68,255 @@ static void     kittygfx_render(GstRenderOverlay *overlay,
 
 static void gst_kittygfx_escape_handler_init(GstEscapeHandlerInterface *iface);
 static void gst_kittygfx_render_overlay_init(GstRenderOverlayInterface *iface);
+static void gst_kittygfx_glyph_transformer_init(GstGlyphTransformerInterface *iface);
+
+/* Terminal mutation notifications are intentionally distinct from dirty
+ * marks: redraws must never destroy image placements. */
+static void
+kittygfx_region_erased(GstTerminal *term, gint x1, gint y1, gint x2, gint y2,
+	GstKittygfxModule *self)
+{
+	if (self->cache != NULL) {
+		gst_kitty_image_cache_erase(self->cache, x1, y1, x2, y2);
+		gst_terminal_mark_dirty(term, -1);
+	}
+}
+
+static void
+kittygfx_region_scrolled(GstTerminal *term, gint top, gint bottom, gint amount,
+	GstKittygfxModule *self)
+{
+	if (self->cache != NULL) {
+		gst_kitty_image_cache_scroll_region(self->cache, top, bottom, amount);
+		gst_terminal_mark_dirty(term, -1);
+	}
+}
+
+static void
+kittygfx_mode_changed(GstTerminal *term, GstTermMode mode, gboolean enabled,
+	GstKittygfxModule *self)
+{
+	(void)enabled;
+	if (self->cache != NULL && (mode & GST_MODE_ALTSCREEN)) {
+		gst_kitty_image_cache_clear_alt(self->cache);
+		gst_terminal_mark_dirty(term, -1);
+	}
+}
+
+static void
+kittygfx_bind_terminal(GstKittygfxModule *self, GstTerminal *term)
+{
+	if (self->terminal == term) {
+		return;
+	}
+	if (self->terminal != NULL) {
+		g_signal_handlers_disconnect_by_data(self->terminal, self);
+		g_object_remove_weak_pointer(G_OBJECT(self->terminal),
+			(gpointer *)&self->terminal);
+	}
+	self->terminal = term;
+	if (term != NULL) {
+		g_object_add_weak_pointer(G_OBJECT(term), (gpointer *)&self->terminal);
+		g_signal_connect_object(term, "mode-changed",
+			G_CALLBACK(kittygfx_mode_changed), self, 0);
+		/* The driver supplies these core signals; do not confuse legacy
+		 * contents-changed with an overwrite notification. */
+		if (g_signal_lookup("region-erased", GST_TYPE_TERMINAL) != 0) {
+			g_signal_connect_object(term, "region-erased",
+				G_CALLBACK(kittygfx_region_erased), self, 0);
+		}
+		if (g_signal_lookup("region-scrolled", GST_TYPE_TERMINAL) != 0) {
+			g_signal_connect_object(term, "region-scrolled",
+				G_CALLBACK(kittygfx_region_scrolled), self, 0);
+		}
+	}
+}
 
 G_DEFINE_TYPE_WITH_CODE(GstKittygfxModule, gst_kittygfx_module,
 	GST_TYPE_MODULE,
 	G_IMPLEMENT_INTERFACE(GST_TYPE_ESCAPE_HANDLER,
 		gst_kittygfx_escape_handler_init)
 	G_IMPLEMENT_INTERFACE(GST_TYPE_RENDER_OVERLAY,
-		gst_kittygfx_render_overlay_init))
+		gst_kittygfx_render_overlay_init)
+	G_IMPLEMENT_INTERFACE(GST_TYPE_GLYPH_TRANSFORMER,
+		gst_kittygfx_glyph_transformer_init))
+
+/* Decode one cell without relying on draw order or persistent coordinates.
+ * Missing diacritics inherit only from contiguous matching placeholders. */
+static gboolean
+placeholder_coordinates(GstLine *line, gint col,
+	guint32 *image_id, gint *image_row, gint *image_col)
+{
+	gint start;
+	gint i;
+	gint row;
+	gint column;
+	gint high;
+	guint32 previous_fg;
+	gboolean previous;
+	GstGlyph *target;
+
+	target = gst_line_get_glyph(line, col);
+	if (target == NULL) {
+		return FALSE;
+	}
+	start = col;
+	while (start > 0) {
+		GstGlyph *g;
+
+		g = gst_line_get_glyph(line, start - 1);
+		if (g == NULL || g->rune != 0x10EEEE || g->fg != target->fg) {
+			break;
+		}
+		start--;
+	}
+	row = column = high = 0;
+	previous_fg = 0;
+	previous = FALSE;
+	for (i = start; i <= col; i++) {
+		GstGlyph *g;
+		gchar buffer[7];
+		const gchar *text;
+		gint values[3];
+		gint n;
+		gboolean inherit;
+		gboolean valid;
+
+		g = gst_line_get_glyph(line, i);
+		if (g == NULL || g->rune != 0x10EEEE ||
+		    (!GST_IS_TRUECOLOR(g->fg) && g->fg > 255)) {
+			return FALSE;
+		}
+		text = gst_glyph_get_text(g, buffer);
+		text = g_utf8_next_char(text);
+		n = 0;
+		valid = TRUE;
+		while (*text != '\0' && n < 3) {
+			gunichar rune;
+			guint j;
+
+			rune = g_utf8_get_char(text);
+			for (j = 0; j < G_N_ELEMENTS(kitty_diacritics); j++) {
+				if (kitty_diacritics[j] == rune) {
+					break;
+				}
+			}
+			if (j == G_N_ELEMENTS(kitty_diacritics)) {
+				valid = FALSE;
+				break;
+			}
+			values[n++] = (gint)j;
+			text = g_utf8_next_char(text);
+		}
+		if (!valid || (n == 3 && values[2] > 255)) {
+			if (i == col) {
+				return FALSE;
+			}
+			previous = FALSE;
+			continue;
+		}
+		inherit = previous && previous_fg == g->fg &&
+			(n == 0 || values[0] == row);
+		if (n >= 2 && values[1] != column + 1) {
+			inherit = FALSE;
+		}
+		row = n >= 1 ? values[0] : (inherit ? row : 0);
+		column = n >= 2 ? values[1] : (inherit ? column + 1 : 0);
+		high = n >= 3 ? values[2] : (inherit ? high : 0);
+		previous = TRUE;
+		previous_fg = g->fg;
+	}
+	*image_id = (previous_fg & 0xFFFFFF) | ((guint32)high << 24);
+	*image_row = row;
+	*image_col = column;
+	return *image_id != 0;
+}
+
+/* Render only the portion represented by this text cell. Sampling in virtual
+ * placement pixel coordinates avoids seams and works even when a source
+ * pixel spans many cells. Text overwrite/scroll/reflow needs no image state. */
+static gboolean
+kittygfx_transform_glyph(GstGlyphTransformer *transformer, gunichar rune,
+	gpointer render_context, gint x, gint y, gint width, gint height)
+{
+	GstKittygfxModule *self;
+	GstRenderContext *ctx;
+	GstImagePlacement *pl;
+	GstKittyImage *img;
+	GList *l;
+	guint32 image_id;
+	gint row;
+	gint col;
+	gint sw;
+	gint sh;
+	gint px;
+	gint py;
+	gdouble scale;
+	g_autofree guint8 *pixels = NULL;
+
+	if (rune != 0x10EEEE) {
+		return FALSE;
+	}
+	self = GST_KITTYGFX_MODULE(transformer);
+	ctx = (GstRenderContext *)render_context;
+	if (self->cache == NULL || ctx == NULL || ctx->current_line == NULL ||
+	    width <= 0 || height <= 0 || width > G_MAXINT / 4) {
+		return FALSE;
+	}
+	gst_render_context_fill_rect_bg(ctx, x, y, width, height);
+	if (!placeholder_coordinates((GstLine *)ctx->current_line, ctx->current_col,
+	    &image_id, &row, &col)) {
+		return TRUE;
+	}
+	pl = NULL;
+	for (l = self->cache->placements; l != NULL; l = l->next) {
+		GstImagePlacement *candidate;
+
+		candidate = (GstImagePlacement *)l->data;
+		if (candidate->virtual_placement && candidate->image_id == image_id) {
+			pl = candidate;
+			break;
+		}
+	}
+	img = gst_kitty_image_cache_get_image(self->cache, image_id);
+	if (pl == NULL || img == NULL || img->data == NULL ||
+	    row >= pl->dst_rows || col >= pl->dst_cols ||
+	    pl->src_x < 0 || pl->src_x >= img->width ||
+	    pl->src_y < 0 || pl->src_y >= img->height) {
+		return TRUE;
+	}
+	sw = MIN(pl->crop_w > 0 ? pl->crop_w : img->width, img->width - pl->src_x);
+	sh = MIN(pl->crop_h > 0 ? pl->crop_h : img->height, img->height - pl->src_y);
+	scale = MIN((gdouble)pl->dst_cols * width / sw,
+		(gdouble)pl->dst_rows * height / sh);
+	pixels = g_try_malloc0_n((gsize)height, (gsize)width * 4);
+	if (pixels == NULL) {
+		return TRUE;
+	}
+	for (py = 0; py < height; py++) {
+		for (px = 0; px < width; px++) {
+			gdouble sx;
+			gdouble sy;
+
+			sx = ((gdouble)col * width + px) / scale;
+			sy = ((gdouble)row * height + py) / scale;
+			if (sx < sw && sy < sh) {
+				memcpy(pixels + ((gsize)py * width + px) * 4,
+					img->data + (gsize)(pl->src_y + (gint)sy) * img->stride +
+					(gsize)(pl->src_x + (gint)sx) * 4, 4);
+			}
+		}
+	}
+	gst_render_context_draw_image(ctx, pixels, width, height, width * 4,
+		x, y, width, height);
+	return TRUE;
+}
+
+static void
+gst_kittygfx_glyph_transformer_init(GstGlyphTransformerInterface *iface)
+{
+	iface->transform_glyph = kittygfx_transform_glyph;
+}
 
 /* ===== Interface init ===== */
 
@@ -152,6 +399,7 @@ kittygfx_deactivate(GstModule *base)
 	GstKittygfxModule *self;
 
 	self = GST_KITTYGFX_MODULE(base);
+	kittygfx_bind_terminal(self, NULL);
 
 	if (self->cache != NULL) {
 		gst_kitty_image_cache_free(self->cache);
@@ -197,6 +445,7 @@ kittygfx_handle_escape(
 	if (self->cache == NULL) {
 		return FALSE;
 	}
+	kittygfx_bind_terminal(self, (GstTerminal *)terminal);
 
 	/*
 	 * Detect and discard echoed responses to prevent echo cascade.
@@ -327,7 +576,7 @@ kittygfx_handle_escape(
 		 * Force a full redraw so line backgrounds get repainted
 		 * over the area where the old image was.
 		 */
-		if (cmd.action == 'd' && term != NULL) {
+		if (term != NULL) {
 			gst_terminal_mark_dirty(term, -1);
 		}
 	}
@@ -360,8 +609,8 @@ kittygfx_handle_escape(
 
 		g_signal_emit_by_name(terminal, "response",
 			response, (glong)strlen(response));
-		g_free(response);
 	}
+	g_free(response);
 
 	return TRUE;
 }
@@ -427,6 +676,10 @@ kittygfx_render(
 		gint sh;
 		const guint8 *src_data;
 		gint src_stride;
+		gint64 position_x;
+		gint64 position_y;
+		gint64 dest_width;
+		gint64 dest_height;
 
 		pl = (GstImagePlacement *)l->data;
 		img = gst_kitty_image_cache_get_image(
@@ -437,8 +690,14 @@ kittygfx_render(
 		}
 
 		/* Calculate pixel position */
-		px = ctx->borderpx + pl->col * ctx->cw + pl->x_offset;
-		py = ctx->borderpx + (pl->row - top_row) * ctx->ch + pl->y_offset;
+		position_x = ctx->borderpx + (gint64)pl->col * ctx->cw + pl->x_offset;
+		position_y = ctx->borderpx + ((gint64)pl->row - top_row) * ctx->ch + pl->y_offset;
+		if (position_x < G_MININT || position_x > G_MAXINT ||
+		    position_y < G_MININT || position_y > G_MAXINT) {
+			continue;
+		}
+		px = (gint)position_x;
+		py = (gint)position_y;
 
 		/* Validate offsets before arithmetic or constructing a pixel pointer. */
 		if (pl->src_x < 0 || pl->src_x >= img->width ||
@@ -462,31 +721,35 @@ kittygfx_render(
 		}
 
 		/* Calculate destination size */
-		if (pl->dst_cols > 0) {
-			dw = pl->dst_cols * ctx->cw;
-		} else {
-			dw = sw;
+		dest_width = pl->dst_cols > 0 ? (gint64)pl->dst_cols * ctx->cw : sw;
+		dest_height = pl->dst_rows > 0 ? (gint64)pl->dst_rows * ctx->ch : sh;
+		if (dest_width <= 0 || dest_width > G_MAXINT ||
+		    dest_height <= 0 || dest_height > G_MAXINT) {
+			continue;
 		}
-		if (pl->dst_rows > 0) {
-			dh = pl->dst_rows * ctx->ch;
-		} else {
-			dh = sh;
+		if (pl->dst_cols > 0 && pl->dst_rows == 0) {
+			dest_height = dest_width * sh / sw;
+		} else if (pl->dst_rows > 0 && pl->dst_cols == 0) {
+			dest_width = dest_height * sw / sh;
 		}
+		if (dest_width <= 0 || dest_width > G_MAXINT ||
+		    dest_height <= 0 || dest_height > G_MAXINT) {
+			continue;
+		}
+		dw = (gint)dest_width;
+		dh = (gint)dest_height;
 
 		/* Get source data pointer (offset by crop region) */
-		src_data = img->data + (pl->src_y * img->stride) + (pl->src_x * 4);
+		src_data = img->data + (gsize)pl->src_y * img->stride + (gsize)pl->src_x * 4;
 		src_stride = img->stride;
 
 		/* Clip to window bounds */
-		if (px >= width || py >= height) {
+		if (px >= width || py >= height || position_x + dw <= 0 ||
+		    position_y + dh <= 0) {
 			continue;
 		}
-		if (px + dw > width) {
-			dw = width - px;
-		}
-		if (py + dh > height) {
-			dh = height - py;
-		}
+		/* Let the backend clip; shrinking only the destination stretches the
+		 * whole source into the visible fragment instead of cropping it. */
 
 		/* Draw the image */
 		gst_render_context_draw_image(ctx,
@@ -505,6 +768,7 @@ gst_kittygfx_module_finalize(GObject *object)
 	GstKittygfxModule *self;
 
 	self = GST_KITTYGFX_MODULE(object);
+	kittygfx_bind_terminal(self, NULL);
 
 	if (self->cache != NULL) {
 		gst_kitty_image_cache_free(self->cache);

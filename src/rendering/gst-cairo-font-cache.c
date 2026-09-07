@@ -16,6 +16,7 @@
 #include "gst-cairo-font-cache.h"
 #include <math.h>
 #include <string.h>
+#include <hb-ft.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -115,6 +116,100 @@ struct _GstCairoFontCache
 };
 
 G_DEFINE_TYPE(GstCairoFontCache, gst_cairo_font_cache, G_TYPE_OBJECT)
+
+gboolean
+gst_cairo_font_cache_draw_cluster(
+	GstCairoFontCache *self,
+	cairo_t *cr,
+	const gchar *text,
+	GstFontStyle style,
+	gdouble x,
+	gdouble baseline
+){
+	FcPattern *pattern;
+	FcPattern *match;
+	FcCharSet *charset;
+	FcResult result;
+	cairo_font_face_t *font_face;
+	cairo_scaled_font_t *font;
+	FT_Face face;
+	hb_font_t *hb_font;
+	hb_buffer_t *buffer;
+	hb_glyph_info_t *info;
+	hb_glyph_position_t *positions;
+	cairo_glyph_t *glyphs;
+	const gchar *p;
+	guint count, i;
+
+	/* Keep full-cluster matching independent from the scalar fallback ring. */
+	pattern = FcPatternDuplicate(self->font.pattern);
+	FcPatternDel(pattern, FC_WEIGHT);
+	FcPatternDel(pattern, FC_SLANT);
+	FcPatternAddInteger(pattern, FC_WEIGHT,
+	    style == GST_FONT_STYLE_BOLD || style == GST_FONT_STYLE_BOLD_ITALIC
+	    ? FC_WEIGHT_BOLD : FC_WEIGHT_REGULAR);
+	FcPatternAddInteger(pattern, FC_SLANT,
+	    style == GST_FONT_STYLE_ITALIC || style == GST_FONT_STYLE_BOLD_ITALIC
+	    ? FC_SLANT_ITALIC : FC_SLANT_ROMAN);
+	charset = FcCharSetCreate();
+	for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+		gunichar rune = g_utf8_get_char(p);
+		if (rune == 0xfe0f) {
+			FcPatternDel(pattern, FC_COLOR);
+			FcPatternAddBool(pattern, FC_COLOR, FcTrue);
+		}
+		if (rune != 0x200d && rune != 0x200c &&
+		    !(rune >= 0xfe00 && rune <= 0xfe0f) &&
+		    !(rune >= 0xe0000 && rune <= 0xe01ef)) {
+			FcCharSetAddChar(charset, rune);
+		}
+	}
+	FcPatternDel(pattern, FC_CHARSET);
+	FcPatternAddCharSet(pattern, FC_CHARSET, charset);
+	FcCharSetDestroy(charset);
+	FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+	FcDefaultSubstitute(pattern);
+	match = FcFontMatch(NULL, pattern, &result);
+	FcPatternDestroy(pattern);
+	if (match == NULL) {
+		return FALSE;
+	}
+	font_face = cairo_ft_font_face_create_for_pattern(match);
+	FcPatternDestroy(match);
+	font = cairo_scaled_font_create(font_face, &self->font_matrix,
+	    &self->ctm, self->font_options);
+	cairo_font_face_destroy(font_face);
+	face = cairo_ft_scaled_font_lock_face(font);
+	if (face == NULL) {
+		cairo_scaled_font_destroy(font);
+		return FALSE;
+	}
+	hb_font = hb_ft_font_create_referenced(face);
+	buffer = hb_buffer_create();
+	hb_buffer_add_utf8(buffer, text, -1, 0, -1);
+	hb_buffer_guess_segment_properties(buffer);
+	hb_shape(hb_font, buffer, NULL, 0);
+	info = hb_buffer_get_glyph_infos(buffer, &count);
+	positions = hb_buffer_get_glyph_positions(buffer, NULL);
+	glyphs = g_new(cairo_glyph_t, count);
+	for (i = 0; i < count; i++) {
+		glyphs[i].index = info[i].codepoint;
+		glyphs[i].x = x + positions[i].x_offset / 64.0;
+		glyphs[i].y = baseline - positions[i].y_offset / 64.0;
+		x += positions[i].x_advance / 64.0;
+		baseline -= positions[i].y_advance / 64.0;
+	}
+	hb_buffer_destroy(buffer);
+	hb_font_destroy(hb_font);
+	cairo_ft_scaled_font_unlock_face(font);
+	cairo_save(cr);
+	cairo_set_scaled_font(cr, font);
+	cairo_show_glyphs(cr, glyphs, (gint)count);
+	cairo_restore(cr);
+	g_free(glyphs);
+	cairo_scaled_font_destroy(font);
+	return TRUE;
+}
 
 /*
  * unload_font_variant:
@@ -278,7 +373,8 @@ load_font_variant(
 	f->set = NULL;
 	f->pattern = configured;
 
-	/* match is now owned by the font face (cairo-ft takes ownership) */
+	/* Cairo retains its own reference; the match belongs to this call. */
+	FcPatternDestroy(match);
 
 	return 0;
 }
@@ -772,6 +868,7 @@ gst_cairo_font_cache_lookup_glyph(
 	if (fontpattern != NULL) {
 		entry->font_face = cairo_ft_font_face_create_for_pattern(
 			fontpattern);
+		FcPatternDestroy(fontpattern);
 		if (entry->font_face != NULL &&
 		    cairo_font_face_status(entry->font_face) ==
 		    CAIRO_STATUS_SUCCESS) {
@@ -996,6 +1093,7 @@ gst_cairo_font_cache_load_spare_fonts(
 			self->frc[self->frc_len].flags = style;
 			self->frc[self->frc_len].unicodep = 0;
 			self->frc_len++;
+			FcPatternDestroy(match);
 		}
 
 		FcPatternDestroy(pattern);

@@ -14,8 +14,8 @@ LDFLAGS ?= -shared
 
 all: $(OUTDIR)/$(MODULE_NAME).so
 
-$(OUTDIR)/$(MODULE_NAME).so: $(MODULE_SRC)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -L$(LIBDIR) -lgst $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 x11 xft)
+$(OUTDIR)/$(MODULE_NAME).so: $(MODULE_SRC) $(wildcard *.h)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(MODULE_SRC) -L$(LIBDIR) -lgst $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 x11 xft)
 
 clean:
 	rm -f $(OUTDIR)/$(MODULE_NAME).so

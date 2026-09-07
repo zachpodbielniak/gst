@@ -18,13 +18,42 @@
 
 #include "../../src/core/gst-terminal.h"
 #include "../../src/core/gst-line.h"
+#include "../../src/boxed/gst-glyph.h"
 #include "../../src/module/gst-module-manager.h"
+#include <string.h>
 
 /* Default URL regex */
 #define DEFAULT_URL_REGEX \
 	"(https?|ftp|file)://[\\w\\-_.~:/?#\\[\\]@!$&'()*+,;=%]+"
 
 /* ===== list_detected_urls ===== */
+
+/* Regex offsets are UTF-8 bytes, not cells. Expand partial-cluster matches to
+ * their owning cell span, including both columns of a wide lead. */
+static void
+url_match_columns(const GstLine *line, gint start, gint end,
+	gint *start_col, gint *end_col)
+{
+	gsize offset = 0;
+	gint col;
+
+	*start_col = -1;
+	*end_col = -1;
+	for (col = 0; col < line->len; col++) {
+		const GstGlyph *g = &line->glyphs[col];
+		gchar buffer[7];
+		gsize len = strlen(gst_glyph_get_text(g, buffer));
+
+		if (len > 0 && offset < (gsize)end && offset + len > (gsize)start) {
+			if (*start_col < 0)
+				*start_col = col;
+			*end_col = MIN(line->len, col + (gst_glyph_is_wide(g) ? 2 : 1));
+		}
+		offset += len;
+		if (offset >= (gsize)end)
+			break;
+	}
+}
 
 /*
  * handle_list_detected_urls:
@@ -47,6 +76,7 @@ handle_list_detected_urls(
 	const gchar *pattern;
 	JsonBuilder *builder;
 	JsonGenerator *gen;
+	g_autoptr(JsonNode) root = NULL;
 	gchar *json_str;
 	McpToolResult *result;
 	gint rows, cols, y, url_count;
@@ -106,10 +136,14 @@ handle_list_detected_urls(
 		if (g_regex_match(regex, text, 0, &match_info)) {
 			do {
 				gint start, end;
+				gint start_col, end_col;
 				g_autofree gchar *url = NULL;
 
 				url = g_match_info_fetch(match_info, 0);
 				g_match_info_fetch_pos(match_info, 0, &start, &end);
+				if (start < 0 || end <= start)
+					continue;
+				url_match_columns(line, start, end, &start_col, &end_col);
 
 				json_builder_begin_object(builder);
 				json_builder_set_member_name(builder, "url");
@@ -117,9 +151,9 @@ handle_list_detected_urls(
 				json_builder_set_member_name(builder, "row");
 				json_builder_add_int_value(builder, y);
 				json_builder_set_member_name(builder, "start_col");
-				json_builder_add_int_value(builder, start);
+				json_builder_add_int_value(builder, start_col);
 				json_builder_set_member_name(builder, "end_col");
-				json_builder_add_int_value(builder, end);
+				json_builder_add_int_value(builder, end_col);
 				json_builder_end_object(builder);
 
 				url_count++;
@@ -134,7 +168,8 @@ handle_list_detected_urls(
 	json_builder_end_object(builder);
 
 	gen = json_generator_new();
-	json_generator_set_root(gen, json_builder_get_root(builder));
+	root = json_builder_get_root(builder);
+	json_generator_set_root(gen, root);
 	json_str = json_generator_to_data(gen, NULL);
 	g_object_unref(gen);
 	g_object_unref(builder);

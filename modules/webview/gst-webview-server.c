@@ -1128,6 +1128,7 @@ hash_row(
 
 	for (x = 0; x < cols; x++) {
 		const GstGlyph *g;
+		const gchar *p;
 
 		g = gst_line_get_glyph_const(line, x);
 		if (g == NULL) {
@@ -1135,6 +1136,9 @@ hash_row(
 		}
 
 		hash ^= g->rune;  hash *= 16777619u;
+		for (p = g->cluster; p != NULL && *p != '\0'; p++) {
+			hash ^= (guchar)*p; hash *= 16777619u;
+		}
 		hash ^= g->fg;    hash *= 16777619u;
 		hash ^= g->bg;    hash *= 16777619u;
 		hash ^= g->attr;  hash *= 16777619u;
@@ -1164,7 +1168,12 @@ hash_glyph_array(
 	}
 
 	for (x = 0; x < cols; x++) {
+		const gchar *p;
+
 		hash ^= glyphs[x].rune;  hash *= 16777619u;
+		for (p = glyphs[x].cluster; p != NULL && *p != '\0'; p++) {
+			hash ^= (guchar)*p; hash *= 16777619u;
+		}
 		hash ^= glyphs[x].fg;    hash *= 16777619u;
 		hash ^= glyphs[x].bg;    hash *= 16777619u;
 		hash ^= glyphs[x].attr;  hash *= 16777619u;
@@ -1192,7 +1201,7 @@ append_cell_json(
 	gchar fg_hex[8];
 	gchar bg_hex[8];
 	gchar utf8[7];
-	gint utf8_len;
+	const gchar *text;
 	guint wv_attrs;
 
 	if (!first) {
@@ -1202,14 +1211,8 @@ append_cell_json(
 	resolve_color(scheme, glyph->fg, fg_hex);
 	resolve_color(scheme, glyph->bg, bg_hex);
 
-	/* Convert codepoint to UTF-8 */
-	if (glyph->rune == 0 || glyph->rune == ' ') {
-		utf8[0] = ' ';
-		utf8[1] = '\0';
-	} else {
-		utf8_len = g_unichar_to_utf8((gunichar)glyph->rune, utf8);
-		utf8[utf8_len] = '\0';
-	}
+	/* The borrowed text may be arbitrarily longer than the scalar scratch. */
+	text = gst_glyph_get_text(glyph, utf8);
 
 	wv_attrs = glyph_to_webview_attrs(glyph->attr);
 
@@ -1220,7 +1223,7 @@ append_cell_json(
 	{
 		const gchar *p;
 
-		for (p = utf8; *p != '\0'; p++) {
+		for (p = text; *p != '\0'; p++) {
 			switch (*p) {
 			case '"':  g_string_append(json, "\\\""); break;
 			case '\\': g_string_append(json, "\\\\"); break;
@@ -1278,8 +1281,7 @@ serialize_row_json(
 
 		if (line == NULL) {
 			/* Empty line: emit space cells */
-			GstGlyph empty = {' ', GST_GLYPH_ATTR_NONE,
-				GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG};
+			GstGlyph empty = GST_GLYPH_INIT;
 			append_cell_json(json, &empty, scheme, first);
 			first = FALSE;
 			continue;
@@ -1287,8 +1289,7 @@ serialize_row_json(
 
 		glyph = gst_line_get_glyph_const(line, x);
 		if (glyph == NULL) {
-			GstGlyph empty = {' ', GST_GLYPH_ATTR_NONE,
-				GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG};
+			GstGlyph empty = GST_GLYPH_INIT;
 			append_cell_json(json, &empty, scheme, first);
 			first = FALSE;
 			continue;
@@ -1322,8 +1323,7 @@ serialize_glyph_row_json(
 ){
 	gint x;
 	gboolean first;
-	GstGlyph empty = {' ', GST_GLYPH_ATTR_NONE,
-		GST_COLOR_DEFAULT_FG, GST_COLOR_DEFAULT_BG};
+	GstGlyph empty = GST_GLYPH_INIT;
 
 	g_string_append_c(json, '[');
 	first = TRUE;

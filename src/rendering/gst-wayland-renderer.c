@@ -86,6 +86,10 @@ struct _GstWaylandRenderer
 	gsize shm_size;
 	struct wl_shm_pool *shm_pool;
 	struct wl_buffer *buffer;
+	gboolean buffer_busy;
+	gint buffer_w;
+	gint buffer_h;
+	guint buffer_scale;
 
 	/* Cairo drawing surface */
 	cairo_surface_t *cairo_surface;
@@ -140,6 +144,21 @@ struct _GstWaylandRenderer
 G_DEFINE_TYPE(GstWaylandRenderer, gst_wayland_renderer, GST_TYPE_RENDERER)
 
 /* ===== Shared memory buffer management ===== */
+
+/* Never write storage still being read by the compositor. */
+static void
+buffer_release(void *data, struct wl_buffer *buffer)
+{
+	GstWaylandRenderer *self;
+
+	self = (GstWaylandRenderer *)data;
+	if (self->buffer == buffer)
+		self->buffer_busy = FALSE;
+}
+
+static const struct wl_buffer_listener buffer_listener = {
+	buffer_release
+};
 
 /*
  * create_shm_file:
@@ -201,9 +220,22 @@ wl_create_buffer(
 ){
 	gint stride;
 	gsize size;
+	guint scale;
+	gint logical_width;
+	gint logical_height;
 
-	stride = width * BYTES_PER_PIXEL;
-	size = (gsize)(stride * height);
+	logical_width = width;
+	logical_height = height;
+	scale = gst_wayland_window_get_scale(self->wl_window);
+	width = gst_wayland_scaled_size(width, scale);
+	height = gst_wayland_scaled_size(height, scale);
+	stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+	if (width <= 0 || height <= 0 || stride <= 0 || height > G_MAXINT / stride) {
+		g_warning("wayland: invalid or oversized buffer %dx%d at scale %u",
+			logical_width, logical_height, scale);
+		return FALSE;
+	}
+	size = (gsize)stride * (gsize)height;
 
 	/* Free old buffer resources */
 	if (self->cr != NULL) {
@@ -260,15 +292,46 @@ wl_create_buffer(
 		self->shm_fd, (gint32)size);
 	self->buffer = wl_shm_pool_create_buffer(self->shm_pool,
 		0, width, height, stride, WL_SHM_FORMAT_ARGB8888);
+	wl_buffer_add_listener(self->buffer, &buffer_listener, self);
+	self->buffer_busy = FALSE;
+	self->buffer_w = width;
+	self->buffer_h = height;
+	self->buffer_scale = scale;
 
 	/* Create cairo image surface backed by the shared memory */
 	self->cairo_surface = cairo_image_surface_create_for_data(
 		self->shm_data, CAIRO_FORMAT_ARGB32,
 		width, height, stride);
+	/* Logical coordinates remain common to fonts, modules and pointer input.
+	 * Independent ratios account for fractional rounding at each edge. */
+	cairo_surface_set_device_scale(self->cairo_surface,
+		(gdouble)width / logical_width, (gdouble)height / logical_height);
 
 	self->cr = cairo_create(self->cairo_surface);
+	if (cairo_status(self->cr) != CAIRO_STATUS_SUCCESS) {
+		g_warning("wayland: Cairo buffer creation failed: %s",
+			cairo_status_to_string(cairo_status(self->cr)));
+		return FALSE;
+	}
 
 	return TRUE;
+}
+
+/* Both preedit erasure and scale-only changes require a complete repaint. */
+static void
+window_invalidated(GstWaylandWindow *window, GstWaylandRenderer *self)
+{
+	GstTerminal *term;
+	gint rows;
+	gint row;
+
+	(void)window;
+	term = gst_renderer_get_terminal(GST_RENDERER(self));
+	if (term == NULL)
+		return;
+	gst_terminal_get_size(term, NULL, &rows);
+	for (row = 0; row < rows; row++)
+		gst_terminal_mark_dirty(term, row);
 }
 
 /* ===== Static helper functions ===== */
@@ -680,7 +743,8 @@ wl_draw_glyph_run(
 	for (i = 0; i < len; i++) {
 		gfloat runewidth;
 
-		g = gst_line_get_glyph(line, x + i);
+		/* len counts lead glyphs; same-attribute wide runs have two-cell stride. */
+		g = gst_line_get_glyph(line, x + i * ((mode & GST_GLYPH_ATTR_WIDE) ? 2 : 1));
 		if (g == NULL) {
 			xp += (gfloat)self->cw;
 			continue;
@@ -709,7 +773,10 @@ wl_draw_glyph_run(
 		}
 
 		/* Look up and render glyph */
-		if (gst_cairo_font_cache_lookup_glyph(self->font_cache,
+		if (g->cluster != NULL) {
+			gst_cairo_font_cache_draw_cluster(self->font_cache, self->cr,
+				g->cluster, fstyle, (gdouble)xp, (gdouble)(winy + ascent));
+		} else if (gst_cairo_font_cache_lookup_glyph(self->font_cache,
 		    rune, fstyle, &scaled_font, &glyph_index))
 		{
 			cairo_glyph_t cg;
@@ -832,7 +899,7 @@ wl_renderer_draw_line_impl(
 			continue;
 		}
 
-		/* Copy glyph to local for modification */
+		/* Borrow cluster text for attribute-only changes; never clear this copy. */
 		cur = *new_glyph;
 
 		/* Toggle reverse if cell is selected */
@@ -840,8 +907,9 @@ wl_renderer_draw_line_impl(
 			cur.attr ^= GST_GLYPH_ATTR_REVERSE;
 		}
 
-		/* Let glyph transformers handle non-ASCII codepoints */
-		if (has_glyph_transformers && cur.rune > 0x7F) {
+		/* Scalar ligatures and Kitty coordinate clusters need the hook. */
+		if (has_glyph_transformers && cur.rune >= 0x20 &&
+		    (cur.cluster == NULL || cur.rune == 0x10EEEE)) {
 			gint pixel_x;
 			gint pixel_y;
 			GstColor gt_fg_c;
@@ -897,7 +965,7 @@ wl_renderer_draw_line_impl(
 		}
 
 		/* If attributes changed, flush the accumulated run */
-		if (i > 0 && ATTRCMP(base, cur)) {
+		if (i > 0 && (ATTRCMP(base, cur) || base.cluster != NULL || cur.cluster != NULL)) {
 			wl_draw_glyph_run(self, &base, line, i, ox, row);
 			i = 0;
 		}
@@ -1074,6 +1142,9 @@ wl_renderer_render_impl(GstRenderer *renderer)
 	cursor = gst_terminal_get_cursor(term);
 	cx = cursor->x;
 	cy = cursor->y;
+	gst_wayland_window_set_text_cursor(self->wl_window,
+		self->borderpx + cx * self->cw, self->borderpx + cy * self->ch,
+		self->cw, self->ch);
 
 	/*
 	 * Detect opacity changes (set by the transparency module via
@@ -1151,6 +1222,64 @@ wl_renderer_render_impl(GstRenderer *renderer)
 			mgr, &ctx.base, self->win_w, self->win_h);
 	}
 
+	/* Preedit is an overlay, never terminal data. Byte offsets are IME offsets,
+	 * while glyph positions are logical cell coordinates, clipped to the row. */
+	{
+		const gchar *text;
+		const gchar *p;
+		gint begin, end, x, top, ascent;
+
+		text = gst_wayland_window_get_preedit(self->wl_window, &begin, &end);
+		x = self->borderpx + cx * self->cw;
+		top = self->borderpx + cy * self->ch;
+		ascent = gst_cairo_font_cache_get_ascent(self->font_cache);
+		cairo_save(self->cr);
+		cairo_rectangle(self->cr, x, top, MAX(0, self->win_w - x), self->ch);
+		cairo_clip(self->cr);
+		for (p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+			gunichar rune;
+			gint width;
+			gboolean selected;
+
+			rune = g_utf8_get_char(p);
+			width = g_unichar_iswide(rune) ? self->cw * 2 : self->cw;
+			if (g_unichar_combining_class(rune) != 0)
+				width = 0;
+			selected = begin >= 0 && end >= 0 &&
+				p - text >= MIN(begin, end) && p - text < MAX(begin, end);
+			if (width > 0) {
+				wl_set_source_color(self->cr, self->colors[self->default_bg]);
+				cairo_rectangle(self->cr, x, top, width, self->ch);
+				cairo_fill(self->cr);
+				if (selected) {
+					GstColor fg;
+
+					fg = self->colors[self->default_fg];
+					cairo_set_source_rgba(self->cr, GST_COLOR_R(fg) / 255.0,
+						GST_COLOR_G(fg) / 255.0, GST_COLOR_B(fg) / 255.0, 0.35);
+					cairo_rectangle(self->cr, x, top, width, self->ch);
+					cairo_fill(self->cr);
+				}
+			}
+			wl_set_source_color(self->cr, self->colors[self->default_fg]);
+			cairo_rectangle(self->cr, x, top + self->ch - 1, width, 1);
+			cairo_fill(self->cr);
+			if (begin == end && begin >= 0 && p - text == begin) {
+				cairo_rectangle(self->cr, x, top, 1, self->ch);
+				cairo_fill(self->cr);
+			}
+			x += width;
+		}
+		if (*text != '\0' && begin == end && begin >= 0 && p - text == begin) {
+			cairo_rectangle(self->cr, x - 1, top, 1, self->ch);
+			cairo_fill(self->cr);
+		}
+		if (*text != '\0')
+			gst_cairo_font_cache_draw_cluster(self->font_cache, self->cr, text,
+				GST_FONT_STYLE_NORMAL, self->borderpx + cx * self->cw, top + ascent);
+		cairo_restore(self->cr);
+	}
+
 	/* Clear terminal dirty flags (finish_draw presents the buffer) */
 	gst_terminal_clear_dirty(term);
 }
@@ -1194,6 +1323,7 @@ wl_renderer_resize_impl(
 
 	/* Recreate shm buffer and cairo surface */
 	wl_create_buffer(self, self->win_w, self->win_h);
+	window_invalidated(self->wl_window, self);
 
 	/* Fill with background color (alpha-aware) */
 	if (self->cr != NULL && self->colors != NULL) {
@@ -1243,8 +1373,29 @@ wl_renderer_start_draw_impl(GstRenderer *renderer)
 	if (!(self->win_mode & GST_WIN_MODE_VISIBLE)) {
 		return FALSE;
 	}
+	if (self->buffer_scale != gst_wayland_window_get_scale(self->wl_window) ||
+	    self->buffer_w != gst_wayland_scaled_size(self->win_w, self->buffer_scale) ||
+	    self->buffer_h != gst_wayland_scaled_size(self->win_h, self->buffer_scale))
+		wl_renderer_resize_impl(renderer, (guint)self->win_w, (guint)self->win_h);
+	if (self->buffer_scale != gst_wayland_window_get_scale(self->wl_window) ||
+	    self->buffer_w != gst_wayland_scaled_size(self->win_w, self->buffer_scale) ||
+	    self->buffer_h != gst_wayland_scaled_size(self->win_h, self->buffer_scale))
+		return FALSE;
+	if (self->buffer_busy && self->cr != NULL) {
+		g_autoptr(GBytes) previous = NULL;
 
-	return (self->cr != NULL);
+		/* Retire a submitted allocation rather than blocking on release (some
+		 * compositors retain it until a replacement arrives). Destroying the
+		 * proxy is legal; the compositor retains its own shm mapping. */
+		cairo_surface_flush(self->cairo_surface);
+		previous = g_bytes_new(self->shm_data, self->shm_size);
+		if (!wl_create_buffer(self, self->win_w, self->win_h))
+			return FALSE;
+		memcpy(self->shm_data, g_bytes_get_data(previous, NULL), self->shm_size);
+		cairo_surface_mark_dirty(self->cairo_surface);
+	}
+
+	return self->cr != NULL && cairo_status(self->cr) == CAIRO_STATUS_SUCCESS;
 }
 
 /*
@@ -1266,9 +1417,13 @@ wl_renderer_finish_draw_impl(GstRenderer *renderer)
 	}
 
 	cairo_surface_flush(self->cairo_surface);
+	gst_wayland_window_prepare_surface(self->wl_window, self->win_w, self->win_h);
 	wl_surface_attach(self->wl_surface, self->buffer, 0, 0);
-	wl_surface_damage_buffer(self->wl_surface, 0, 0,
-		self->win_w, self->win_h);
+	if (wl_surface_get_version(self->wl_surface) >= 4)
+		wl_surface_damage_buffer(self->wl_surface, 0, 0, self->buffer_w, self->buffer_h);
+	else
+		wl_surface_damage(self->wl_surface, 0, 0, self->win_w, self->win_h);
+	self->buffer_busy = TRUE;
 	wl_surface_commit(self->wl_surface);
 
 	if (self->wl_display != NULL) {
@@ -1320,6 +1475,9 @@ gst_wayland_renderer_dispose(GObject *object)
 	self->num_colors = 0;
 
 	g_clear_object(&self->selection);
+	if (self->wl_window != NULL)
+		g_signal_handlers_disconnect_by_data(self->wl_window, self);
+	g_clear_object(&self->wl_window);
 
 	G_OBJECT_CLASS(gst_wayland_renderer_parent_class)->dispose(object);
 }
@@ -1347,8 +1505,8 @@ wl_renderer_capture_screenshot_impl(
 
 	self = GST_WAYLAND_RENDERER(renderer);
 
-	w = self->win_w;
-	h = self->win_h;
+	w = self->buffer_w;
+	h = self->buffer_h;
 
 	if (w <= 0 || h <= 0 || self->cairo_surface == NULL) {
 		return NULL;
@@ -1483,7 +1641,9 @@ gst_wayland_renderer_new(
 		"terminal", terminal,
 		NULL);
 
-	self->wl_window = wl_window;
+	self->wl_window = g_object_ref(wl_window);
+	g_signal_connect(wl_window, "scale-changed", G_CALLBACK(window_invalidated), self);
+	g_signal_connect(wl_window, "preedit-changed", G_CALLBACK(window_invalidated), self);
 	self->wl_display = gst_wayland_window_get_display(wl_window);
 	self->wl_surface = gst_wayland_window_get_surface(wl_window);
 	self->wl_shm = gst_wayland_window_get_shm(wl_window);
@@ -1500,6 +1660,7 @@ gst_wayland_renderer_new(
 	self->th = rows * self->ch;
 	self->win_w = 2 * borderpx + self->tw;
 	self->win_h = 2 * borderpx + self->th;
+	gst_wayland_window_get_logical_size(wl_window, &self->win_w, &self->win_h);
 
 	/* Create initial shm buffer and cairo surface */
 	wl_create_buffer(self, self->win_w, self->win_h);

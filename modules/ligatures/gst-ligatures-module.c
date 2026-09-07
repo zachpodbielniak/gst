@@ -21,7 +21,9 @@
 #include "../../src/config/gst-config.h"
 #include "../../src/rendering/gst-render-context.h"
 #include "../../src/rendering/gst-font-cache.h"
+#if defined(GST_HAVE_WAYLAND) || defined(GST_HAVE_LRG_BACKEND)
 #include "../../src/rendering/gst-cairo-font-cache.h"
+#endif
 #include "../../src/core/gst-line.h"
 #include "../../src/boxed/gst-glyph.h"
 #include "../../src/module/gst-module-manager.h"
@@ -99,6 +101,7 @@ struct _GstLigaturesModule
 	/* Per-row skip bitmap: marks columns already rendered by a ligature */
 	gboolean      skip_cols[GST_LIGATURES_MAX_COLS];
 	gint          skip_row_y;   /* y position of the current skip bitmap */
+	gint          last_col;     /* detect a new partial redraw of the same row */
 
 	/* Shaping cache: hash of codepoint run -> CacheEntry */
 	GHashTable   *cache;
@@ -274,7 +277,9 @@ create_hb_font_from_manager(GstLigaturesModule *self)
 		hb_font = hb_ft_font_create_referenced(ft_face);
 		XftUnlockFace(fv->match);
 
-	} else if (backend_type == GST_BACKEND_WAYLAND) {
+	}
+#if defined(GST_HAVE_WAYLAND) || defined(GST_HAVE_LRG_BACKEND)
+	else if (backend_type == GST_BACKEND_WAYLAND || backend_type == GST_BACKEND_LRG) {
 		/*
 		 * Wayland path: get the cairo_scaled_font_t from the cairo
 		 * font cache, then lock its FreeType face.
@@ -303,7 +308,9 @@ create_hb_font_from_manager(GstLigaturesModule *self)
 		hb_font = hb_ft_font_create_referenced(ft_face);
 		cairo_ft_scaled_font_unlock_face(scaled_font);
 
-	} else {
+	}
+#endif
+	else {
 		g_warning("ligatures: unknown backend type %d", backend_type);
 		return NULL;
 	}
@@ -355,7 +362,8 @@ extract_run(
 	len = 0;
 	for (col = start_col; col < max_cols && col < line->len && len < max_run; col++) {
 		g = gst_line_get_glyph_const(line, col);
-		if (g == NULL) {
+		if (g == NULL || g->cluster != NULL || g->rune == 0x10EEEE ||
+		    gst_glyph_is_wide(g)) {
 			break;
 		}
 
@@ -462,6 +470,11 @@ shape_run(
 
 	hb_buffer_destroy(buf);
 
+	/* Reclaim a full cache before inserting; uncached results would leak. */
+	if (self->cache_size >= self->max_cache_size) {
+		g_hash_table_remove_all(self->cache);
+		self->cache_size = 0;
+	}
 	/* Store in cache if under limit */
 	if (self->cache_size < self->max_cache_size) {
 		store_key = g_new0(RunKey, 1);
@@ -517,14 +530,23 @@ gst_ligatures_module_transform_glyph(
 	col = ctx->current_col;
 	cols = ctx->current_cols;
 
-	if (line == NULL || col < 0 || cols <= 0) {
+	if (line == NULL || col < 0 || cols <= 0 || col >= GST_LIGATURES_MAX_COLS ||
+	    ctx->ops->draw_glyph_id == NULL) {
 		return FALSE;
 	}
 
 	/* Reset skip bitmap when we move to a new row (y changes) */
-	if (y != self->skip_row_y) {
-		memset(self->skip_cols, 0, (gsize)cols * sizeof(gboolean));
+	if (y != self->skip_row_y || col <= self->last_col) {
+		memset(self->skip_cols, 0, sizeof(self->skip_cols));
 		self->skip_row_y = y;
+	}
+	self->last_col = col;
+
+	/* Clusters and graphics placeholders are never scalar ligature input. */
+	first_glyph = gst_line_get_glyph_const(line, col);
+	if (first_glyph == NULL || first_glyph->cluster != NULL ||
+	    codepoint == 0x10EEEE || gst_glyph_is_wide(first_glyph)) {
+		return FALSE;
 	}
 
 	/* If this column was already rendered as part of a ligature, skip it */
@@ -538,7 +560,8 @@ gst_ligatures_module_transform_glyph(
 	}
 
 	/* Extract the codepoint run starting at this column */
-	run_len = extract_run(line, col, cols, run_buf, GST_LIGATURES_MAX_RUN_LEN);
+	run_len = extract_run(line, col, MIN(cols, GST_LIGATURES_MAX_COLS),
+		run_buf, GST_LIGATURES_MAX_RUN_LEN);
 
 	/* Single-character runs cannot form ligatures */
 	if (run_len <= 1) {

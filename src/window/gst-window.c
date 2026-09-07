@@ -35,6 +35,7 @@
 /* Signal IDs */
 enum {
 	SIGNAL_KEY_PRESS,
+	SIGNAL_KEY_EVENT,
 	SIGNAL_BUTTON_PRESS,
 	SIGNAL_BUTTON_RELEASE,
 	SIGNAL_MOTION_NOTIFY,
@@ -57,9 +58,51 @@ typedef struct
 	guint  width;
 	guint  height;
 	gboolean visible;
+	guint modifiers_down;
 } GstWindowPrivate;
 
 G_DEFINE_ABSTRACT_TYPE_WITH_PRIVATE(GstWindow, gst_window, G_TYPE_OBJECT)
+
+void
+gst_window_emit_key_event(GstWindow *self, guint keyval, guint base_keyval, guint keycode,
+	guint state, guint event_type, const gchar *text, gint len)
+{
+	gboolean handled = FALSE;
+	guint protocol_state = state;
+	guint modifier_mask = 0;
+	guint pair_mask = 0;
+	GstWindowPrivate *priv;
+
+	g_return_if_fail(GST_IS_WINDOW(self));
+	g_return_if_fail(event_type >= 1 && event_type <= 3);
+	priv = gst_window_get_instance_private(self);
+	/* X11 and wl_keyboard can report modifier state before the key event.
+	 * Keep paired modifier keys so releasing one Shift preserves the other. */
+	switch (keyval) {
+	case 0xffe1: case 0xffe2: modifier_mask = 1u << 0; pair_mask = 3u; break;
+	case 0xffe3: case 0xffe4: modifier_mask = 1u << 2; pair_mask = 3u << 2; break;
+	case 0xffe7: case 0xffe8: modifier_mask = 1u << 7; pair_mask = 3u << 6; break;
+	case 0xffe9: case 0xffea: modifier_mask = 1u << 3; pair_mask = 3u << 8; break;
+	case 0xffeb: case 0xffec: modifier_mask = 1u << 6; pair_mask = 3u << 10; break;
+	case 0xffed: case 0xffee: modifier_mask = 1u << 5; pair_mask = 3u << 12; break;
+	default: break;
+	}
+	if (modifier_mask != 0) {
+		if (event_type == 3)
+			priv->modifiers_down &= ~(1u << (keyval - 0xffe1));
+		else
+			priv->modifiers_down |= 1u << (keyval - 0xffe1);
+		if (priv->modifiers_down & pair_mask)
+			protocol_state |= modifier_mask;
+		else
+			protocol_state &= ~modifier_mask;
+	}
+	g_signal_emit(self, signals[SIGNAL_KEY_EVENT], 0, keyval, base_keyval, keycode,
+		protocol_state, event_type, text, len, &handled);
+	if (!handled && event_type != 3)
+		g_signal_emit(self, signals[SIGNAL_KEY_PRESS], 0,
+			keyval, state, text, len);
+}
 
 static void
 gst_window_dispose(GObject *object)
@@ -82,6 +125,25 @@ gst_window_class_init(GstWindowClass *klass)
 
 	object_class = G_OBJECT_CLASS(klass);
 	object_class->dispose = gst_window_dispose;
+
+	/**
+	 * GstWindow::key-event:
+	 * @self: the window
+	 * @keyval: X11 keysym
+	 * @base_keyval: unshifted X11 keysym
+	 * @keycode: physical key identifier (zero if unknown)
+	 * @state: X11 modifier mask
+	 * @event_type: 1 press, 2 repeat, 3 release
+	 * @text: (nullable): UTF-8 input
+	 * @len: input byte length
+	 *
+	 * Returns: TRUE to suppress legacy key-press fallback
+	 */
+	signals[SIGNAL_KEY_EVENT] = g_signal_new("key-event",
+		G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0,
+		g_signal_accumulator_true_handled, NULL, NULL,
+		G_TYPE_BOOLEAN, 7, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_UINT,
+		G_TYPE_UINT, G_TYPE_STRING, G_TYPE_INT);
 
 	/* Virtual methods default to NULL */
 	klass->show = NULL;
@@ -301,6 +363,23 @@ gst_window_class_init(GstWindowClass *klass)
 	);
 }
 
+/**
+ * clear_modifier_state:
+ * @self: window
+ * @focused: new focus state
+ * @data: unused
+ *
+ * Releases may be lost across focus changes; do not retain paired-key state.
+ */
+static void
+clear_modifier_state(GstWindow *self, gboolean focused, gpointer data)
+{
+	GstWindowPrivate *priv = gst_window_get_instance_private(self);
+	(void)data;
+	if (!focused)
+		priv->modifiers_down = 0;
+}
+
 static void
 gst_window_init(GstWindow *self)
 {
@@ -311,6 +390,7 @@ gst_window_init(GstWindow *self)
 	priv->width = 800;
 	priv->height = 600;
 	priv->visible = FALSE;
+	g_signal_connect(self, "focus-change", G_CALLBACK(clear_modifier_state), NULL);
 }
 
 /* ===== Public API ===== */

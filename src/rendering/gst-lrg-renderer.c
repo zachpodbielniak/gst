@@ -111,6 +111,7 @@ struct _GstLrgRenderer
 	/* Wallpaper state (set during RENDER_BACKGROUND dispatch) */
 	gboolean has_wallpaper;
 	gdouble wallpaper_bg_alpha;
+	GPtrArray *frame_textures;
 };
 
 G_DEFINE_TYPE(GstLrgRenderer, gst_lrg_renderer, GST_TYPE_RENDERER)
@@ -302,6 +303,7 @@ lrg_fill_render_context(
 	GstLrgRenderer       *self,
 	GstLrgRenderContext  *ctx
 ){
+	memset(ctx, 0, sizeof(*ctx));
 	gst_lrg_render_context_init_ops(ctx);
 
 	ctx->base.cw         = self->cw;
@@ -320,9 +322,21 @@ lrg_fill_render_context(
 	ctx->num_colors  = self->num_colors;
 	ctx->fg          = self->colors[self->default_fg];
 	ctx->bg          = self->colors[self->default_bg];
+	ctx->frame_textures = self->frame_textures;
 }
 
 /* ===== Glyph run drawing ===== */
+
+/* Use the same cluster rasterization and frame texture lifetime as overlays. */
+static gboolean
+lrg_draw_cluster(GstLrgRenderer *self, const gchar *text, GstFontStyle style,
+	gint x, gint y, gint width, GstColor fg)
+{
+	GstLrgRenderContext ctx;
+	lrg_fill_render_context(self, &ctx);
+	ctx.fg = fg;
+	return gst_render_context_draw_cluster(&ctx.base, text, style, x, y, width);
+}
 
 /*
  * lrg_draw_glyph_run:
@@ -394,7 +408,8 @@ lrg_draw_glyph_run(
 		GstFontStyle fstyle;
 		gfloat runewidth;
 
-		g = gst_line_get_glyph(line, x + i);
+		g = gst_line_get_glyph(line,
+			x + i * ((mode & GST_GLYPH_ATTR_WIDE) ? 2 : 1));
 		if (g == NULL) {
 			xp += (gfloat)self->cw;
 			continue;
@@ -422,9 +437,12 @@ lrg_draw_glyph_run(
 
 		/* Skip blank cells (space) to save draw calls; otherwise draw the
 		 * glyph via the cairo-ft atlas (identical to the other backends). */
-		if (rune != 0 && rune != (GstRune)' ') {
-			gst_grl_font_cache_draw_glyph(self->font_cache, rune, fstyle,
-				(gint)xp, winy, fg);
+		if (rune != 0 && (rune != (GstRune)' ' || g->cluster != NULL)) {
+			if (g->cluster == NULL || !lrg_draw_cluster(self, g->cluster,
+			    fstyle, (gint)xp, winy, (gint)runewidth, fg)) {
+				gst_grl_font_cache_draw_glyph(self->font_cache, rune, fstyle,
+					(gint)xp, winy, fg);
+			}
 		}
 
 		xp += runewidth;
@@ -515,6 +533,7 @@ lrg_renderer_draw_line_impl(
 			continue;
 		}
 
+		/* Borrow cluster text for attribute-only changes; never clear this copy. */
 		cur = *new_glyph;
 
 		if (self->selection != NULL
@@ -522,8 +541,9 @@ lrg_renderer_draw_line_impl(
 			cur.attr ^= GST_GLYPH_ATTR_REVERSE;
 		}
 
-		/* Let glyph transformers handle non-ASCII codepoints */
-		if (has_glyph_transformers && cur.rune > 0x7F) {
+		/* ASCII runs also need the transformer hook for programming ligatures. */
+		if (has_glyph_transformers && cur.rune >= 0x20 &&
+		    (cur.cluster == NULL || cur.rune == 0x10EEEE)) {
 			gint pixel_x;
 			gint pixel_y;
 			GstColor gt_fg_c;
@@ -713,8 +733,7 @@ lrg_renderer_render_impl(GstRenderer *renderer)
 	cx = cursor->x;
 	cy = cursor->y;
 
-	/* Dispatch render background to modules (modules using fill_rect; the
-	 * 2D LRG backend has no image-based wallpaper). */
+	/* Dispatch render backgrounds before the terminal grid. */
 	{
 		GstModuleManager *mgr;
 		GstLrgRenderContext bg_ctx;
@@ -868,6 +887,7 @@ lrg_renderer_finish_draw_impl(GstRenderer *renderer)
 	}
 
 	grl_window_swap_buffers(self->win);
+	g_ptr_array_set_size(self->frame_textures, 0);
 }
 
 /*
@@ -902,6 +922,7 @@ gst_lrg_renderer_dispose(GObject *object)
 	self->num_colors = 0;
 
 	g_clear_object(&self->selection);
+	g_clear_pointer(&self->frame_textures, g_ptr_array_unref);
 
 	G_OBJECT_CLASS(gst_lrg_renderer_parent_class)->dispose(object);
 }
@@ -953,6 +974,7 @@ gst_lrg_renderer_init(GstLrgRenderer *self)
 	self->selection = NULL;
 	self->has_wallpaper = FALSE;
 	self->wallpaper_bg_alpha = 1.0;
+	self->frame_textures = g_ptr_array_new_with_free_func(g_object_unref);
 }
 
 /* ===== Public API ===== */

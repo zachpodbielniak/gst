@@ -22,10 +22,18 @@
 #include <wayland-client.h>
 #include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbcommon-compose.h>
+#include <locale.h>
 
 /* Generated Wayland protocol implementations */
 #include "../wayland-protocols/primary-selection-unstable-v1-client-protocol.h"
 #include "../wayland-protocols/primary-selection-unstable-v1-protocol.c"
+#include "../wayland-protocols/fractional-scale-v1-client-protocol.h"
+#include "../wayland-protocols/fractional-scale-v1-protocol.c"
+#include "../wayland-protocols/viewporter-client-protocol.h"
+#include "../wayland-protocols/viewporter-protocol.c"
+#include "../wayland-protocols/text-input-unstable-v3-client-protocol.h"
+#include "../wayland-protocols/text-input-unstable-v3-protocol.c"
 
 #include <libdecor.h>
 
@@ -58,6 +66,14 @@
  * primary selection.
  */
 
+typedef struct {
+	GstWaylandWindow *window;
+	struct wl_output *proxy;
+	guint32 id;
+	gint scale;
+	gboolean entered;
+} GstWaylandOutput;
+
 struct _GstWaylandWindow
 {
 	GstWindow parent_instance;
@@ -68,7 +84,14 @@ struct _GstWaylandWindow
 	struct wl_compositor *compositor;
 	struct wl_shm        *shm;
 	struct wl_seat       *seat;
-	struct wl_output     *output;
+	guint32 seat_id;
+	GList *outputs;
+	struct wp_fractional_scale_manager_v1 *scale_manager;
+	struct wp_fractional_scale_v1 *fractional_scale;
+	struct wp_viewporter *viewporter;
+	struct wp_viewport *viewport;
+	guint scale;
+	guint preferred_scale;
 
 	/* Window surface and libdecor */
 	struct wl_surface      *surface;
@@ -80,6 +103,22 @@ struct _GstWaylandWindow
 	struct xkb_context   *xkb_ctx;
 	struct xkb_keymap    *xkb_keymap;
 	struct xkb_state     *xkb_state;
+	struct xkb_compose_table *compose_table;
+	struct xkb_compose_state *compose_state;
+	struct zwp_text_input_manager_v3 *text_manager;
+	struct zwp_text_input_v3 *text_input;
+	gboolean text_allowed;
+	gboolean text_entered;
+	gboolean text_active;
+	gboolean text_defer;
+	gboolean text_dirty;
+	guint32 text_serial;
+	gint text_x, text_y, text_width, text_height;
+	gchar *preedit;
+	gchar *pending_preedit;
+	gchar *pending_commit;
+	gint preedit_begin, preedit_end;
+	gint pending_begin, pending_end;
 
 	/* Pointer input */
 	struct wl_pointer    *pointer;
@@ -124,6 +163,7 @@ struct _GstWaylandWindow
 	guint32 repeat_key;
 	gint32 repeat_delay;
 	gint32 repeat_rate;
+	gchar *repeat_composed;
 
 	/* Rendering-level opacity (0.0 = transparent, 1.0 = opaque) */
 	gdouble opacity;
@@ -145,6 +185,371 @@ static const struct wl_registry_listener registry_listener = {
 	registry_global,
 	registry_global_remove
 };
+
+/* Round upward without overflowing signed protocol dimensions. */
+gint
+gst_wayland_scaled_size(gint logical, guint scale)
+{
+	guint64 size;
+
+	if (logical <= 0 || scale == 0)
+		return 0;
+	size = ((guint64)logical * scale + 119) / 120;
+	return size <= G_MAXINT ? (gint)size : 0;
+}
+
+guint
+gst_wayland_window_get_scale(GstWaylandWindow *self)
+{
+	g_return_val_if_fail(GST_IS_WAYLAND_WINDOW(self), 120);
+	return self->scale;
+}
+
+void
+gst_wayland_window_get_logical_size(GstWaylandWindow *self, gint *width, gint *height)
+{
+	g_return_if_fail(GST_IS_WAYLAND_WINDOW(self));
+	if (width != NULL) *width = self->win_w;
+	if (height != NULL) *height = self->win_h;
+}
+
+/* Scale changes invalidate the buffer, not terminal cell geometry. */
+static void
+update_scale(GstWaylandWindow *self)
+{
+	GList *item;
+	guint scale;
+
+	scale = 120;
+	for (item = self->outputs; item != NULL; item = item->next) {
+		GstWaylandOutput *output;
+
+		output = (GstWaylandOutput *)item->data;
+		if (output->entered)
+			scale = MAX(scale, (guint)output->scale * 120);
+	}
+	if (self->viewport != NULL && self->preferred_scale != 0)
+		scale = self->preferred_scale;
+	else if (self->surface != NULL && wl_surface_get_version(self->surface) < 3)
+		scale = 120;
+	if (scale != self->scale) {
+		self->scale = scale;
+		g_signal_emit_by_name(self, "scale-changed");
+	}
+}
+
+void
+gst_wayland_window_prepare_surface(GstWaylandWindow *self, gint width, gint height)
+{
+	g_return_if_fail(GST_IS_WAYLAND_WINDOW(self));
+	if (self->viewport != NULL) {
+		wp_viewport_set_destination(self->viewport, width, height);
+		if (wl_surface_get_version(self->surface) >= 3)
+			wl_surface_set_buffer_scale(self->surface, 1);
+	} else if (wl_surface_get_version(self->surface) >= 3) {
+		wl_surface_set_buffer_scale(self->surface, (gint)(self->scale / 120));
+	}
+}
+
+/* Only outputs entered by this content surface influence the integer fallback. */
+static void
+surface_enter(void *data, struct wl_surface *surface, struct wl_output *proxy)
+{
+	GstWaylandWindow *self;
+	GList *item;
+
+	(void)surface;
+	self = (GstWaylandWindow *)data;
+	for (item = self->outputs; item != NULL; item = item->next) {
+		GstWaylandOutput *output;
+
+		output = (GstWaylandOutput *)item->data;
+		if (output->proxy == proxy)
+			output->entered = TRUE;
+	}
+	update_scale(self);
+}
+
+static void
+surface_leave(void *data, struct wl_surface *surface, struct wl_output *proxy)
+{
+	GstWaylandWindow *self;
+	GList *item;
+
+	(void)surface;
+	self = (GstWaylandWindow *)data;
+	for (item = self->outputs; item != NULL; item = item->next) {
+		GstWaylandOutput *output;
+
+		output = (GstWaylandOutput *)item->data;
+		if (output->proxy == proxy)
+			output->entered = FALSE;
+	}
+	update_scale(self);
+}
+
+static const struct wl_surface_listener surface_listener = {
+	.enter = surface_enter,
+	.leave = surface_leave
+};
+
+static void
+output_geometry(void *data, struct wl_output *output, int32_t x, int32_t y,
+	int32_t width, int32_t height, int32_t subpixel, const char *make,
+	const char *model, int32_t transform)
+{
+	(void)data; (void)output; (void)x; (void)y; (void)width; (void)height;
+	(void)subpixel; (void)make; (void)model; (void)transform;
+}
+
+static void
+output_mode(void *data, struct wl_output *output, uint32_t flags,
+	int32_t width, int32_t height, int32_t refresh)
+{
+	(void)data; (void)output; (void)flags; (void)width; (void)height; (void)refresh;
+}
+
+static void
+output_done(void *data, struct wl_output *proxy)
+{
+	(void)proxy;
+	update_scale(((GstWaylandOutput *)data)->window);
+}
+
+static void
+output_scale(void *data, struct wl_output *proxy, int32_t scale)
+{
+	(void)proxy;
+	if (scale > 0 && scale <= G_MAXINT / 120)
+		((GstWaylandOutput *)data)->scale = scale;
+}
+
+static const struct wl_output_listener output_listener = {
+	.geometry = output_geometry, .mode = output_mode,
+	.done = output_done, .scale = output_scale
+};
+
+static void
+fractional_preferred(void *data, struct wp_fractional_scale_v1 *proxy, uint32_t scale)
+{
+	GstWaylandWindow *self;
+
+	(void)proxy;
+	self = (GstWaylandWindow *)data;
+	if (scale != 0) {
+		self->preferred_scale = scale;
+		update_scale(self);
+	}
+}
+
+static const struct wp_fractional_scale_v1_listener fractional_listener = {
+	fractional_preferred
+};
+
+/* Managers may be advertised after the surface was created. */
+static void
+create_fractional_scale(GstWaylandWindow *self)
+{
+	if (self->surface != NULL && self->fractional_scale == NULL &&
+	    self->scale_manager != NULL && self->viewporter != NULL) {
+		self->viewport = wp_viewporter_get_viewport(self->viewporter, self->surface);
+		self->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+			self->scale_manager, self->surface);
+		wp_fractional_scale_v1_add_listener(self->fractional_scale,
+			&fractional_listener, self);
+	}
+}
+
+/* Pending IME events are an atomic transaction terminated by done. */
+static void
+clear_preedit(GstWaylandWindow *self)
+{
+	g_clear_pointer(&self->pending_preedit, g_free);
+	g_clear_pointer(&self->pending_commit, g_free);
+	g_clear_pointer(&self->preedit, g_free);
+	self->preedit_begin = self->preedit_end = -1;
+	self->pending_begin = self->pending_end = -1;
+	g_signal_emit_by_name(self, "preedit-changed");
+}
+
+static void
+commit_text_state(GstWaylandWindow *self)
+{
+	if (self->text_defer) {
+		self->text_dirty = TRUE;
+		return;
+	}
+	self->text_dirty = FALSE;
+	/* Omit surrounding_text deliberately: no editable PTY context exists. */
+	zwp_text_input_v3_set_content_type(self->text_input,
+		ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+		ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_TERMINAL);
+	zwp_text_input_v3_set_cursor_rectangle(self->text_input,
+		self->text_x, self->text_y, self->text_width, self->text_height);
+	zwp_text_input_v3_commit(self->text_input);
+	self->text_serial++;
+}
+
+static void
+update_text_input(GstWaylandWindow *self)
+{
+	gboolean active;
+
+	active = self->text_input != NULL && self->text_entered && self->text_allowed;
+	if (active == self->text_active)
+		return;
+	self->text_active = active;
+	self->text_defer = FALSE;
+	clear_preedit(self);
+	if (self->repeat_timer_id != 0) {
+		g_source_remove(self->repeat_timer_id);
+		self->repeat_timer_id = 0;
+	}
+	if (self->compose_state != NULL)
+		xkb_compose_state_reset(self->compose_state);
+	if (active) {
+		zwp_text_input_v3_enable(self->text_input);
+		commit_text_state(self);
+	} else if (self->text_input != NULL) {
+		zwp_text_input_v3_disable(self->text_input);
+		zwp_text_input_v3_commit(self->text_input);
+		self->text_serial++;
+	}
+}
+
+void
+gst_wayland_window_set_text_input_enabled(GstWaylandWindow *self, gboolean enabled)
+{
+	g_return_if_fail(GST_IS_WAYLAND_WINDOW(self));
+	self->text_allowed = enabled;
+	update_text_input(self);
+}
+
+void
+gst_wayland_window_set_text_cursor(GstWaylandWindow *self,
+	gint x, gint y, gint width, gint height)
+{
+	g_return_if_fail(GST_IS_WAYLAND_WINDOW(self));
+	width = MAX(1, width);
+	height = MAX(1, height);
+	if (self->text_x == x && self->text_y == y &&
+	    self->text_width == width && self->text_height == height)
+		return;
+	self->text_x = x; self->text_y = y;
+	self->text_width = width; self->text_height = height;
+	if (self->text_active)
+		commit_text_state(self);
+}
+
+const gchar *
+gst_wayland_window_get_preedit(GstWaylandWindow *self, gint *begin, gint *end)
+{
+	g_return_val_if_fail(GST_IS_WAYLAND_WINDOW(self), "");
+	if (begin != NULL) *begin = self->preedit_begin;
+	if (end != NULL) *end = self->preedit_end;
+	return self->preedit != NULL ? self->preedit : "";
+}
+
+static void
+text_enter(void *data, struct zwp_text_input_v3 *input, struct wl_surface *surface)
+{
+	GstWaylandWindow *self;
+
+	(void)input;
+	self = (GstWaylandWindow *)data;
+	self->text_entered = surface == self->surface;
+	update_text_input(self);
+}
+
+static void
+text_leave(void *data, struct zwp_text_input_v3 *input, struct wl_surface *surface)
+{
+	GstWaylandWindow *self;
+
+	(void)input; (void)surface;
+	self = (GstWaylandWindow *)data;
+	self->text_entered = FALSE;
+	update_text_input(self);
+}
+
+static void
+text_preedit(void *data, struct zwp_text_input_v3 *input, const char *text,
+	int32_t begin, int32_t end)
+{
+	GstWaylandWindow *self;
+
+	(void)input;
+	self = (GstWaylandWindow *)data;
+	g_free(self->pending_preedit);
+	self->pending_preedit = text != NULL && g_utf8_validate(text, -1, NULL)
+		? g_strdup(text) : NULL;
+	self->pending_begin = begin;
+	self->pending_end = end;
+}
+
+static void
+text_commit(void *data, struct zwp_text_input_v3 *input, const char *text)
+{
+	GstWaylandWindow *self;
+
+	(void)input;
+	self = (GstWaylandWindow *)data;
+	g_free(self->pending_commit);
+	self->pending_commit = g_strdup(text);
+}
+
+static void
+text_delete(void *data, struct zwp_text_input_v3 *input, uint32_t before, uint32_t after)
+{
+	/* No surrounding text was supplied; never turn byte counts into backspaces. */
+	(void)data; (void)input; (void)before; (void)after;
+}
+
+static void
+text_done(void *data, struct zwp_text_input_v3 *input, uint32_t serial)
+{
+	GstWaylandWindow *self;
+	gchar *commit;
+
+	(void)input;
+	self = (GstWaylandWindow *)data;
+	/* A stale serial still delivers text, but must not commit client state. */
+	if (!self->text_active) {
+		g_clear_pointer(&self->pending_preedit, g_free);
+		g_clear_pointer(&self->pending_commit, g_free);
+		return;
+	}
+	self->text_defer = TRUE;
+	commit = (gchar *)g_steal_pointer(&self->pending_commit);
+	g_free(self->preedit);
+	self->preedit = (gchar *)g_steal_pointer(&self->pending_preedit);
+	self->preedit_begin = self->pending_begin;
+	self->preedit_end = self->pending_end;
+	self->pending_begin = self->pending_end = -1;
+	if (commit != NULL && g_utf8_validate(commit, -1, NULL))
+		g_signal_emit_by_name(self, "text-commit", commit);
+	g_free(commit);
+	g_signal_emit_by_name(self, "preedit-changed");
+	self->text_defer = serial != self->text_serial;
+	if (!self->text_defer && self->text_dirty)
+		commit_text_state(self);
+}
+
+static const struct zwp_text_input_v3_listener text_listener = {
+	.enter = text_enter, .leave = text_leave, .preedit_string = text_preedit,
+	.commit_string = text_commit, .delete_surrounding_text = text_delete,
+	.done = text_done
+};
+
+/* Registry order is unspecified, and managers/seats can appear later. */
+static void
+create_text_input(GstWaylandWindow *self)
+{
+	if (self->text_input == NULL && self->text_manager != NULL && self->seat != NULL) {
+		self->text_input = zwp_text_input_manager_v3_get_text_input(self->text_manager, self->seat);
+		zwp_text_input_v3_add_listener(self->text_input, &text_listener, self);
+	}
+}
 
 /* ===== libdecor callbacks ===== */
 
@@ -318,6 +723,12 @@ keyboard_keymap(
 	}
 
 	/* Free old keymap/state */
+	if (self->repeat_timer_id != 0) {
+		g_source_remove(self->repeat_timer_id);
+		self->repeat_timer_id = 0;
+	}
+	if (self->compose_state != NULL)
+		xkb_compose_state_reset(self->compose_state);
 	if (self->xkb_state != NULL) {
 		xkb_state_unref(self->xkb_state);
 		self->xkb_state = NULL;
@@ -370,6 +781,8 @@ keyboard_leave(
 
 	self = (GstWaylandWindow *)data;
 	self->focused = FALSE;
+	if (self->compose_state != NULL)
+		xkb_compose_state_reset(self->compose_state);
 
 	/* Cancel key repeat on focus loss */
 	if (self->repeat_timer_id != 0) {
@@ -431,30 +844,71 @@ xkb_to_x11_mods(struct xkb_state *state)
  * Translates a key event to keysym + UTF-8 text and
  * emits the "key-press" signal.
  */
-static void
-emit_key_event(GstWaylandWindow *self, uint32_t key)
+static gboolean
+emit_key_event(GstWaylandWindow *self, uint32_t key, gboolean repeat)
 {
 	xkb_keysym_t keysym;
+	xkb_keysym_t base_keysym;
+	const xkb_keysym_t *base_syms;
 	guint mods;
 	char buf[128];
 	int len;
 
 	if (self->xkb_state == NULL) {
-		return;
+		return FALSE;
 	}
 
 	keysym = xkb_state_key_get_one_sym(self->xkb_state, key + 8);
+	base_keysym = keysym;
+	if (xkb_keymap_key_get_syms_by_level(self->xkb_keymap, key + 8,
+		xkb_state_key_get_layout(self->xkb_state, key + 8), 0, &base_syms) == 1)
+		base_keysym = base_syms[0];
 	mods = xkb_to_x11_mods(self->xkb_state);
+	if (!repeat)
+		g_clear_pointer(&self->repeat_composed, g_free);
+	if (!repeat && self->compose_state != NULL &&
+	    (mods & (ControlMask | Mod1Mask | Mod4Mask)))
+		xkb_compose_state_reset(self->compose_state);
+	if (repeat && self->repeat_composed != NULL) {
+		gst_window_emit_key_event(GST_WINDOW(self), XKB_KEY_NoSymbol, XKB_KEY_NoSymbol,
+			key + 8, mods, 2, self->repeat_composed,
+			(gint)strlen(self->repeat_composed));
+		return TRUE;
+	}
+	/* The compositor forwards unconsumed keys; do not suppress them for IME. */
+	if (!repeat && self->compose_state != NULL &&
+	    !(mods & (ControlMask | Mod1Mask | Mod4Mask))) {
+		xkb_compose_state_feed(self->compose_state, keysym);
+		switch (xkb_compose_state_get_status(self->compose_state)) {
+		case XKB_COMPOSE_COMPOSING:
+			return FALSE;
+		case XKB_COMPOSE_CANCELLED:
+			xkb_compose_state_reset(self->compose_state);
+			return FALSE;
+		case XKB_COMPOSE_COMPOSED:
+			len = xkb_compose_state_get_utf8(self->compose_state, NULL, 0);
+			self->repeat_composed = g_malloc((gsize)len + 1);
+			xkb_compose_state_get_utf8(self->compose_state,
+				self->repeat_composed, (gsize)len + 1);
+			xkb_compose_state_reset(self->compose_state);
+			gst_window_emit_key_event(GST_WINDOW(self), XKB_KEY_NoSymbol, XKB_KEY_NoSymbol,
+				key + 8, mods, 1, self->repeat_composed, len);
+			return TRUE;
+		case XKB_COMPOSE_NOTHING:
+			break;
+		}
+	}
 	len = xkb_state_key_get_utf8(self->xkb_state, key + 8,
 		buf, sizeof(buf));
 
-	if (len < 0) {
+	if (len < 0 || (gsize)len >= sizeof(buf)) {
 		len = 0;
 	}
 	buf[len] = '\0';
 
-	g_signal_emit_by_name(self, "key-press",
-		(guint)keysym, mods, buf, len);
+	gst_window_emit_key_event(GST_WINDOW(self), (guint)keysym, (guint)base_keysym,
+		key + 8, mods, repeat ? 2 : 1, buf, len);
+	return TRUE;
 }
 
 static gboolean
@@ -463,7 +917,7 @@ key_repeat_cb(gpointer data)
 	GstWaylandWindow *self;
 
 	self = (GstWaylandWindow *)data;
-	emit_key_event(self, self->repeat_key);
+	emit_key_event(self, self->repeat_key, TRUE);
 	return G_SOURCE_CONTINUE;
 }
 
@@ -477,14 +931,14 @@ key_repeat_start_cb(gpointer data)
 	/* Switch from delay timer to repeat rate timer */
 	if (self->repeat_rate > 0) {
 		self->repeat_timer_id = g_timeout_add(
-			(guint)(1000 / self->repeat_rate),
+			MAX(1u, (guint)(1000 / self->repeat_rate)),
 			key_repeat_cb, self);
 	} else {
 		self->repeat_timer_id = 0;
 	}
 
 	/* Emit one repeat now */
-	emit_key_event(self, self->repeat_key);
+	emit_key_event(self, self->repeat_key, TRUE);
 
 	return G_SOURCE_REMOVE;
 }
@@ -505,7 +959,9 @@ keyboard_key(
 	self->input_serial = serial;
 
 	if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		emit_key_event(self, key);
+		gboolean repeatable;
+
+		repeatable = emit_key_event(self, key, FALSE);
 
 		/* Set up key repeat */
 		if (self->repeat_timer_id != 0) {
@@ -513,7 +969,8 @@ keyboard_key(
 			self->repeat_timer_id = 0;
 		}
 
-		if (self->repeat_delay > 0 &&
+		if (repeatable && self->xkb_keymap != NULL &&
+		    self->repeat_rate > 0 && self->repeat_delay >= 0 &&
 		    xkb_keymap_key_repeats(self->xkb_keymap, key + 8)) {
 			self->repeat_key = key;
 			self->repeat_timer_id = g_timeout_add(
@@ -522,6 +979,11 @@ keyboard_key(
 		}
 	} else {
 		/* Key released: cancel repeat */
+		if (self->xkb_state != NULL)
+			gst_window_emit_key_event(GST_WINDOW(self),
+				xkb_state_key_get_one_sym(self->xkb_state, key + 8),
+				XKB_KEY_NoSymbol,
+				key + 8, xkb_to_x11_mods(self->xkb_state), 3, NULL, 0);
 		if (self->repeat_timer_id != 0 &&
 		    self->repeat_key == key) {
 			g_source_remove(self->repeat_timer_id);
@@ -562,6 +1024,10 @@ keyboard_repeat_info(
 	self = (GstWaylandWindow *)data;
 	self->repeat_rate = rate;
 	self->repeat_delay = delay;
+	if (rate <= 0 && self->repeat_timer_id != 0) {
+		g_source_remove(self->repeat_timer_id);
+		self->repeat_timer_id = 0;
+	}
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {
@@ -991,7 +1457,11 @@ seat_capabilities(
 				&keyboard_listener, self);
 		}
 	} else if (self->keyboard != NULL) {
-		wl_keyboard_destroy(self->keyboard);
+		keyboard_leave(self, self->keyboard, 0, self->surface);
+		if (wl_keyboard_get_version(self->keyboard) >= 3)
+			wl_keyboard_release(self->keyboard);
+		else
+			wl_keyboard_destroy(self->keyboard);
 		self->keyboard = NULL;
 	}
 
@@ -1003,8 +1473,12 @@ seat_capabilities(
 				&pointer_listener, self);
 		}
 	} else if (self->pointer != NULL) {
-		wl_pointer_destroy(self->pointer);
+		if (wl_pointer_get_version(self->pointer) >= 3)
+			wl_pointer_release(self->pointer);
+		else
+			wl_pointer_destroy(self->pointer);
 		self->pointer = NULL;
+		self->pointer_button_state = 0;
 	}
 }
 
@@ -1042,10 +1516,32 @@ registry_global(
 			reg, id, &wl_shm_interface,
 			MIN(version, 1));
 	} else if (g_strcmp0(interface, wl_seat_interface.name) == 0) {
+		if (self->seat != NULL)
+			return;
+		self->seat_id = id;
 		self->seat = (struct wl_seat *)wl_registry_bind(
 			reg, id, &wl_seat_interface,
 			MIN(version, 5));
 		wl_seat_add_listener(self->seat, &seat_listener, self);
+		create_text_input(self);
+	} else if (g_strcmp0(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+		if (self->scale_manager != NULL)
+			return;
+		self->scale_manager = (struct wp_fractional_scale_manager_v1 *)wl_registry_bind(
+			reg, id, &wp_fractional_scale_manager_v1_interface, 1);
+		create_fractional_scale(self);
+	} else if (g_strcmp0(interface, wp_viewporter_interface.name) == 0) {
+		if (self->viewporter != NULL)
+			return;
+		self->viewporter = (struct wp_viewporter *)wl_registry_bind(
+			reg, id, &wp_viewporter_interface, 1);
+		create_fractional_scale(self);
+	} else if (g_strcmp0(interface, zwp_text_input_manager_v3_interface.name) == 0) {
+		if (self->text_manager != NULL)
+			return;
+		self->text_manager = (struct zwp_text_input_manager_v3 *)wl_registry_bind(
+			reg, id, &zwp_text_input_manager_v3_interface, 1);
+		create_text_input(self);
 	} else if (g_strcmp0(interface,
 	    wl_data_device_manager_interface.name) == 0) {
 		self->data_device_manager =
@@ -1060,11 +1556,16 @@ registry_global(
 			&zwp_primary_selection_device_manager_v1_interface,
 			MIN(version, 1));
 	} else if (g_strcmp0(interface, wl_output_interface.name) == 0) {
-		if (self->output == NULL) {
-			self->output = (struct wl_output *)wl_registry_bind(
-				reg, id, &wl_output_interface,
-				MIN(version, 2));
-		}
+		GstWaylandOutput *output;
+
+		output = g_new0(GstWaylandOutput, 1);
+		output->window = self;
+		output->id = id;
+		output->scale = 1;
+		output->proxy = (struct wl_output *)wl_registry_bind(
+			reg, id, &wl_output_interface, MIN(version, 2));
+		self->outputs = g_list_prepend(self->outputs, output);
+		wl_output_add_listener(output->proxy, &output_listener, output);
 	}
 }
 
@@ -1074,7 +1575,46 @@ registry_global_remove(
 	struct wl_registry *reg,
 	uint32_t           id
 ){
-	(void)data; (void)reg; (void)id;
+	GstWaylandWindow *self;
+	GList *item;
+
+	(void)reg;
+	self = (GstWaylandWindow *)data;
+	for (item = self->outputs; item != NULL; item = item->next) {
+		GstWaylandOutput *output;
+
+		output = (GstWaylandOutput *)item->data;
+		if (output->id == id) {
+			wl_output_destroy(output->proxy);
+			g_free(output);
+			self->outputs = g_list_delete_link(self->outputs, item);
+			update_scale(self);
+			return;
+		}
+	}
+	if (self->seat != NULL && id == self->seat_id) {
+		self->text_entered = FALSE;
+		update_text_input(self);
+		if (self->text_input != NULL) {
+			zwp_text_input_v3_destroy(self->text_input);
+			self->text_input = NULL;
+			self->text_serial = 0;
+		}
+		seat_capabilities(self, self->seat, 0);
+		if (self->data_device != NULL) {
+			wl_data_device_destroy(self->data_device);
+			self->data_device = NULL;
+		}
+		if (self->primary_device != NULL) {
+			zwp_primary_selection_device_v1_destroy(self->primary_device);
+			self->primary_device = NULL;
+		}
+		if (wl_seat_get_version(self->seat) >= 5)
+			wl_seat_release(self->seat);
+		else
+			wl_seat_destroy(self->seat);
+		self->seat = NULL;
+	}
 }
 
 /* ===== Clipboard helper: read data from fd ===== */
@@ -1712,6 +2252,28 @@ gst_wayland_window_dispose(GObject *object)
 	}
 
 	/* Free selection text */
+	self->text_allowed = FALSE;
+	update_text_input(self);
+	g_clear_pointer(&self->preedit, g_free);
+	g_clear_pointer(&self->pending_preedit, g_free);
+	g_clear_pointer(&self->pending_commit, g_free);
+	g_clear_pointer(&self->repeat_composed, g_free);
+	if (self->text_input != NULL) {
+		zwp_text_input_v3_destroy(self->text_input);
+		self->text_input = NULL;
+	}
+	if (self->text_manager != NULL) {
+		zwp_text_input_manager_v3_destroy(self->text_manager);
+		self->text_manager = NULL;
+	}
+	if (self->compose_state != NULL) {
+		xkb_compose_state_unref(self->compose_state);
+		self->compose_state = NULL;
+	}
+	if (self->compose_table != NULL) {
+		xkb_compose_table_unref(self->compose_table);
+		self->compose_table = NULL;
+	}
 	g_clear_pointer(&self->selection_text, g_free);
 	g_clear_pointer(&self->clipboard_text, g_free);
 
@@ -1761,11 +2323,17 @@ gst_wayland_window_dispose(GObject *object)
 	}
 
 	if (self->pointer != NULL) {
-		wl_pointer_destroy(self->pointer);
+		if (wl_pointer_get_version(self->pointer) >= 3)
+			wl_pointer_release(self->pointer);
+		else
+			wl_pointer_destroy(self->pointer);
 		self->pointer = NULL;
 	}
 	if (self->keyboard != NULL) {
-		wl_keyboard_destroy(self->keyboard);
+		if (wl_keyboard_get_version(self->keyboard) >= 3)
+			wl_keyboard_release(self->keyboard);
+		else
+			wl_keyboard_destroy(self->keyboard);
 		self->keyboard = NULL;
 	}
 
@@ -1791,17 +2359,40 @@ gst_wayland_window_dispose(GObject *object)
 		self->libdecor_ctx = NULL;
 	}
 
+	if (self->fractional_scale != NULL) {
+		wp_fractional_scale_v1_destroy(self->fractional_scale);
+		self->fractional_scale = NULL;
+	}
+	if (self->viewport != NULL) {
+		wp_viewport_destroy(self->viewport);
+		self->viewport = NULL;
+	}
+	if (self->scale_manager != NULL) {
+		wp_fractional_scale_manager_v1_destroy(self->scale_manager);
+		self->scale_manager = NULL;
+	}
+	if (self->viewporter != NULL) {
+		wp_viewporter_destroy(self->viewporter);
+		self->viewporter = NULL;
+	}
 	if (self->surface != NULL) {
 		wl_surface_destroy(self->surface);
 		self->surface = NULL;
 	}
 	if (self->seat != NULL) {
-		wl_seat_destroy(self->seat);
+		if (wl_seat_get_version(self->seat) >= 5)
+			wl_seat_release(self->seat);
+		else
+			wl_seat_destroy(self->seat);
 		self->seat = NULL;
 	}
-	if (self->output != NULL) {
-		wl_output_destroy(self->output);
-		self->output = NULL;
+	while (self->outputs != NULL) {
+		GstWaylandOutput *output;
+
+		output = (GstWaylandOutput *)self->outputs->data;
+		wl_output_destroy(output->proxy);
+		g_free(output);
+		self->outputs = g_list_delete_link(self->outputs, self->outputs);
 	}
 	if (self->shm != NULL) {
 		wl_shm_destroy(self->shm);
@@ -1831,6 +2422,31 @@ gst_wayland_window_class_init(GstWaylandWindowClass *klass)
 
 	object_class = G_OBJECT_CLASS(klass);
 	object_class->dispose = gst_wayland_window_dispose;
+	/**
+	 * GstWaylandWindow::scale-changed:
+	 * @self: the window
+	 *
+	 * Buffer scale changed without changing logical geometry.
+	 */
+	g_signal_new("scale-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+	/**
+	 * GstWaylandWindow::text-commit:
+	 * @self: the window
+	 * @text: committed UTF-8 text
+	 *
+	 * Write text directly to the PTY, not through key or paste encoding.
+	 */
+	g_signal_new("text-commit", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL, G_TYPE_NONE, 1, G_TYPE_STRING);
+	/**
+	 * GstWaylandWindow::preedit-changed:
+	 * @self: the window
+	 *
+	 * Redraw the preedit obtained with gst_wayland_window_get_preedit().
+	 */
+	g_signal_new("preedit-changed", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST,
+		0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 
 	window_class = GST_WINDOW_CLASS(klass);
 	window_class->show = gst_wayland_window_show_impl;
@@ -1856,7 +2472,10 @@ gst_wayland_window_init(GstWaylandWindow *self)
 	self->compositor = NULL;
 	self->shm = NULL;
 	self->seat = NULL;
-	self->output = NULL;
+	self->scale = 120;
+	self->text_width = self->text_height = 1;
+	self->preedit_begin = self->preedit_end = -1;
+	self->pending_begin = self->pending_end = -1;
 	self->surface = NULL;
 	self->libdecor_ctx = NULL;
 	self->libdecor_frame = NULL;
@@ -1953,6 +2572,13 @@ gst_wayland_window_new(
 	}
 
 	/* Get registry and bind globals */
+	self->compose_table = xkb_compose_table_new_from_locale(self->xkb_ctx,
+		setlocale(LC_CTYPE, NULL), XKB_COMPOSE_COMPILE_NO_FLAGS);
+	if (self->compose_table != NULL)
+		self->compose_state = xkb_compose_state_new(self->compose_table,
+			XKB_COMPOSE_STATE_NO_FLAGS);
+	else
+		g_warning("wayland: no Compose table for current locale");
 	self->registry = wl_display_get_registry(self->display);
 	wl_registry_add_listener(self->registry,
 		&registry_listener, self);
@@ -1989,6 +2615,8 @@ gst_wayland_window_new(
 	}
 
 	/* Decorate the surface with libdecor */
+	wl_surface_add_listener(self->surface, &surface_listener, self);
+	create_fractional_scale(self);
 	self->libdecor_frame = libdecor_decorate(
 		self->libdecor_ctx, self->surface,
 		&frame_iface, self);

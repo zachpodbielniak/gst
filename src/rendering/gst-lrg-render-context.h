@@ -28,6 +28,7 @@ G_BEGIN_DECLS
  * @num_colors: number of entries in @colors
  * @fg: per-glyph foreground color (GstColor RGBA)
  * @bg: per-glyph background color (GstColor RGBA)
+ * @frame_textures: (element-type GrlTexture): borrowed renderer-owned textures retained until the frame batch is flushed
  *
  * LRG-specific render context. Drawing happens in immediate mode between
  * grl_window_begin_drawing() and grl_window_swap_buffers(), so the context
@@ -46,6 +47,7 @@ typedef struct
 
 	GstColor             fg;
 	GstColor             bg;
+	GPtrArray           *frame_textures; /* Borrowed; retained until batch flush. */
 } GstLrgRenderContext;
 
 /**

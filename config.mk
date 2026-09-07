@@ -9,7 +9,7 @@
 # Version
 VERSION_MAJOR := 0
 VERSION_MINOR := 4
-VERSION_MICRO := 6
+VERSION_MICRO := 7
 VERSION := $(VERSION_MAJOR).$(VERSION_MINOR).$(VERSION_MICRO)
 
 # Installation directories
@@ -100,7 +100,7 @@ endif
 # Required dependencies
 DEPS_REQUIRED := glib-2.0 gobject-2.0 gio-2.0 gmodule-2.0
 DEPS_REQUIRED += x11 xft xrender fontconfig
-DEPS_REQUIRED += yaml-0.1 json-glib-1.0
+DEPS_REQUIRED += yaml-0.1 json-glib-1.0 pango harfbuzz
 
 # Optional Wayland dependencies
 ifeq ($(BUILD_WAYLAND),1)
@@ -272,9 +272,9 @@ endif
 # Fedora / RHEL / CentOS (dnf)
 FEDORA_DEPS_TOOLS := gcc make pkgconf-pkg-config
 FEDORA_DEPS_REQUIRED := glib2-devel libX11-devel libXft-devel \
-    fontconfig-devel libyaml-devel json-glib-devel
+    libXrender-devel fontconfig-devel libyaml-devel json-glib-devel pango-devel harfbuzz-devel
 FEDORA_DEPS_GIR := gobject-introspection-devel
-FEDORA_DEPS_WAYLAND := wayland-devel libxkbcommon-devel cairo-devel libdecor-devel
+FEDORA_DEPS_WAYLAND := wayland-devel wayland-protocols-devel libxkbcommon-devel xkeyboard-config cairo-devel libdecor-devel
 FEDORA_DEPS_MCP := libsoup3-devel libdex-devel json-glib-devel libpng-devel
 FEDORA_DEPS_WEBVIEW := libsoup3-devel json-glib-devel
 # graylib/raylib are vendored; the LRG backend only needs OpenGL dev headers
@@ -284,7 +284,7 @@ FEDORA_DEPS_LRG := mesa-libGL-devel
 # Debian / Ubuntu (apt)
 DEBIAN_DEPS_TOOLS := gcc make pkg-config
 DEBIAN_DEPS_REQUIRED := libglib2.0-dev libx11-dev libxft-dev \
-    libfontconfig-dev libyaml-dev libjson-glib-dev
+    libfontconfig-dev libyaml-dev libjson-glib-dev libpango1.0-dev libharfbuzz-dev
 DEBIAN_DEPS_GIR := gobject-introspection libgirepository1.0-dev
 DEBIAN_DEPS_WAYLAND := libwayland-dev libxkbcommon-dev libcairo2-dev libdecor-0-dev
 DEBIAN_DEPS_MCP := libsoup-3.0-dev libjson-glib-dev libpng-dev
@@ -293,7 +293,7 @@ DEBIAN_DEPS_LRG := libgl1-mesa-dev
 
 # Arch Linux (pacman)
 ARCH_DEPS_TOOLS := gcc make pkgconf
-ARCH_DEPS_REQUIRED := glib2 libx11 libxft fontconfig libyaml json-glib
+ARCH_DEPS_REQUIRED := glib2 libx11 libxft fontconfig libyaml json-glib pango harfbuzz
 ARCH_DEPS_GIR := gobject-introspection
 ARCH_DEPS_WAYLAND := wayland libxkbcommon cairo libdecor
 ARCH_DEPS_MCP := libsoup3 libdex json-glib libpng

@@ -119,6 +119,9 @@ struct _GstConfig
 	/* Key and mouse bindings */
 	GArray *keybinds;     /* GArray of GstKeybind */
 	GArray *mousebinds;   /* GArray of GstMousebind */
+
+	/* Appended to preserve field offsets used by compiled C configurations. */
+	gchar *editor;
 };
 
 GType
@@ -932,6 +935,25 @@ gst_config_clear_keybinds(GstConfig *self);
  */
 void
 gst_config_clear_mousebinds(GstConfig *self);
+
+/**
+ * gst_config_get_editor:
+ * @self: a configuration
+ *
+ * Returns: (transfer none): editor argv string for command-output export
+ */
+const gchar *
+gst_config_get_editor(GstConfig *self);
+
+/**
+ * gst_config_set_editor:
+ * @self: a configuration
+ * @editor: executable and arguments, without shell expansion
+ *
+ * The editor must wait until it has finished reading the temporary file.
+ */
+void
+gst_config_set_editor(GstConfig *self, const gchar *editor);
 
 G_END_DECLS
 

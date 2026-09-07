@@ -13,6 +13,84 @@
 
 #include <glib.h>
 #include "gst-enums.h"
+#ifdef GST_HAVE_LRG_BACKEND
+#include "rendering/gst-lrg-render-context.h"
+#include <string.h>
+
+/* Capability and invalid-input paths must work without creating a GL window. */
+static void
+test_lrg_render_context_ops(void)
+{
+	GstLrgRenderContext ctx;
+	guint8 pixels[4] = { 255, 0, 0, 255 };
+
+	memset(&ctx, 0, sizeof(ctx));
+	gst_lrg_render_context_init_ops(&ctx);
+	g_assert_nonnull(ctx.base.ops->draw_image);
+	g_assert_nonnull(ctx.base.ops->draw_glyph_id);
+	ctx.frame_textures = g_ptr_array_new_with_free_func(g_object_unref);
+	gst_render_context_draw_image(&ctx.base, pixels, 1, 1, 3, 0, 0, 1, 1);
+	gst_render_context_draw_image(&ctx.base, pixels, G_MAXINT, 1, 4, 0, 0, 1, 1);
+	gst_render_context_draw_image(&ctx.base, pixels, 1, 1, 4, 0, 0, 0, 1);
+	gst_render_context_draw_glyph_id(&ctx.base, 1, GST_FONT_STYLE_NORMAL, 0, 0);
+	g_assert_cmpuint(ctx.frame_textures->len, ==, 0);
+	g_ptr_array_unref(ctx.frame_textures);
+}
+
+/* Opt in explicitly because raylib can terminate the process when no usable
+ * display/GL context exists. Download the actual GPU upload, not a mock. */
+static void
+test_lrg_image_upload(void)
+{
+	GstLrgRenderContext ctx;
+	g_autoptr(GrlWindow) window = NULL;
+	g_autoptr(GrlImage) downloaded = NULL;
+	g_autoptr(GrlColor) top = NULL;
+	g_autoptr(GrlColor) bottom = NULL;
+	g_autoptr(GstGrlFontCache) fonts = NULL;
+	cairo_scaled_font_t *scaled;
+	gulong glyph_id;
+	const guint8 pixels[] = {
+		255, 0, 0, 255, 99, 99, 99, 99,
+		0, 255, 0, 128, 99, 99, 99, 99
+	};
+
+	if (g_getenv("GST_TEST_LRG_GRAPHICS") == NULL) {
+		g_test_skip("Set GST_TEST_LRG_GRAPHICS=1 under a real display or Xvfb");
+		return;
+	}
+	window = grl_window_new(64, 64, "GST graphics regression");
+	g_assert_nonnull(window);
+	g_assert_true(grl_window_is_ready(window));
+	memset(&ctx, 0, sizeof(ctx));
+	gst_lrg_render_context_init_ops(&ctx);
+	ctx.frame_textures = g_ptr_array_new_with_free_func(g_object_unref);
+	grl_window_begin_drawing(window);
+	gst_render_context_draw_image(&ctx.base, pixels, 1, 2, 8, -2, 4, 16, 32);
+	g_assert_cmpuint(ctx.frame_textures->len, ==, 1);
+	downloaded = grl_texture_to_image(g_ptr_array_index(ctx.frame_textures, 0));
+	g_assert_nonnull(downloaded);
+	top = grl_image_get_pixel(downloaded, 0, 0);
+	bottom = grl_image_get_pixel(downloaded, 0, 1);
+	g_assert_cmpuint(top->r, ==, 255);
+	g_assert_cmpuint(top->g, ==, 0);
+	g_assert_cmpuint(bottom->g, ==, 255);
+	g_assert_cmpuint(bottom->a, ==, 128);
+	fonts = gst_grl_font_cache_new();
+	g_assert_true(gst_grl_font_cache_load_fonts(fonts, "monospace", 16));
+	g_assert_true(gst_cairo_font_cache_lookup_glyph(
+		gst_grl_font_cache_get_cairo_cache(fonts), 'A', GST_FONT_STYLE_NORMAL,
+		&scaled, &glyph_id));
+	ctx.font_cache = fonts;
+	ctx.fg = GST_COLOR_RGB(255, 255, 255);
+	gst_render_context_draw_glyph_id(&ctx.base, (guint32)glyph_id,
+		GST_FONT_STYLE_NORMAL, 20, 20);
+	grl_window_swap_buffers(window);
+	/* GPU resources must outlive the deferred batch but not the window. */
+	g_ptr_array_unref(ctx.frame_textures);
+	gst_grl_font_cache_unload_fonts(fonts);
+}
+#endif
 
 /* ===== render mode: from_string ===== */
 
@@ -140,6 +218,10 @@ main(
 		test_backend_type_registered);
 	g_test_add_func("/lrg/render-mode/type-registered",
 		test_render_mode_type_registered);
+#ifdef GST_HAVE_LRG_BACKEND
+	g_test_add_func("/lrg/render-context/ops", test_lrg_render_context_ops);
+	g_test_add_func("/lrg/render-context/image-upload", test_lrg_image_upload);
+#endif
 
 	return g_test_run();
 }

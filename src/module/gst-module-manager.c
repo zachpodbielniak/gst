@@ -123,7 +123,9 @@ hook_entry_compare(gconstpointer a, gconstpointer b)
 
 	if (ea->priority < eb->priority) return -1;
 	if (ea->priority > eb->priority) return 1;
-	return 0;
+	/* Stable ties must not depend on directory enumeration order. */
+	return g_strcmp0(gst_module_get_name(ea->module),
+		gst_module_get_name(eb->module));
 }
 
 /*
@@ -139,15 +141,30 @@ auto_register_hooks(
 ){
 	GType module_type;
 	gint priority;
+	gint input_priority;
+	gint overlay_priority;
+	const gchar *name;
 
 	module_type = G_OBJECT_TYPE(module);
 	priority = gst_module_get_priority(module);
+	name = gst_module_get_name(module);
+	input_priority = priority;
+	overlay_priority = priority;
+	/* Search is modal, but its highlights must paint over saved rows. */
+	if (g_strcmp0(name, "search") == 0) {
+		input_priority = G_MININT;
+		overlay_priority = G_MAXINT;
+	} else if (g_strcmp0(name, "scrollback") == 0) {
+		overlay_priority = G_MININT;
+	} else if (g_strcmp0(name, "shell_integration") == 0) {
+		overlay_priority = G_MAXINT - 1;
+	}
 
 	/* Check each known interface and register the corresponding hook */
 	if (g_type_is_a(module_type, GST_TYPE_INPUT_HANDLER))
 	{
 		gst_module_manager_register_hook(self, module,
-			GST_HOOK_KEY_PRESS, priority);
+			GST_HOOK_KEY_PRESS, input_priority);
 		gst_module_manager_register_hook(self, module,
 			GST_HOOK_BUTTON_PRESS, priority);
 	}
@@ -167,7 +184,7 @@ auto_register_hooks(
 	if (g_type_is_a(module_type, GST_TYPE_RENDER_OVERLAY))
 	{
 		gst_module_manager_register_hook(self, module,
-			GST_HOOK_RENDER_OVERLAY, priority);
+			GST_HOOK_RENDER_OVERLAY, overlay_priority);
 	}
 
 	if (g_type_is_a(module_type, GST_TYPE_BACKGROUND_PROVIDER))
@@ -285,6 +302,15 @@ gst_module_manager_class_init(GstModuleManagerClass *klass)
 	object_class = G_OBJECT_CLASS(klass);
 	object_class->dispose = gst_module_manager_dispose;
 	object_class->finalize = gst_module_manager_finalize;
+	/**
+	 * GstModuleManager::local-input-changed:
+	 * @self: the module manager
+	 *
+	 * Local keyboard ownership may have changed. Query
+	 * gst_module_manager_has_local_input() for the current state.
+	 */
+	g_signal_new("local-input-changed", G_TYPE_FROM_CLASS(klass),
+		G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0);
 }
 
 static void
@@ -351,6 +377,15 @@ gst_module_manager_get_default(void)
 
 /* ===== Public API: registration ===== */
 
+/* Relay the search-owned property without linking optional module symbols. */
+static void
+on_local_input_notify(GObject *module, GParamSpec *pspec, gpointer data)
+{
+	(void)module;
+	(void)pspec;
+	g_signal_emit_by_name(data, "local-input-changed");
+}
+
 /**
  * gst_module_manager_register:
  * @self: A #GstModuleManager
@@ -393,6 +428,11 @@ gst_module_manager_register(
 
 	/* Auto-detect interfaces and register hooks */
 	auto_register_hooks(self, module);
+	if (g_strcmp0(name, "search") == 0) {
+		g_signal_connect_object(module, "notify::input-active",
+			G_CALLBACK(on_local_input_notify), self, 0);
+		g_signal_emit_by_name(self, "local-input-changed");
+	}
 
 	return TRUE;
 }
@@ -427,6 +467,7 @@ gst_module_manager_unregister(
 	/* Deactivate and remove hooks before removing from table */
 	gst_module_deactivate(module);
 	gst_module_manager_unregister_hooks(self, module);
+	g_signal_handlers_disconnect_by_func(module, on_local_input_notify, self);
 
 	return g_hash_table_remove(self->modules, name);
 }
@@ -626,17 +667,39 @@ gst_module_manager_dispatch_hook(
 }
 
 /**
- * gst_module_manager_dispatch_key_event:
+ * gst_module_manager_has_local_input:
  * @self: A #GstModuleManager
- * @keyval: The key value
- * @keycode: The hardware keycode
- * @state: The modifier state
  *
- * Dispatches a key event to all #GstInputHandler modules registered
- * at %GST_HOOK_KEY_PRESS. Walks the list in priority order and stops
- * at the first handler that returns %TRUE (consumed the event).
+ * Returns: TRUE while active search owns keyboard input
+ */
+gboolean
+gst_module_manager_has_local_input(GstModuleManager *self)
+{
+	GstModule *module;
+	GParamSpec *pspec;
+	gboolean active = FALSE;
+
+	/* Never retain a borrowed module across unload/reload. */
+	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
+	module = gst_module_manager_get_module(self, "search");
+	if (module == NULL || !gst_module_is_active(module))
+		return FALSE;
+	pspec = g_object_class_find_property(G_OBJECT_GET_CLASS(module), "input-active");
+	if (pspec != NULL && G_PARAM_SPEC_VALUE_TYPE(pspec) == G_TYPE_BOOLEAN &&
+	    (pspec->flags & G_PARAM_READABLE))
+		g_object_get(module, "input-active", &active, NULL);
+	return active;
+}
+
+/**
+ * gst_module_manager_dispatch_key_event:
+ * @self: a module manager
+ * @keyval: X11 keysym
+ * @keycode: physical key identifier
+ * @state: modifiers
  *
- * Returns: %TRUE if a module consumed the key event
+ * Runs active input handlers in per-hook priority order, stopping when consumed.
+ * Returns: TRUE if a module consumed the key
  */
 gboolean
 gst_module_manager_dispatch_key_event(
@@ -646,8 +709,11 @@ gst_module_manager_dispatch_key_event(
 	guint             state
 ){
 	GList *l;
+	GstAction action;
 
 	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
+	action = self->config != NULL
+		? gst_config_lookup_key_action(self->config, keyval, state) : GST_ACTION_NONE;
 
 	for (l = self->hooks[GST_HOOK_KEY_PRESS]; l != NULL; l = l->next)
 	{
@@ -662,6 +728,12 @@ gst_module_manager_dispatch_key_event(
 
 		if (GST_IS_INPUT_HANDLER(entry->module))
 		{
+			/* Configurable output actions must not clear the selected command
+			 * just because the user chose a binding without Ctrl+Shift. */
+			if ((action == GST_ACTION_COPY_COMMAND_OUTPUT ||
+			     action == GST_ACTION_EXPORT_COMMAND_OUTPUT) &&
+			    g_strcmp0(gst_module_get_name(entry->module), "shell_integration") == 0)
+				continue;
 			if (gst_input_handler_handle_key_event(
 				GST_INPUT_HANDLER(entry->module),
 				keyval, keycode, state))

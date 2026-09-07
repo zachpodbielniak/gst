@@ -32,6 +32,9 @@ gst_cursor_new(void)
     cursor->glyph.attr = GST_GLYPH_ATTR_NONE;
     cursor->glyph.fg = GST_COLOR_DEFAULT_FG;
     cursor->glyph.bg = GST_COLOR_DEFAULT_BG;
+	cursor->glyph.cluster = NULL;
+	cursor->glyph.cluster_len = 0;
+	cursor->glyph.cluster_capacity = 0;
     cursor->state = GST_CURSOR_STATE_VISIBLE;
     cursor->shape = GST_CURSOR_SHAPE_BLOCK;
 
@@ -80,6 +83,9 @@ gst_cursor_copy(const GstCursor *cursor)
     copy->x = cursor->x;
     copy->y = cursor->y;
     copy->glyph = cursor->glyph;
+	copy->glyph.cluster = g_strdup(cursor->glyph.cluster);
+	copy->glyph.cluster_capacity = copy->glyph.cluster != NULL
+	    ? copy->glyph.cluster_len + 1 : 0;
     copy->state = cursor->state;
     copy->shape = cursor->shape;
 
@@ -96,6 +102,7 @@ void
 gst_cursor_free(GstCursor *cursor)
 {
     if (cursor != NULL) {
+		gst_glyph_clear(&cursor->glyph);
         g_slice_free(GstCursor, cursor);
     }
 }
@@ -179,7 +186,7 @@ gst_cursor_restore(
 
     cursor->x = saved->x;
     cursor->y = saved->y;
-    cursor->glyph = saved->glyph;
+	gst_glyph_assign(&cursor->glyph, &saved->glyph);
     cursor->state = saved->state;
     cursor->shape = saved->shape;
 }
@@ -308,6 +315,7 @@ void
 gst_cursor_reset(GstCursor *cursor)
 {
     g_return_if_fail(cursor != NULL);
+	gst_glyph_clear(&cursor->glyph);
 
     cursor->x = 0;
     cursor->y = 0;
@@ -330,6 +338,7 @@ void
 gst_cursor_reset_attrs(GstCursor *cursor)
 {
     g_return_if_fail(cursor != NULL);
+	gst_glyph_clear(&cursor->glyph);
 
     cursor->glyph.rune = ' ';
     cursor->glyph.attr = GST_GLYPH_ATTR_NONE;

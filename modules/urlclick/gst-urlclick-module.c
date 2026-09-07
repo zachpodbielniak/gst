@@ -93,10 +93,13 @@ collect_visible_text(void)
 
 		for (x = 0; x < cols; x++) {
 			GstGlyph *g;
-			gchar utf8_buf[6];
-			gint utf8_len;
+			gchar utf8_buf[7];
 
 			g = gst_line_get_glyph(line, x);
+			/* Dummy columns contribute no bytes, even when rune is zero. */
+			if (g != NULL && gst_glyph_is_dummy(g)) {
+				continue;
+			}
 			if (g == NULL || g->rune == 0) {
 				g_string_append_c(buf, ' ');
 				continue;
@@ -107,8 +110,7 @@ collect_visible_text(void)
 				continue;
 			}
 
-			utf8_len = g_unichar_to_utf8(g->rune, utf8_buf);
-			g_string_append_len(buf, utf8_buf, utf8_len);
+			g_string_append(buf, gst_glyph_get_text(g, utf8_buf));
 		}
 
 		g_string_append_c(buf, '\n');
@@ -200,6 +202,7 @@ gst_urlclick_module_open_url(
 ){
 	GstUrlclickModule *self;
 	g_autofree gchar *cmd = NULL;
+	g_autofree gchar *quoted_url = NULL;
 	GError *error = NULL;
 
 	self = GST_URLCLICK_MODULE(url_handler);
@@ -210,7 +213,8 @@ gst_urlclick_module_open_url(
 	}
 
 	/* Build command with shell quoting for the URL */
-	cmd = g_strdup_printf("%s '%s'", self->opener, url);
+	quoted_url = g_shell_quote(url);
+	cmd = g_strdup_printf("%s %s", self->opener, quoted_url);
 
 	if (!g_spawn_command_line_async(cmd, &error)) {
 		g_warning("urlclick: failed to open URL: %s", error->message);

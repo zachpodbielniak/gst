@@ -536,12 +536,19 @@ static GstWindow *window = NULL;
 static GstRenderer *renderer = NULL;
 static GstBackendType backend = GST_BACKEND_X11;
 
+/* Physical presses forwarded to the child, used to filter shortcut releases. */
+static GHashTable *forwarded_keys = NULL;
+static gboolean input_stopped = FALSE;
+
 /* X11-specific state (only valid when backend == GST_BACKEND_X11) */
 static GstFontCache *font_cache = NULL;
 
 #ifdef GST_HAVE_WAYLAND
 /* Wayland-specific state (only valid when backend == GST_BACKEND_WAYLAND) */
 static GstCairoFontCache *cairo_font_cache = NULL;
+
+/* Modules may change terminal modes during activation, before IME wiring. */
+static gboolean text_input_ready = FALSE;
 #endif
 
 #ifdef GST_HAVE_LRG_BACKEND
@@ -979,6 +986,28 @@ detect_backend(void)
 	return GST_BACKEND_X11;
 }
 
+/**
+ * sync_text_input:
+ *
+ * Applies the terminal/local-input policy before enabling Wayland IME.
+ * All cursor geometry remains in logical surface coordinates.
+ */
+static void
+sync_text_input(void)
+{
+#ifdef GST_HAVE_WAYLAND
+	if (backend == GST_BACKEND_WAYLAND && window != NULL && pty != NULL) {
+		const GstCursor *cursor = gst_terminal_get_cursor(terminal);
+		gst_wayland_window_set_text_cursor(GST_WAYLAND_WINDOW(window),
+			(gint)cfg_border_px + cursor->x * cell_w,
+			(gint)cfg_border_px + cursor->y * cell_h, cell_w, cell_h);
+		gst_wayland_window_set_text_input_enabled(GST_WAYLAND_WINDOW(window),
+			text_input_ready && !input_stopped && !gst_terminal_has_mode(terminal, GST_MODE_KBDLOCK) &&
+			!gst_module_manager_has_local_input(gst_module_manager_get_default()));
+	}
+#endif
+}
+
 /* ===== Draw scheduling ===== */
 
 /*
@@ -1225,6 +1254,7 @@ on_pty_data_received(
 	gpointer    user_data
 ){
 	gst_terminal_write(terminal, (const gchar *)data, (gssize)len);
+	sync_text_input();
 	schedule_draw();
 }
 
@@ -1303,6 +1333,8 @@ on_child_exited(
 	gint        status,
 	gpointer    user_data
 ){
+	input_stopped = TRUE;
+	sync_text_input();
 	if (main_loop != NULL) {
 		g_main_loop_quit(main_loop);
 	}
@@ -1312,10 +1344,13 @@ on_child_exited(
  * Window key-press: let modules intercept, check shortcuts, then forward to PTY.
  */
 static void
-on_key_press(
+handle_key_press(
 	GstWindow   *win,
 	guint       keysym,
+	guint       base_keysym,
+	guint       keycode,
 	guint       state,
+	guint       event_type,
 	const gchar *text,
 	gint        len,
 	gpointer    user_data
@@ -1328,16 +1363,54 @@ on_key_press(
 
 	/* Let modules intercept key events before built-in shortcuts */
 	mgr = gst_module_manager_get_default();
-	if (gst_module_manager_dispatch_key_event(mgr, keysym, 0, state))
-	{
+	/* Search's keysym-only interface still accepts composed Unicode text. */
+	if (keysym == NoSymbol && text != NULL && len > 0 &&
+	    gst_module_manager_has_local_input(mgr) && g_utf8_validate(text, len, NULL)) {
+		const gchar *p;
+		for (p = text; p < text + len; p = g_utf8_next_char(p)) {
+			gunichar uc = g_utf8_get_char(p);
+			gst_module_manager_dispatch_key_event(mgr,
+				uc <= 0xff ? (guint)uc : (0x01000000u | (guint)uc), keycode, state);
+		}
+		sync_text_input();
+		schedule_draw();
 		return;
 	}
+	if (gst_module_manager_dispatch_key_event(mgr, keysym, keycode, state))
+	{
+		sync_text_input();
+		schedule_draw();
+		return;
+	}
+	sync_text_input();
 
 	/* Look up configured keybind action */
 	config = gst_config_get_default();
 	action = gst_config_lookup_key_action(config, keysym, state);
 
 	switch (action) {
+	case GST_ACTION_COPY_COMMAND_OUTPUT:
+	case GST_ACTION_EXPORT_COMMAND_OUTPUT:
+		{
+			GstModule *module = gst_module_manager_get_module(mgr, "shell_integration");
+			gboolean handled = FALSE;
+			const gchar *signal_name = action == GST_ACTION_COPY_COMMAND_OUTPUT
+				? "copy-command-output" : "export-command-output";
+
+			if (module != NULL && gst_module_is_active(module) &&
+			    g_signal_lookup(signal_name, G_OBJECT_TYPE(module)) != 0) {
+				if (action == GST_ACTION_COPY_COMMAND_OUTPUT)
+					g_signal_emit_by_name(module, signal_name, &handled);
+				else
+					g_signal_emit_by_name(module, signal_name,
+						gst_config_get_editor(config), &handled);
+			} else {
+				g_printerr("gst: %s requires an active shell_integration module\n", signal_name);
+			}
+			if (!handled)
+				g_printerr("gst: %s did not produce command output\n", signal_name);
+		}
+		return;
 	case GST_ACTION_CLIPBOARD_COPY:
 		{
 			gchar *sel_text;
@@ -1364,6 +1437,28 @@ on_key_press(
 		return;
 	default:
 		break;
+	}
+
+	if (input_stopped || gst_terminal_has_mode(terminal, GST_MODE_KBDLOCK))
+		return;
+	/* A held local shortcut must not turn into child input when its modifiers
+	 * change. Local repeat handlers above still get their normal events. */
+	if (event_type == 2 && forwarded_keys != NULL &&
+	    !g_hash_table_contains(forwarded_keys,
+		GUINT_TO_POINTER(keycode != 0 ? keycode : (keysym | 0x80000000u))))
+		return;
+
+	/* Remember the original keysym even if modifiers change before release. */
+	if (forwarded_keys != NULL && !g_hash_table_contains(forwarded_keys,
+	    GUINT_TO_POINTER(keycode != 0 ? keycode : (keysym | 0x80000000u))))
+		g_hash_table_insert(forwarded_keys,
+			GUINT_TO_POINTER(keycode != 0 ? keycode : (keysym | 0x80000000u)),
+			GUINT_TO_POINTER(keysym == NoSymbol ? 1 : base_keysym + 1));
+	/* NoSymbol Compose text must not be swallowed by protocol encoding. */
+	if (keysym != NoSymbol && gst_terminal_key_event(terminal, base_keysym,
+		keycode, state, event_type, text)) {
+		schedule_draw();
+		return;
 	}
 
 	/*
@@ -1397,6 +1492,128 @@ on_key_press(
 
 		gst_pty_write(pty, text, (gssize)out_len);
 	}
+}
+
+/**
+ * on_key_press:
+ * @win: window
+ * @keysym: X11 keysym
+ * @state: modifiers
+ * @text: input text
+ * @len: byte length
+ * @user_data: unused
+ *
+ * Preserves callers of the original window signal through the extended path.
+ */
+static void
+on_key_press(GstWindow *win, guint keysym, guint state,
+	const gchar *text, gint len, gpointer user_data)
+{
+	handle_key_press(win, keysym, keysym, 0, state, 1, text, len, user_data);
+	schedule_draw();
+}
+
+/**
+ * on_key_event:
+ * @win: window
+ * @keysym: X11 keysym
+ * @base_keysym: unshifted keysym
+ * @keycode: physical key identifier
+ * @state: modifiers
+ * @event_type: press, repeat or release
+ * @text: input text
+ * @len: byte length
+ * @user_data: unused
+ *
+ * Returns: TRUE; legacy fallback must not duplicate this dispatch
+ */
+static gboolean
+on_key_event(GstWindow *win, guint keysym, guint base_keysym, guint keycode, guint state,
+	guint event_type, const gchar *text, gint len, gpointer user_data)
+{
+	gpointer identity;
+	gpointer stored;
+
+	/* Direct signal emitters must obey the same contract as the window helper. */
+	if (event_type < 1 || event_type > 3)
+		return TRUE;
+	if (forwarded_keys == NULL)
+		forwarded_keys = g_hash_table_new(g_direct_hash, g_direct_equal);
+	identity = GUINT_TO_POINTER(keycode != 0 ? keycode : (keysym | 0x80000000u));
+	if (event_type == 3) {
+		stored = g_hash_table_lookup(forwarded_keys, identity);
+		if (stored != NULL && !input_stopped &&
+		    !gst_terminal_has_mode(terminal, GST_MODE_KBDLOCK) &&
+		    GPOINTER_TO_UINT(stored) != 1)
+			gst_terminal_key_event(terminal, GPOINTER_TO_UINT(stored) - 1,
+				keycode, state, 3, NULL);
+		g_hash_table_remove(forwarded_keys, identity);
+	} else {
+		if (event_type == 1)
+			g_hash_table_remove(forwarded_keys, identity);
+		handle_key_press(win, keysym, base_keysym, keycode, state, event_type, text, len, user_data);
+		schedule_draw();
+	}
+	return TRUE;
+}
+
+#ifdef GST_HAVE_WAYLAND
+/**
+ * on_text_commit:
+ * @win: Wayland window
+ * @text: committed UTF-8, never logged
+ * @user_data: unused
+ *
+ * IME commits are text, not key events or bracketed paste transactions.
+ */
+static void
+on_text_commit(GstWaylandWindow *win, const gchar *text, gpointer user_data)
+{
+	GstModuleManager *mgr = gst_module_manager_get_default();
+	(void)win;
+	(void)user_data;
+	sync_text_input();
+	if (input_stopped || gst_terminal_has_mode(terminal, GST_MODE_KBDLOCK) ||
+	    gst_module_manager_has_local_input(mgr) || text == NULL || *text == '\0')
+		return;
+	/* Ordinary typed input resets history selection/viewport through modules. */
+	if (gst_module_manager_dispatch_key_event(mgr, NoSymbol, 0, 0)) {
+		sync_text_input();
+		schedule_draw();
+		return;
+	}
+	gst_pty_write(pty, text, (gssize)strlen(text));
+	schedule_draw();
+}
+#endif
+
+/**
+ * on_mode_changed:
+ * @term: terminal
+ * @mode: changed mode
+ * @enabled: new value
+ * @user_data: unused
+ *
+ * Keyboard lock immediately revokes terminal IME ownership.
+ */
+static void
+on_mode_changed(GstTerminal *term, GstTermMode mode, gboolean enabled, gpointer user_data)
+{
+	(void)term;
+	(void)mode;
+	(void)enabled;
+	(void)user_data;
+	sync_text_input();
+}
+
+/* Module lifecycle changes outside key dispatch must also update IME policy. */
+static void
+on_local_input_changed(GstModuleManager *manager, gpointer user_data)
+{
+	(void)manager;
+	(void)user_data;
+	sync_text_input();
+	schedule_draw();
 }
 
 /*
@@ -1686,6 +1903,8 @@ on_focus_change(
 		wm |= GST_WIN_MODE_FOCUSED;
 	} else {
 		wm &= ~GST_WIN_MODE_FOCUSED;
+		if (forwarded_keys != NULL)
+			g_hash_table_remove_all(forwarded_keys);
 	}
 	set_win_mode(wm);
 
@@ -1774,6 +1993,8 @@ on_close_request(
 	GstWindow   *win,
 	gpointer    user_data
 ){
+	input_stopped = TRUE;
+	sync_text_input();
 	if (main_loop != NULL) {
 		g_main_loop_quit(main_loop);
 	}
@@ -1789,6 +2010,9 @@ on_selection_notify(
 	gint        len,
 	gpointer    user_data
 ){
+	if (input_stopped || gst_terminal_has_mode(terminal, GST_MODE_KBDLOCK) ||
+	    gst_module_manager_has_local_input(gst_module_manager_get_default()))
+		return;
 	if (data == NULL || len <= 0) {
 		g_debug("on_selection_notify: no data (data=%p len=%d)",
 			(void *)data, len);
@@ -1826,6 +2050,8 @@ on_selection_notify(
 static gboolean
 on_sigterm(gpointer user_data)
 {
+	input_stopped = TRUE;
+	sync_text_input();
 	if (main_loop != NULL) {
 		g_main_loop_quit(main_loop);
 	}
@@ -2543,10 +2769,14 @@ skip_c_config:
 		G_CALLBACK(on_terminal_bell), NULL);
 	g_signal_connect(terminal, "escape-string",
 		G_CALLBACK(on_terminal_escape_string), NULL);
+	g_signal_connect(terminal, "mode-changed",
+		G_CALLBACK(on_mode_changed), NULL);
 
 	/* Window signals */
 	g_signal_connect(window, "key-press",
 		G_CALLBACK(on_key_press), NULL);
+	g_signal_connect(window, "key-event",
+		G_CALLBACK(on_key_event), NULL);
 	g_signal_connect(window, "button-press",
 		G_CALLBACK(on_button_press), NULL);
 	g_signal_connect(window, "button-release",
@@ -2598,8 +2828,27 @@ skip_c_config:
 		}
 #endif
 
+		g_signal_connect(mod_mgr, "local-input-changed",
+			G_CALLBACK(on_local_input_changed), NULL);
 		gst_module_manager_activate_all(mod_mgr);
 	}
+
+#ifdef GST_HAVE_WAYLAND
+	if (backend == GST_BACKEND_WAYLAND) {
+		gint width;
+		gint height;
+		GstWaylandWindow *wl_win = GST_WAYLAND_WINDOW(window);
+
+		g_signal_connect(window, "scale-changed", G_CALLBACK(on_expose), NULL);
+		g_signal_connect(window, "preedit-changed", G_CALLBACK(on_expose), NULL);
+		g_signal_connect(window, "text-commit", G_CALLBACK(on_text_commit), NULL);
+		/* libdecor may configure before the driver connects window signals. */
+		gst_wayland_window_get_logical_size(wl_win, &width, &height);
+		on_configure(window, (guint)width, (guint)height, NULL);
+		text_input_ready = TRUE;
+	}
+#endif
+	sync_text_input();
 
 	/* Set up SIGTERM/SIGINT for clean shutdown */
 	g_unix_signal_add(SIGTERM, on_sigterm, NULL);
@@ -2610,6 +2859,9 @@ skip_c_config:
 	g_main_loop_run(main_loop);
 
 	/* Cleanup */
+	input_stopped = TRUE;
+	sync_text_input();
+	g_clear_pointer(&forwarded_keys, g_hash_table_unref);
 	gst_module_manager_deactivate_all(gst_module_manager_get_default());
 
 	if (draw_timeout_id != 0) {

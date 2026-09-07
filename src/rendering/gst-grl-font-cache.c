@@ -13,11 +13,13 @@
 
 #include "gst-grl-font-cache.h"
 #include <math.h>
+#include <string.h>
 
 /* One cached glyph: a graylib texture plus its cairo bearings. */
 typedef struct
 {
 	GrlTexture *tex;   /* NULL for zero-ink glyphs (space etc.) */
+	cairo_scaled_font_t *font; /* Retain atlas identity after fallback eviction. */
 	gint        bx;    /* x bearing (pen -> left edge of ink) */
 	gint        by;    /* baseline -> top edge of ink (= -y_bearing) */
 	gint        w;
@@ -69,6 +71,7 @@ glyph_entry_free(gpointer data)
 	if (e->tex != NULL) {
 		g_object_unref(e->tex);
 	}
+	cairo_scaled_font_destroy(e->font);
 	g_free(e);
 }
 
@@ -140,10 +143,11 @@ bake_glyph(
 	cairo_scaled_font_glyph_extents(scaled, &cg, 1, &ext);
 
 	entry = g_new0(GlyphEntry, 1);
+	entry->font = cairo_scaled_font_reference(scaled);
 	entry->bx = (gint)floor(ext.x_bearing);
 	entry->by = (gint)ceil(-ext.y_bearing);
-	w = (gint)ceil(ext.width);
-	h = (gint)ceil(ext.height);
+	w = (gint)ceil(ext.x_bearing + ext.width) - entry->bx;
+	h = (gint)ceil(ext.y_bearing + ext.height) + entry->by;
 	entry->w = w;
 	entry->h = h;
 	entry->tex = NULL;
@@ -160,8 +164,8 @@ bake_glyph(
 
 		cairo_set_scaled_font(cr, scaled);
 		cairo_set_source_rgba(cr, 1, 1, 1, 1);
-		cg.x = -ext.x_bearing;
-		cg.y = -ext.y_bearing;
+		cg.x = -entry->bx;
+		cg.y = entry->by;
 		cairo_show_glyphs(cr, &cg, 1);
 		cairo_surface_flush(surf);
 
@@ -173,8 +177,12 @@ bake_glyph(
 		rgba = g_malloc0((gsize)w * (gsize)h * 4);
 		for (row = 0; row < h; row++) {
 			for (col = 0; col < w; col++) {
-				guint8 a = data[row * stride + col * 4 + 3];
+				guint32 pixel;
+				guint8 a;
 				guint8 *o = &rgba[(row * w + col) * 4];
+
+				memcpy(&pixel, data + row * stride + col * 4, 4);
+				a = (guint8)(pixel >> 24);
 
 				o[0] = 255;
 				o[1] = 255;
@@ -281,6 +289,24 @@ gst_grl_font_cache_draw_glyph(
 ){
 	cairo_scaled_font_t *scaled = NULL;
 	gulong glyph_index = 0;
+
+	g_return_if_fail(GST_IS_GRL_FONT_CACHE(self));
+	if (gst_cairo_font_cache_lookup_glyph(self->cairo_cache, rune, style,
+	    &scaled, &glyph_index)) {
+		gst_grl_font_cache_draw_glyph_index(self, scaled, glyph_index,
+			cell_x, cell_y, fg);
+	}
+}
+
+void
+gst_grl_font_cache_draw_glyph_index(
+	GstGrlFontCache     *self,
+	cairo_scaled_font_t *scaled,
+	gulong              glyph_index,
+	gint                cell_x,
+	gint                cell_y,
+	GstColor            fg
+){
 	GlyphKey key;
 	GlyphEntry *entry;
 	gint ascent;
@@ -289,8 +315,7 @@ gst_grl_font_cache_draw_glyph(
 
 	g_return_if_fail(GST_IS_GRL_FONT_CACHE(self));
 
-	if (!gst_cairo_font_cache_lookup_glyph(self->cairo_cache, rune, style,
-	    &scaled, &glyph_index)) {
+	if (scaled == NULL || cairo_scaled_font_status(scaled) != CAIRO_STATUS_SUCCESS) {
 		return;
 	}
 

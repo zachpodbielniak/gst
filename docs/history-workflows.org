@@ -1,0 +1,64 @@
+#+title: Search and Command Output History
+#+description: Scrollback search, OSC 133 retention, output actions, and remaining limits
+#+authors: Zach Podbielniak
+#+categories: gst terminal history
+#+created: 2026-09-07T00:00:00+00:00
+#+updated: 2026-09-07T00:00:00+00:00
+#+version: 1
+
+* User Workflows
+
+Enable =scrollback=, =search=, and =shell_integration= through the existing module configuration. Search falls back to the live screen without scrollback. Shell integration requires the shell to emit OSC 133 A/B/C/D markers; it does not infer commands from prompt text.
+
+Press Ctrl+Shift+f to enter search, type the query, use Enter or Shift+Enter to visit results, and Escape to leave search. Saved history is searched oldest-first, followed by live rows. Navigation changes the scrollback viewport, never the application's cursor. Escape leaves the viewport at the current result. Existing =match_case=, =regex=, and highlight settings remain supported.
+
+Ctrl+Shift+Up/Down selects the previous/next prompt. Copy/export uses that selected command; ordinary non-Ctrl+Shift keyboard input clears the selection, after which actions use the latest completed command. A selected command without completed output is not replaced by an unrelated command. Multiple prompts on one physical row are not individually navigable.
+
+Output runs from OSC 133 C's cell boundary to OSC 133 D's exclusive cell boundary. Command text and the following prompt are excluded, hard line breaks are preserved, soft wraps are joined, and physical-row padding is removed at hard breaks. Output with an evicted prefix is rejected with a detailed error, not silently truncated. Trailing spaces at exact final boundaries are preserved.
+
+* Application Integration
+
+The modules communicate through the private =GstHistoryApi= table published as =gst-history-api= object data on the active scrollback module. No new core link dependencies or shared-object symbol lookup are needed. Lookups are repeated rather than retaining borrowed module pointers; deactivation removes the table. =gst_scrollback_module_get_line_glyphs()= retains its existing newest-first indexing contract.
+
+The shell module exposes GObject action signals so the driver can bind actions without linking an optional module. On an active =shell_integration= module, emit =copy-command-output= with a =gboolean= result, or =export-command-output= with an editor command string and a =gboolean= result. Failures return false and log details through GLib. The direct C equivalents are =gst_shellint_module_copy_output(self, error)= and =gst_shellint_module_export_output(self, editor, error)=; =gst_shellint_module_dup_output(self, error)= returns an owned UTF-8 string for other consumers.
+
+The application binds =Ctrl+Shift+y= to =copy-command-output= and =Ctrl+Shift+o= to =export-command-output=, dispatching only to an active shell integration module. Both actions are configurable in =keybinds=; supplying that map replaces the defaults. =terminal.editor= defaults to =emacsclient= and is documented in both shipped configurations. Use a real executable, not the interactive Bash function =emacsclient_tty=. The command is tokenized with =g_shell_parse_argv()=, the temporary pathname is appended as one argument, and no shell expansion occurs. The editor must wait until it has finished using the file; do not use =emacsclient --no-wait=. Terminal-only editors require an external terminal-launch wrapper which waits for completion rather than sharing GST's input stream.
+
+The manager assigns per-hook priorities: modal search input precedes other input handlers; scrollback paints first, shell markers near the end, and search highlights last. Equal priorities use module names, not filesystem enumeration order. Main observes modal input changes and disables terminal IME while search owns input.
+
+The top-level build discovers =tests/test-history.c= and tracks the included search, scrollback and shell-integration sources/headers as prerequisites. Its private implementations are included in one translation unit with renamed entry points/helpers, not separately linked module objects. The shell module explicitly links =gio-2.0= for subprocess and temporary-file support.
+
+* Core Coordination
+
+Scrollback saves a deep =gst_line_copy()= and releases it with =gst_line_free()=. This preserves owned Unicode clusters without shallow-copy use-after-free. Search uses =gst_glyph_get_text(glyph, buffer)=, with a seven-byte scratch buffer, and maps every UTF-8 byte to its originating terminal cell span. WDUMMY cells contribute no text; WIDE lead cells cover both columns; combining marks and other cluster bytes map to their owning cell. Core's =gst_line_to_string_range()= serializes complete clusters for output extraction.
+
+Search, output extraction and scrollback rendering are cluster-aware. Both retained and live scrollback overlay rows use the public =gst_render_context_draw_cell()= operation, which supplies full-cell text and metadata to the backend.
+
+Current core resize reflows primary-screen physical rows without exposing an old-to-new anchor map. Shell zones are deliberately invalidated on the terminal's =resize= signal rather than copying incorrect command output. To retain zones through resize, core must supply stable logical-line/cell anchors or an explicit old-row/column to new-row/column map, including rows emitted into history. Scrollback retains saved rows at their original widths; history reflow and horizontal navigation are not implemented here. History survives ordinary scrolling, not process restart.
+
+Full terminal reset and destructive edits of existing rows have no semantic-anchor invalidation contract for command zones; ordinary sequential shell output is the supported model. Graphics erasure notifications do not provide semantic command-anchor remapping. Alternate-screen output is excluded from history by core; search uses only live alternate-screen rows, and shell output actions reject the alternate screen.
+
+* Retention and Safety
+
+Scrollback capacity is clamped to 1..1000000 rows. Capacity updates while active do not change an existing allocation; configure again after deactivation for a new capacity. A viewport positioned in history follows the same retained content as output arrives, until eviction forces it to the oldest remaining line.
+
+Semantic metadata is capped at 4096 zones and pruned beyond the configured scrollback horizon. Unknown positions use =G_MININT=, not -1, because -1 is the newest saved row. Expired boundaries saturate below the retention horizon so an indefinitely running command cannot overflow row counters. Output extraction verifies every requested line against actual history availability.
+
+Search retains at most 100000 nonempty, nonoverlapping matches. Zero-width regex matches are skipped; invalid regexes produce no results. Patterns are row-local, including at soft wraps, rather than spanning logical lines. Escaped literals and regexes both use original-string byte offsets, avoiding case-conversion offset corruption. Results are invalidated on terminal content/resize signals and rescanned before painting, not on every viewport-only redraw. Regex execution is synchronous; pathological user-supplied patterns can still stall the main loop.
+
+Output is capped at 16 MiB. Editor exports use a private temporary file and asynchronous subprocess waiting; cleanup owns only the filename, not the terminal/module object. The file is removed after editor completion, including nonzero exit. A process crash or GST shutdown before the async callback may leave the private file in the system temporary directory. Clipboard lifetime after GST exits follows the backend/compositor's normal behavior.
+
+* Verification
+
+The history and main input regression tests executed and passed in the release/debug suites and default Wayland sanitizer configuration documented in [[file:release-0.4.7.org][0.4.7 release verification]]. Build dependencies are listed in [[file:../README.org][README]]; no separate history library is needed.
+
+#+begin_src bash
+make clean
+make DEBUG=1 CC='gcc -Werror' all tests
+./build/debug/test-history
+./build/debug/test-input-integration
+#+end_src
+
+Do not reuse non-ASAN objects for an ASAN run; use the clean sanitizer commands in the release notes. Tests cover wide/cluster cell mapping, Unicode caseless search, zero-width/invalid regexes, ring wrap/eviction, pinned view offsets, bounded non-NUL OSC packets, output surviving scrolling, immutable PTY cursor navigation, same-row output boundaries, metadata caps, soft-wrap export, unavailable-window/editor errors, action registration, and safe zone invalidation at resize.
+
+Manual integration should verify copy/paste on each backend and an =emacsclient= export, file cleanup after finishing the editor buffer, long-running output during search, and markers/highlights while scrolling. The isolated backend suite covers real X11 clipboard transfers, not command-output clipboard delivery on every backend; real editor launch and combined history overlay appearance remain manual checks.

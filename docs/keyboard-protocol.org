@@ -1,0 +1,92 @@
+#+title: Negotiated Keyboard Input and Graphics Signals
+#+description: Core Kitty keyboard API, supported enhancements, graphics invalidation and verification
+#+authors: Zach Podbielniak
+#+categories: gst terminal keyboard graphics
+#+created: 2026-09-07
+#+updated: 2026-09-07
+#+version: 0.4.7
+
+* Encoder Contract
+
+The public API is declared in =src/core/gst-terminal.h=:
+
+#+begin_src c
+gboolean
+gst_terminal_key_event(
+	GstTerminal *self,
+	guint keyval,
+	guint keycode,
+	guint state,
+	guint event_type,
+	const gchar *text
+);
+#+end_src
+
+Call this after terminal-local shortcut interception and before the existing legacy key/text encoder. A true result means consumed, including events intentionally suppressed without writing bytes. A false result means run the unchanged legacy path. The function emits bytes synchronously through the existing =response= signal with its explicit byte length; the driver must not send a second copy. Connect that signal to the PTY before accepting input. Keyboard lock consumes input without output. There was no existing public =gst_terminal_key_press()= in this checkout, so no redundant wrapper was added; =gst_terminal_key_to_escape()= remains unchanged and legacy-only.
+
+=event_type= is exactly 1 for press, 2 for repeat, and 3 for release. The driver must distinguish repeat from a fresh press and forward releases. When repeat reporting is disabled, repeats encode identically to presses. Disabled releases return true with no output; never fall through and emit their text. Backends must also suppress releases/repeats belonging to terminal-local shortcuts they intercepted, instead of forwarding orphan events to the child.
+
+=keyval= identifies the unshifted key in the current layout, using X11-compatible keysyms. ASCII and Latin-1 printable keysyms, Unicode keysyms (=0x01000000 | codepoint=), navigation, F1-F35, numeric keypad, common media keys, and left/right modifier keys are recognized. Uppercase letters are defensively lowered, but shifted punctuation cannot be unshifted without layout information: Ctrl+Shift+equals must pass =XK_equal= with Shift set, not =XK_plus=. Backends must convert historical non-Latin X11 keysyms to Unicode keysyms using their layout library; core does not carry a legacy keysym-to-Unicode table. Preserve the original keysym for the legacy fallback path. Unknown keys are consumed in report-all mode rather than inventing a character from their numeric keysym.
+
+=keycode= is optional and currently reserved; pass zero. Hardware keycodes differ between X11, evdev, and other backends and are not Unicode or base-layout alternate keys. No physical-key mapping is inferred from them.
+
+=state= uses normalized X11 mask positions: bit 0 Shift, bit 1 CapsLock, bit 2 Control, bit 3 Alt, bit 4 NumLock, bit 5 Hyper, bit 6 Super, and bit 7 Meta. Core converts these to Kitty's modifier bit order and adds one. Backends must normalize their actual XKB modifier mapping: raw Mod2/Mod3/Mod5 can mean something else, particularly AltGr. Do not forward mouse-button bits. Modifier state must include the current event: a modifier press sets its bit and its release clears it unless the other physical key for that modifier remains down. AltGr consumed in producing text is not Meta. ISO level-3/level-5 modifier keys have their own functional key numbers.
+
+=text= is nullable, NUL-terminated, committed UTF-8, not a pre-encoded Ctrl/Alt or VT sequence. It is borrowed only for the call. Associated text is validated as a complete UTF-8 string and omitted if it contains C0, DEL, or C1 controls. All codepoints, including combining marks, are encoded when valid; release events never include text. At the encoder API level, keyval zero with event type 1 and committed text encodes key number zero when flags 8 and 16 are both enabled, falls back outside report-all mode, and is consumed without output under flag 8 alone. The application deliberately bypasses this encoder for Wayland IME commits and NoSymbol Compose text, writing unwrapped UTF-8 instead; see [[file:application-input.org][input dispatch]]. Paste remains on the separate existing paste/bracketed-paste path.
+
+* Negotiation
+
+Only supported flags are retained and reported; setting all five published bits (=31=) and querying returns =27=, not =31=.
+
+| Flag | Support | Behavior |
+|------+---------+----------|
+| 1 | Yes | Disambiguates Escape and modified text/control keys; canonical CSI navigation/function encodings and distinct non-text keypad identities |
+| 2 | Yes | Adds =:2= repeats and =:3= releases to encoded events; text-producing legacy events remain text |
+| 4 | No | Alternate shifted/base-layout key metadata is unavailable in this API; bit is masked out |
+| 8 | Yes | Reports recognized text and modifier keys as escape sequences; implies disambiguation |
+| 16 | Yes, with 8 | Embeds valid committed text as colon-separated decimal Unicode codepoints |
+
+With flag 1 and without flag 8, ordinary unmodified/Shift-only text and text-producing keypad keys remain on the legacy path. Unmodified Enter, Tab, and Backspace remain legacy, including with lock modifiers; their releases are suppressed. Modified recovery keys use negotiated encodings, matching Kitty's reference encoder. Flag 2 alone preserves legacy modified-text presses but reports modified repeats/releases as CSI events. Flag 16 without flag 8 is retained for query/set composition but has no independent effect; the upstream protocol defines that combination as undefined. With no flags enabled, presses/repeats return false and the existing application-cursor, application-keypad, Ctrl/Alt, text, and backtab behavior stays intact.
+
+The in-terminal CSI parser handles these commands separately from legacy CSI parsing:
+
+| Command | Action |
+|---------+--------|
+| =CSI ? u= | Reply =CSI ? flags u= |
+| =CSI > flags u= | Save current flags and replace with supported requested flags; omitted flags mean zero |
+| =CSI < count u= | Restore saved flags, popping count states; omitted/zero count means one; underflow resets flags to zero |
+| =CSI = flags ; 1 u= | Replace flags; omitted/zero mode means one |
+| =CSI = flags ; 2 u= | Set requested supported bits, retaining others |
+| =CSI = flags ; 3 u= | Clear requested bits, retaining others |
+| =CSI u= | Legacy cursor restore, not keyboard negotiation |
+
+Each primary/alternate screen has independent current flags and a stack of up to 32 saved states. Overflow evicts the oldest saved state. A screen transition selects that screen's current flags and saved stack; it does not copy or clear either. Full and soft terminal resets clear both keyboard states and depths. Numeric overflow, unexpected separators/intermediates, extra arguments, and invalid set modes are ignored without partially changing flags or restoring the cursor. Split PTY writes and the =GstEscapeParser= facade use the same parser.
+
+* Graphics Notifications
+
+=GstTerminal::region-erased= has four =G_TYPE_INT= arguments =(x1, y1, x2, y2)=, inclusive zero-based bounds in the active screen. It covers character replacement even with the same character, cluster extension/promotion, wide-cell companion cleanup, explicit erasure, full reset, DEC alignment writes, and destructive horizontal insert/delete ranges. A clear spanning multiple rows emits one rectangle per row so wide-cell boundary expansion is exact. Destructive insertion/deletion can emit an affected-row rectangle followed by the newly blanked subrange; consumers must tolerate overlapping notifications. No notification is generated merely by cursor motion, selection, dirty marking, or redraw. Direct external mutation of a borrowed =GstLine= or =GstGlyph= bypasses terminal signals and must not be used as an output path.
+
+=GstTerminal::region-scrolled= has three =G_TYPE_INT= arguments =(top, bottom, amount)= with inclusive zero-based rows and positive amount for upward movement. The amount is clamped to the actual scroll height. It is emitted for full and partial scrolling regions, up and down, before the newly exposed rows emit =region-erased=. Retained rows are not reported as erased. Existing =line-scrolled-out= history delivery remains before buffer recycling, and is not a replacement for the new signal.
+
+=gst_terminal_swap_screen()= emits =mode-changed(GST_MODE_ALTSCREEN, enabled)= exactly once after the active buffer and mode bit change. =gst_terminal_set_mode()= does not duplicate that emission; combined mode changes report non-screen bits separately. DECSET/DECRST 47/1047/1049 therefore notify graphics even though they call swap directly. Repeating an already-active/inactive mode does not swap. Resetting while alternate is active emits the transition back to primary. Swapping itself is not an erase; explicit DEC screen clears still are.
+
+Ordinary graphics placement clipping, resize/reflow, and scrollback anchoring remain subject to the limits in [[file:graphics-parity.org][Graphics Parity]]. The new signals do not pretend that resize/reflow is a uniform scroll or that moved rows were erased. Modules should treat signal callbacks as notifications, not re-enter terminal mutation during emission. The existing Kitty module discovers these signals lazily and needs no core-specific callback API.
+
+* Ownership Review
+
+Glyph clusters are owned strings. The implementation uses deep-copy =gst_glyph_assign()= and =gst_cursor_restore()= paths, per-cell cleanup during erasure, an independent REP text snapshot, and terminal finalizer cleanup of screens, cursor glyphs, saved cursor glyphs, and =last_cluster=. The parser facade holds and releases its own reference to the terminal. No additional owning terminal/parser cycle is introduced. Keyboard stacks are fixed-size inline arrays and allocate nothing. The event encoder owns one auto-cleaned =GString=; neither caller text nor signal byte pointers survive the synchronous call. The executed lifetime regression exercises clustered REP, cursor save/restore, scrolling, alternate transitions, and reset repeatedly, including in the default Wayland sanitizer suite.
+
+* Verification
+
+=tests/test-keyboard-protocol.c= is automatically discovered by the existing root Makefile wildcard and linked with the normal shared-library test rule; no Makefile changes are needed. It covers default fallback, negotiation and malformed input, bounded stacks and screen isolation, canonical functional keys, modifier conversion, recovery keys, press/repeat/release gating, unsupported-bit masking, Unicode/combining/IME text, invalid associated text, inclusive graphics bounds, same-character overwrites, wide-cell cleanup, both scroll directions and margins, destructive edits, single screen-transition notifications, and cluster lifetime.
+
+The keyboard and application input regressions executed and passed in the clean release/debug suites and default Wayland ASan/UBSan configuration recorded in [[file:release-0.4.7.org][release verification]]. A focused rerun is =./build/debug/test-keyboard-protocol= after rebuilding the debug library/tests with matching flags. Real-window keyboard checks remain necessary for backend unshifted-key, modifier, repeat, release and input-method behavior. Unit encoder tests alone do not verify window-system delivery.
+
+The core/test translation units require Fedora packages =gcc make pkgconf-pkg-config glib2-devel libX11-devel xorg-x11-proto-devel pango-devel=; the combined project needs the additional packages documented in [[file:../README.org][README]], including =harfbuzz-devel=. No linked keyboard-protocol library is required.
+
+* References
+
+- [[https://sw.kovidgoyal.net/kitty/keyboard-protocol/][Kitty keyboard protocol specification]]
+- [[https://github.com/kovidgoyal/kitty/blob/master/kitty/key_encoding.c][Kitty reference encoder, including modified recovery keys]]
+- [[https://github.com/kovidgoyal/kitty/blob/master/kitty/key_encoding.py][Canonical functional key numbers and trailers]]
+- [[file:graphics-parity.org][Graphics behavior and limits]]

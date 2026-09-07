@@ -7,15 +7,15 @@ MODULE_NAME := shell_integration
 MODULE_SRC  := gst-shellint-module.c
 
 CC      ?= gcc
-CFLAGS  ?= $(shell pkg-config --cflags glib-2.0 gobject-2.0 gmodule-2.0) -fPIC -I../../src
+CFLAGS  ?= $(shell pkg-config --cflags glib-2.0 gobject-2.0 gmodule-2.0 gio-2.0) -fPIC -I../../src
 LDFLAGS ?= -shared
 
 .PHONY: all clean
 
 all: $(OUTDIR)/$(MODULE_NAME).so
 
-$(OUTDIR)/$(MODULE_NAME).so: $(MODULE_SRC)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -L$(LIBDIR) -lgst $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0)
+$(OUTDIR)/$(MODULE_NAME).so: $(MODULE_SRC) $(wildcard *.h ../scrollback/*.h)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(MODULE_SRC) -L$(LIBDIR) -lgst $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 gio-2.0)
 
 clean:
 	rm -f $(OUTDIR)/$(MODULE_NAME).so

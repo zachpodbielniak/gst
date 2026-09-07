@@ -42,6 +42,7 @@ handle_read_screen(
 	GstTerminal *term;
 	JsonBuilder *builder;
 	JsonGenerator *gen;
+	g_autoptr(JsonNode) root = NULL;
 	gchar *json_str;
 	McpToolResult *result;
 	gint rows, cols, y;
@@ -101,19 +102,15 @@ handle_read_screen(
 			for (x = 0; x < cols; x++) {
 				const GstGlyph *g;
 				gchar buf[8];
-				gint len;
 
 				g = gst_line_get_glyph_const(line, x);
 				if (g == NULL) {
 					break;
 				}
 
-				len = g_unichar_to_utf8(g->rune, buf);
-				buf[len] = '\0';
-
 				json_builder_begin_object(builder);
 				json_builder_set_member_name(builder, "char");
-				json_builder_add_string_value(builder, buf);
+				json_builder_add_string_value(builder, gst_glyph_get_text(g, buf));
 				json_builder_set_member_name(builder, "fg");
 				json_builder_add_int_value(builder, g->fg);
 				json_builder_set_member_name(builder, "bg");
@@ -142,7 +139,8 @@ handle_read_screen(
 	json_builder_end_object(builder);
 
 	gen = json_generator_new();
-	json_generator_set_root(gen, json_builder_get_root(builder));
+	root = json_builder_get_root(builder);
+	json_generator_set_root(gen, root);
 	json_str = json_generator_to_data(gen, NULL);
 	g_object_unref(gen);
 	g_object_unref(builder);
@@ -175,6 +173,7 @@ handle_read_scrollback(
 	GstScrollbackModule *sb;
 	JsonBuilder *builder;
 	JsonGenerator *gen;
+	g_autoptr(JsonNode) root = NULL;
 	gchar *json_str;
 	McpToolResult *result;
 	gint offset, count, total, i;
@@ -239,14 +238,11 @@ handle_read_scrollback(
 		line_str = g_string_new(NULL);
 		for (x = 0; x < ncols; x++) {
 			gchar buf[8];
-			gint len;
 
 			if (gst_glyph_is_dummy(&glyphs[x])) {
 				continue;
 			}
-			len = g_unichar_to_utf8(glyphs[x].rune, buf);
-			buf[len] = '\0';
-			g_string_append(line_str, buf);
+			g_string_append(line_str, gst_glyph_get_text(&glyphs[x], buf));
 		}
 
 		json_builder_add_string_value(builder, line_str->str);
@@ -257,7 +253,8 @@ handle_read_scrollback(
 	json_builder_end_object(builder);
 
 	gen = json_generator_new();
-	json_generator_set_root(gen, json_builder_get_root(builder));
+	root = json_builder_get_root(builder);
+	json_generator_set_root(gen, root);
 	json_str = json_generator_to_data(gen, NULL);
 	g_object_unref(gen);
 	g_object_unref(builder);
@@ -291,6 +288,7 @@ handle_search_scrollback(
 	g_autoptr(GError) error = NULL;
 	JsonBuilder *builder;
 	JsonGenerator *gen;
+	g_autoptr(JsonNode) root = NULL;
 	gchar *json_str;
 	McpToolResult *result;
 	const gchar *pattern;
@@ -363,14 +361,11 @@ handle_search_scrollback(
 		line_str = g_string_new(NULL);
 		for (x = 0; x < ncols; x++) {
 			gchar buf[8];
-			gint len;
 
 			if (gst_glyph_is_dummy(&glyphs[x])) {
 				continue;
 			}
-			len = g_unichar_to_utf8(glyphs[x].rune, buf);
-			buf[len] = '\0';
-			g_string_append(line_str, buf);
+			g_string_append(line_str, gst_glyph_get_text(&glyphs[x], buf));
 		}
 
 		if (g_regex_match(regex, line_str->str, 0, &match_info)) {
@@ -401,7 +396,8 @@ handle_search_scrollback(
 	json_builder_end_object(builder);
 
 	gen = json_generator_new();
-	json_generator_set_root(gen, json_builder_get_root(builder));
+	root = json_builder_get_root(builder);
+	json_generator_set_root(gen, root);
 	json_str = json_generator_to_data(gen, NULL);
 	g_object_unref(gen);
 	g_object_unref(builder);
@@ -433,9 +429,10 @@ handle_get_cursor_position(
 	GstCursor *cursor;
 	JsonBuilder *builder;
 	JsonGenerator *gen;
+	g_autoptr(JsonNode) root = NULL;
 	gchar *json_str;
 	gchar buf[8];
-	gint len;
+	const GstGlyph *cell;
 	McpToolResult *result;
 
 	(void)server;
@@ -453,8 +450,8 @@ handle_get_cursor_position(
 
 	cursor = gst_terminal_get_cursor(term);
 
-	len = g_unichar_to_utf8(cursor->glyph.rune, buf);
-	buf[len] = '\0';
+	/* Cursor glyph stores drawing attributes, not the cell under the cursor. */
+	cell = gst_terminal_get_glyph(term, cursor->x, cursor->y);
 
 	builder = json_builder_new();
 	json_builder_begin_object(builder);
@@ -463,7 +460,7 @@ handle_get_cursor_position(
 	json_builder_set_member_name(builder, "col");
 	json_builder_add_int_value(builder, cursor->x);
 	json_builder_set_member_name(builder, "character");
-	json_builder_add_string_value(builder, buf);
+	json_builder_add_string_value(builder, cell != NULL ? gst_glyph_get_text(cell, buf) : "");
 	json_builder_set_member_name(builder, "visible");
 	json_builder_add_boolean_value(builder, gst_cursor_is_visible(cursor));
 	json_builder_set_member_name(builder, "shape");
@@ -484,7 +481,8 @@ handle_get_cursor_position(
 	json_builder_end_object(builder);
 
 	gen = json_generator_new();
-	json_generator_set_root(gen, json_builder_get_root(builder));
+	root = json_builder_get_root(builder);
+	json_generator_set_root(gen, root);
 	json_str = json_generator_to_data(gen, NULL);
 	g_object_unref(gen);
 	g_object_unref(builder);
@@ -516,9 +514,10 @@ handle_get_cell_attributes(
 	const GstGlyph *g;
 	JsonBuilder *builder;
 	JsonGenerator *gen;
+	g_autoptr(JsonNode) root = NULL;
 	gchar *json_str;
 	gchar buf[8];
-	gint len, row, col, cols, rows;
+	gint row, col, cols, rows;
 	McpToolResult *result;
 
 	(void)server;
@@ -560,9 +559,6 @@ handle_get_cell_attributes(
 		return result;
 	}
 
-	len = g_unichar_to_utf8(g->rune, buf);
-	buf[len] = '\0';
-
 	builder = json_builder_new();
 	json_builder_begin_object(builder);
 	json_builder_set_member_name(builder, "row");
@@ -570,7 +566,7 @@ handle_get_cell_attributes(
 	json_builder_set_member_name(builder, "col");
 	json_builder_add_int_value(builder, col);
 	json_builder_set_member_name(builder, "character");
-	json_builder_add_string_value(builder, buf);
+	json_builder_add_string_value(builder, gst_glyph_get_text(g, buf));
 	json_builder_set_member_name(builder, "codepoint");
 	json_builder_add_int_value(builder, g->rune);
 	json_builder_set_member_name(builder, "fg");
@@ -594,7 +590,8 @@ handle_get_cell_attributes(
 	json_builder_end_object(builder);
 
 	gen = json_generator_new();
-	json_generator_set_root(gen, json_builder_get_root(builder));
+	root = json_builder_get_root(builder);
+	json_generator_set_root(gen, root);
 	json_str = json_generator_to_data(gen, NULL);
 	g_object_unref(gen);
 	g_object_unref(builder);

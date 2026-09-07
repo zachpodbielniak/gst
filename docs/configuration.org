@@ -52,6 +52,7 @@ Shell and terminal settings.
 | Option      | Type    | Default                 | Range      | Description                  |
 |-------------+---------+-------------------------+------------+------------------------------|
 | =shell=     | string  | =$SHELL= or =/bin/bash= | any path   | Shell command to spawn       |
+| =editor=    | string  | =emacsclient= | executable and arguments | Waiting editor for command-output export |
 | =term=      | string  | =st-256color=           | any string | =$TERM= environment variable |
 | =tabspaces= | integer | =8=                     | 1-64       | Spaces per tab stop          |
 
@@ -62,6 +63,7 @@ Shell and terminal settings.
 #+begin_src yaml
 terminal:
   shell: /bin/bash
+  editor: emacsclient
   term: st-256color
   tabspaces: 8
 #+end_src
@@ -72,6 +74,7 @@ terminal:
 :END:
 #+begin_src C
 gst_config_set_shell(config, "/bin/bash");
+gst_config_set_editor(config, "emacsclient");
 gst_config_set_term_name(config, "st-256color");
 gst_config_set_tabspaces(config, 8);
 #+end_src
@@ -79,8 +82,11 @@ gst_config_set_tabspaces(config, 8);
 | Getter                             | Setter                                    |
 |------------------------------------+-------------------------------------------|
 | =gst_config_get_shell(config)=     | =gst_config_set_shell(config, value)=     |
+| =gst_config_get_editor(config)= | =gst_config_set_editor(config, value)= |
 | =gst_config_get_term_name(config)= | =gst_config_set_term_name(config, value)= |
 | =gst_config_get_tabspaces(config)= | =gst_config_set_tabspaces(config, value)= |
+
+=editor= is tokenized without shell expansion, and the private output filename is appended as one argument. Use a real executable, not a shell function, and do not pass =--no-wait=: the file is deleted when the editor process finishes. With =emacsclient=, finish using =C-x #=. Export requires active =shell_integration= and completed OSC 133 output; see [[file:history-workflows.org][history workflows]] and [[file:keybindings.org][keybindings]].
 
 --------------
 

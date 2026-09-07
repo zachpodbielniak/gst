@@ -14,8 +14,8 @@ LDFLAGS ?= -shared
 
 all: $(OUTDIR)/$(MODULE_NAME).so
 
-$(OUTDIR)/$(MODULE_NAME).so: $(MODULE_SRCS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -L$(LIBDIR) -lgst $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 gio-2.0) -lm
+$(OUTDIR)/$(MODULE_NAME).so: $(MODULE_SRCS) $(wildcard *.h)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(MODULE_SRCS) -L$(LIBDIR) -lgst $(shell pkg-config --libs glib-2.0 gobject-2.0 gmodule-2.0 gio-2.0) -lm
 
 clean:
 	rm -f $(OUTDIR)/$(MODULE_NAME).so

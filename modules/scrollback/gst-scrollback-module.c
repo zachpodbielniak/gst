@@ -11,6 +11,7 @@
  */
 
 #include "gst-scrollback-module.h"
+#include "gst-history.h"
 #include "../../src/module/gst-module-manager.h"
 #include "../../src/config/gst-config.h"
 #include "../../src/core/gst-terminal.h"
@@ -45,6 +46,7 @@ typedef struct
 {
 	GstGlyph *glyphs;
 	gint      cols;
+	GstLine  *line;
 } ScrollLine;
 
 struct _GstScrollbackModule
@@ -90,34 +92,31 @@ on_line_scrolled_out(
 ){
 	GstScrollbackModule *self;
 	ScrollLine *sl;
-	gint x;
 
 	self = GST_SCROLLBACK_MODULE(user_data);
+	(void)term;
+	if (self->lines == NULL || self->capacity <= 0)
+		return;
 
 	/* Get the slot at the write head */
 	sl = &self->lines[self->head];
 
 	/* Free previous data if slot was occupied */
-	g_free(sl->glyphs);
+	if (sl->line != NULL)
+		gst_line_free(sl->line);
 
 	/* Copy glyph data from the line */
-	sl->cols = cols;
-	sl->glyphs = g_new0(GstGlyph, (gsize)cols);
-
-	for (x = 0; x < cols; x++) {
-		GstGlyph *g;
-
-		g = gst_line_get_glyph(line, x);
-		if (g != NULL) {
-			sl->glyphs[x] = *g;
-		}
-	}
+	sl->line = gst_line_copy(line);
+	sl->cols = MIN(cols, sl->line->len);
+	sl->glyphs = sl->line->glyphs;
 
 	/* Advance head in ring buffer */
 	self->head = (self->head + 1) % self->capacity;
 	if (self->count < self->capacity) {
 		self->count++;
 	}
+	if (self->scroll_offset > 0)
+		self->scroll_offset = MIN(self->count, self->scroll_offset + 1);
 }
 
 /*
@@ -170,6 +169,7 @@ gst_scrollback_module_handle_key_event(
 	gint old_offset;
 
 	/* Only handle Shift+key combinations */
+	(void)keycode;
 	if (!(state & ShiftMask)) {
 		return FALSE;
 	}
@@ -179,6 +179,8 @@ gst_scrollback_module_handle_key_event(
 
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
+	if (term != NULL && gst_terminal_is_altscreen(term))
+		return FALSE;
 	rows = (term != NULL) ? gst_terminal_get_rows(term) : 24;
 
 	switch (keyval) {
@@ -230,11 +232,15 @@ gst_scrollback_module_handle_mouse_event(
 	gint             row
 ){
 	GstScrollbackModule *self;
+	GstTerminal *term;
 	gint old_offset;
 
 	(void)state;
 	(void)col;
 	(void)row;
+	term = (GstTerminal *)gst_module_manager_get_terminal(gst_module_manager_get_default());
+	if (term != NULL && gst_terminal_is_altscreen(term))
+		return FALSE;
 
 	self = GST_SCROLLBACK_MODULE(handler);
 	old_offset = self->scroll_offset;
@@ -313,6 +319,8 @@ gst_scrollback_module_render(
 	}
 
 	gst_terminal_get_size(term, &cols, &rows);
+	if (gst_terminal_is_altscreen(term))
+		return;
 
 	/* Clear the drawable with background color (index 257 = default bg) */
 	gst_render_context_fill_rect(ctx, 0, 0, width, height, 257);
@@ -361,16 +369,8 @@ gst_scrollback_module_render(
 
 			pixel_x = ctx->borderpx + x * ctx->cw;
 
-			/* Draw background */
-			gst_render_context_fill_rect(ctx,
-				pixel_x, pixel_y,
-				ctx->cw, ctx->ch, g->bg);
-
-			/* Draw glyph via abstract dispatch */
-			gst_render_context_draw_glyph(ctx,
-				g->rune, GST_FONT_STYLE_NORMAL,
-				pixel_x, pixel_y,
-				g->fg, g->bg, g->attr);
+			gst_render_context_draw_cell(ctx, sl->line, x,
+				MIN(sl->cols, cols), pixel_x, pixel_y);
 		}
 	}
 
@@ -404,16 +404,8 @@ gst_scrollback_module_render(
 
 			pixel_x = ctx->borderpx + x * ctx->cw;
 
-			/* Draw background */
-			gst_render_context_fill_rect(ctx,
-				pixel_x, pixel_y,
-				ctx->cw, ctx->ch, g->bg);
-
-			/* Draw glyph via abstract dispatch */
-			gst_render_context_draw_glyph(ctx,
-				g->rune, GST_FONT_STYLE_NORMAL,
-				pixel_x, pixel_y,
-				g->fg, g->bg, g->attr);
+			gst_render_context_draw_cell(ctx, line, x, cols,
+				pixel_x, pixel_y);
 		}
 	}
 
@@ -444,6 +436,41 @@ gst_scrollback_module_overlay_init(GstRenderOverlayInterface *iface)
 }
 
 /* ===== GstModule vfuncs ===== */
+
+/* Publish typed callbacks through object data so optional consumers do not
+ * depend on shared-object load order or global symbol visibility. */
+static gint
+history_count(gpointer self)
+{
+	return gst_scrollback_module_get_count((GstScrollbackModule *)self);
+}
+
+static gint
+history_offset(gpointer self)
+{
+	return gst_scrollback_module_get_scroll_offset((GstScrollbackModule *)self);
+}
+
+static void
+history_set_offset(gpointer self, gint offset)
+{
+	gst_scrollback_module_set_scroll_offset((GstScrollbackModule *)self, offset);
+}
+
+static const GstLine *
+history_line(gpointer data, gint index)
+{
+	GstScrollbackModule *self = (GstScrollbackModule *)data;
+
+	if (index < 0 || index >= self->count)
+		return NULL;
+	return self->lines[(self->head - 1 - index + self->capacity)
+		% self->capacity].line;
+}
+
+static const GstHistoryApi history_api = {
+	history_count, history_offset, history_set_offset, history_line
+};
 
 static const gchar *
 gst_scrollback_module_get_name(GstModule *module)
@@ -481,11 +508,12 @@ gst_scrollback_module_activate(GstModule *module)
 	self->scroll_offset = 0;
 
 	/* Connect to terminal's line-scrolled-out signal */
+	g_object_set_data(G_OBJECT(self), "gst-history-api", (gpointer)&history_api);
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
 	if (term != NULL) {
-		self->sig_id = g_signal_connect(term, "line-scrolled-out",
-			G_CALLBACK(on_line_scrolled_out), self);
+		self->sig_id = g_signal_connect_object(term, "line-scrolled-out",
+			G_CALLBACK(on_line_scrolled_out), self, 0);
 	}
 
 	g_debug("scrollback: activated (capacity=%d)", self->capacity);
@@ -508,6 +536,7 @@ gst_scrollback_module_deactivate(GstModule *module)
 	self = GST_SCROLLBACK_MODULE(module);
 
 	/* Disconnect signal */
+	g_object_set_data(G_OBJECT(self), "gst-history-api", NULL);
 	if (self->sig_id != 0) {
 		mgr = gst_module_manager_get_default();
 		term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
@@ -520,7 +549,8 @@ gst_scrollback_module_deactivate(GstModule *module)
 	/* Free ring buffer */
 	if (self->lines != NULL) {
 		for (i = 0; i < self->capacity; i++) {
-			g_free(self->lines[i].glyphs);
+			if (self->lines[i].line != NULL)
+				gst_line_free(self->lines[i].line);
 		}
 		g_free(self->lines);
 		self->lines = NULL;
@@ -549,8 +579,11 @@ gst_scrollback_module_configure(GstModule *module, gpointer config)
 	self = GST_SCROLLBACK_MODULE(module);
 	cfg = (GstConfig *)config;
 
-	self->capacity = cfg->modules.scrollback.lines;
-	self->scroll_lines = cfg->modules.scrollback.mouse_scroll_lines;
+	/* Capacity changes take effect at the next activation, never while an
+	 * allocation of a different size is still in use. */
+	if (self->lines == NULL)
+		self->capacity = CLAMP(cfg->modules.scrollback.lines, 1, 1000000);
+	self->scroll_lines = CLAMP(cfg->modules.scrollback.mouse_scroll_lines, 1, 1000000);
 
 	g_debug("scrollback: configured (capacity=%d, scroll_lines=%d)",
 		self->capacity, self->scroll_lines);
@@ -562,17 +595,10 @@ static void
 gst_scrollback_module_dispose(GObject *object)
 {
 	GstScrollbackModule *self;
-	gint i;
 
 	self = GST_SCROLLBACK_MODULE(object);
-
-	if (self->lines != NULL) {
-		for (i = 0; i < self->capacity; i++) {
-			g_free(self->lines[i].glyphs);
-		}
-		g_free(self->lines);
-		self->lines = NULL;
-	}
+	/* Withdraw the optional API before releasing any borrowed line data. */
+	gst_scrollback_module_deactivate(GST_MODULE(self));
 
 	G_OBJECT_CLASS(gst_scrollback_module_parent_class)->dispose(object);
 }

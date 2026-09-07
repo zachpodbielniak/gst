@@ -592,7 +592,19 @@ x11_draw_glyph_specs(
 	XftDrawSetClipRectangles(self->draw, winx, winy, &r, 1);
 
 	/* Render glyphs */
-	if (len > 0) {
+	if (len == 1 && base->cluster != NULL) {
+		GstFontStyle style;
+
+		style = (mode & GST_GLYPH_ATTR_BOLD)
+		    ? ((mode & GST_GLYPH_ATTR_ITALIC) ? GST_FONT_STYLE_BOLD_ITALIC : GST_FONT_STYLE_BOLD)
+		    : ((mode & GST_GLYPH_ATTR_ITALIC) ? GST_FONT_STYLE_ITALIC : GST_FONT_STYLE_NORMAL);
+		/* Color-font layers ignore an RGB foreground/background substitution. */
+		if (!(mode & GST_GLYPH_ATTR_INVISIBLE) &&
+		    !((mode & GST_GLYPH_ATTR_BLINK) && (self->win_mode & GST_WIN_MODE_BLINK))) {
+			gst_font_cache_draw_cluster(self->font_cache, self->draw, fg,
+			    base->cluster, style, winx, specs[0].y);
+		}
+	} else if (len > 0) {
 		XftDrawGlyphFontSpec(self->draw, fg, specs, len);
 	}
 
@@ -711,7 +723,7 @@ x11_renderer_draw_line_impl(
 			continue;
 		}
 
-		/* Copy glyph to local for modification */
+		/* Borrow cluster text for attribute-only changes; never clear this copy. */
 		cur = *new_glyph;
 
 		/* Toggle reverse if cell is selected */
@@ -719,8 +731,9 @@ x11_renderer_draw_line_impl(
 			cur.attr ^= GST_GLYPH_ATTR_REVERSE;
 		}
 
-		/* Let glyph transformers handle non-ASCII codepoints */
-		if (has_glyph_transformers && cur.rune > 0x7F) {
+		/* Scalar ligatures and Kitty coordinate clusters need the hook. */
+		if (has_glyph_transformers && cur.rune >= 0x20 &&
+		    (cur.cluster == NULL || cur.rune == 0x10EEEE)) {
 			gint pixel_x;
 			gint pixel_y;
 			XftColor *gt_fg;
@@ -733,6 +746,7 @@ x11_renderer_draw_line_impl(
 			XRenderColor gt_colbg;
 			gboolean gt_truefg_alloc;
 			gboolean gt_truebg_alloc;
+			gboolean gt_dimfg_alloc;
 			guint16 gt_mode;
 			guint32 gt_fg_idx;
 			guint32 gt_bg_idx;
@@ -746,18 +760,18 @@ x11_renderer_draw_line_impl(
 			gt_bg_idx = cur.bg;
 			gt_truefg_alloc = FALSE;
 			gt_truebg_alloc = FALSE;
+			gt_dimfg_alloc = FALSE;
 
 			if (GST_IS_TRUECOLOR(gt_fg_idx)) {
 				gt_colfg.alpha = 0xffff;
 				gt_colfg.red = (guint16)GST_TRUERED(gt_fg_idx);
 				gt_colfg.green = (guint16)GST_TRUEGREEN(gt_fg_idx);
 				gt_colfg.blue = (guint16)GST_TRUEBLUE(gt_fg_idx);
-				XftColorAllocValue(self->display, self->vis,
+				gt_truefg_alloc = XftColorAllocValue(self->display, self->vis,
 					self->cmap, &gt_colfg, &gt_truefg);
-				gt_fg = &gt_truefg;
-				gt_truefg_alloc = TRUE;
+				gt_fg = gt_truefg_alloc ? &gt_truefg : &self->colors[self->default_fg];
 			} else {
-				gt_fg = &self->colors[gt_fg_idx];
+				gt_fg = &self->colors[gt_fg_idx < self->num_colors ? gt_fg_idx : (guint32)self->default_fg];
 			}
 
 			if (GST_IS_TRUECOLOR(gt_bg_idx)) {
@@ -765,12 +779,11 @@ x11_renderer_draw_line_impl(
 				gt_colbg.red = (guint16)GST_TRUERED(gt_bg_idx);
 				gt_colbg.green = (guint16)GST_TRUEGREEN(gt_bg_idx);
 				gt_colbg.blue = (guint16)GST_TRUEBLUE(gt_bg_idx);
-				XftColorAllocValue(self->display, self->vis,
+				gt_truebg_alloc = XftColorAllocValue(self->display, self->vis,
 					self->cmap, &gt_colbg, &gt_truebg);
-				gt_bg = &gt_truebg;
-				gt_truebg_alloc = TRUE;
+				gt_bg = gt_truebg_alloc ? &gt_truebg : &self->colors[self->default_bg];
 			} else {
-				gt_bg = &self->colors[gt_bg_idx];
+				gt_bg = &self->colors[gt_bg_idx < self->num_colors ? gt_bg_idx : (guint32)self->default_bg];
 			}
 
 			/* Bold brightening */
@@ -787,9 +800,10 @@ x11_renderer_draw_line_impl(
 				gt_colfg.green = gt_fg->color.green / 2;
 				gt_colfg.blue = gt_fg->color.blue / 2;
 				gt_colfg.alpha = gt_fg->color.alpha;
-				XftColorAllocValue(self->display, self->vis,
+				gt_dimfg_alloc = XftColorAllocValue(self->display, self->vis,
 					self->cmap, &gt_colfg, &gt_dimfg);
-				gt_fg = &gt_dimfg;
+				if (gt_dimfg_alloc)
+					gt_fg = &gt_dimfg;
 			}
 
 			/* Reverse video */
@@ -822,6 +836,9 @@ x11_renderer_draw_line_impl(
 				pixel_x, pixel_y, self->cw, self->ch))
 			{
 				/* Free truecolor resources */
+				if (gt_dimfg_alloc) {
+					XftColorFree(self->display, self->vis, self->cmap, &gt_dimfg);
+				}
 				if (gt_truefg_alloc) {
 					XftColorFree(self->display, self->vis,
 						self->cmap, &gt_truefg);
@@ -838,10 +855,16 @@ x11_renderer_draw_line_impl(
 					numspecs -= i;
 					i = 0;
 				}
+				/* Consume the transformed cell's spec as well as the prior run. */
+				specs++;
+				numspecs--;
 				continue;
 			}
 
 			/* Free truecolor resources if transformer didn't handle it */
+			if (gt_dimfg_alloc) {
+				XftColorFree(self->display, self->vis, self->cmap, &gt_dimfg);
+			}
 			if (gt_truefg_alloc) {
 				XftColorFree(self->display, self->vis,
 					self->cmap, &gt_truefg);
@@ -853,7 +876,7 @@ x11_renderer_draw_line_impl(
 		}
 
 		/* If attributes changed, flush the accumulated run */
-		if (i > 0 && ATTRCMP(base, cur)) {
+		if (i > 0 && (ATTRCMP(base, cur) || base.cluster != NULL || cur.cluster != NULL)) {
 			x11_draw_glyph_specs(self, specs, &base, i, ox, row);
 			specs += i;
 			numspecs -= i;

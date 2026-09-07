@@ -9,6 +9,7 @@
  */
 
 #include "gst-wayland-render-context.h"
+#include "../core/gst-line.h"
 
 /* ===== Vtable implementations ===== */
 
@@ -228,6 +229,16 @@ wl_draw_glyph(
 
 	/* Position the glyph at baseline */
 	ascent = gst_cairo_font_cache_get_ascent(wctx->font_cache);
+	if (ctx->current_line != NULL) {
+		const GstGlyph *cell;
+
+		cell = gst_line_get_glyph_const(ctx->current_line, ctx->current_col);
+		if (cell != NULL && cell->rune == rune && cell->cluster != NULL) {
+			gst_cairo_font_cache_draw_cluster(wctx->font_cache, wctx->cr,
+			    cell->cluster, style, px, py + ascent);
+			return;
+		}
+	}
 	glyph.index = glyph_index;
 	glyph.x = (gdouble)px;
 	glyph.y = (gdouble)(py + ascent);

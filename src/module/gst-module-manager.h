@@ -563,6 +563,19 @@ gst_module_manager_activate_all(GstModuleManager *self);
 void
 gst_module_manager_deactivate_all(GstModuleManager *self);
 
+/**
+ * gst_module_manager_has_local_input:
+ * @self: a module manager
+ *
+ * Reads search's read-only boolean input-active property without linking the
+ * optional module. The local-input-changed signal invalidates this query even
+ * when a module is deactivated directly rather than through key dispatch.
+ *
+ * Returns: %TRUE while active search owns keyboard input
+ */
+gboolean
+gst_module_manager_has_local_input(GstModuleManager *self);
+
 G_END_DECLS
 
 #endif /* GST_MODULE_MANAGER_H */

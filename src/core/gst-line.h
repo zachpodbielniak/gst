@@ -24,7 +24,7 @@ G_BEGIN_DECLS
  * GstLineFlags:
  * @GST_LINE_FLAG_NONE: No flags set
  * @GST_LINE_FLAG_DIRTY: Line has been modified and needs redraw
- * @GST_LINE_FLAG_WRAPPED: Line is continuation of previous line
+ * @GST_LINE_FLAG_WRAPPED: Line continues onto the following row
  * @GST_LINE_FLAG_SELECTED: Line contains selected text
  *
  * Flags for line state.
@@ -41,6 +41,10 @@ GType gst_line_flags_get_type(void) G_GNUC_CONST;
 
 /**
  * GstLine:
+ * @glyphs: owned array of initialized glyphs
+ * @len: allocated column count
+ * @flags: line flags
+ * @used: written extent, including explicit trailing spaces
  *
  * Represents a single row in the terminal buffer.
  * Contains an array of glyphs and line metadata.
@@ -49,6 +53,7 @@ struct _GstLine {
     GstGlyph    *glyphs;    /* Array of glyphs */
     gint        len;        /* Number of glyphs (columns) */
     GstLineFlags flags;     /* Line flags */
+	gint        used;      /* Logical content extent, not allocation padding */
 };
 
 /**

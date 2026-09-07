@@ -4,9 +4,9 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Provides interactive text search through visible terminal content
- * with match highlighting and navigation. Activated via a configurable
- * keybind (default Ctrl+Shift+f), search mode intercepts all key input
+ * Provides interactive text search through retained history and live rows
+ * with cell-accurate highlighting and navigation. Activated via
+ * Ctrl+Shift+f, search mode intercepts all key input
  * for query entry and match navigation (Enter/Shift+Enter).
  */
 
