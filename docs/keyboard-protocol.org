@@ -4,7 +4,7 @@
 #+categories: gst terminal keyboard graphics
 #+created: 2026-09-07
 #+updated: 2026-09-09T18:00:00-04:00
-#+version: 0.4.7
+#+version: 0.4.8
 
 * Legacy Shift-Tab
 
