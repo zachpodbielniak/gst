@@ -394,6 +394,48 @@ test_cluster_lifetime(Fixture *f, gconstpointer data)
 	}
 }
 
+/**
+ * test_legacy_backtab:
+ * @f: terminal fixture
+ * @data: unused test data
+ *
+ * XKB reports Shift-Tab as ISO_Left_Tab with Shift still set. Backtab
+ * already encodes Shift in its final Z; adding a modifier produces a
+ * sequence that intermediate terminal parsers can discard. Exercise both
+ * backend keysyms, lock modifiers, and the unmodified Tab control case.
+ */
+static void
+test_legacy_backtab(Fixture *f, gconstpointer data)
+{
+	static const struct {
+		guint keysym;
+		guint state;
+		const gchar *expected;
+	} cases[] = {
+		{ XK_ISO_Left_Tab, 0, "\033[Z" },
+		{ XK_ISO_Left_Tab, 1, "\033[Z" },
+		{ XK_ISO_Left_Tab, 1 | 2 | 16, "\033[Z" },
+		{ XK_Tab, 1, "\033[Z" },
+		{ XK_Tab, 1 | 2 | 16, "\033[Z" },
+		{ XK_Tab, 0, "\t" },
+		{ XK_Tab, 2 | 16, "\t" },
+		{ XK_Up, 1, "\033[1;2A" }
+	};
+	guint i;
+
+	(void)data;
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		gchar bytes[32] = { 0 };
+		gint length;
+
+		length = gst_terminal_key_to_escape(f->term, cases[i].keysym,
+		    cases[i].state, bytes, sizeof(bytes));
+		g_assert_cmpint(length, ==, (gint)strlen(cases[i].expected));
+		g_assert_cmpmem(bytes, (gsize)length, cases[i].expected,
+		    strlen(cases[i].expected));
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -401,6 +443,7 @@ main(int argc, char **argv)
 	g_test_add("/keyboard/negotiation", Fixture, NULL, setup, test_negotiation, teardown);
 	g_test_add("/keyboard/stacks", Fixture, NULL, setup, test_stacks, teardown);
 	g_test_add("/keyboard/events", Fixture, NULL, setup, test_events, teardown);
+	g_test_add("/keyboard/legacy-backtab", Fixture, NULL, setup, test_legacy_backtab, teardown);
 	g_test_add("/keyboard/legacy-and-text", Fixture, NULL, setup, test_legacy_and_text, teardown);
 	g_test_add("/graphics/writes", Fixture, NULL, setup, test_graphics_writes, teardown);
 	g_test_add("/graphics/scroll", Fixture, NULL, setup, test_graphics_scroll, teardown);

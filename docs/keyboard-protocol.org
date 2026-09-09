@@ -3,8 +3,14 @@
 #+authors: Zach Podbielniak
 #+categories: gst terminal keyboard graphics
 #+created: 2026-09-07
-#+updated: 2026-09-07
+#+updated: 2026-09-09T18:00:00-04:00
 #+version: 0.4.7
+
+* Legacy Shift-Tab
+
+Legacy Shift-Tab emits the canonical backtab sequence =ESC [ Z= for both =Tab= with Shift and XKB's =ISO_Left_Tab= with Shift. The =gst-256color= terminfo entry advertises the same bytes as =kcbt=. Lock modifiers do not change that sequence. Other modified keys retain their existing xterm encoding, and negotiated Kitty input continues to use CSI-u.
+
+Previously, =ISO_Left_Tab= with Shift became =ESC [ 1 ; 2 Z=: the generic modifier encoder added Shift to a sequence that already represented it. In the gst → tmux → herdr 0.8.2 → ai-tui path, herdr discarded that sequence before ai-tui could read it. Adding a decoder in ai-tui could not repair that earlier loss. The =/keyboard/legacy-backtab= regression checks the backend keysyms, lock states, plain Tab, and modified arrow behavior.
 
 * Encoder Contract
 

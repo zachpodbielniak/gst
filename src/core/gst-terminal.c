@@ -3759,6 +3759,12 @@ gst_terminal_key_to_escape(
 	 * like Shift+Tab → backtab.
 	 */
 	mod_param = compute_xterm_mod_param(state);
+	/* XKB includes Shift in the state for ISO_Left_Tab, but the final Z
+	 * already means backtab. Do not encode that same Shift twice: herdr
+	 * and other legacy parsers may discard CSI 1;2Z instead of forwarding
+	 * it. Keep extra Ctrl/Alt modifiers on their existing encoding path. */
+	if (keysym == XK_ISO_Left_Tab && mod_param == 2)
+		mod_param = 0;
 
 	for (k = key_map; k->string != NULL; k++) {
 		if (k->keysym != keysym)
