@@ -500,9 +500,8 @@ gst_lrg_window_do_set_opacity(GstWindow *window, gdouble opacity)
 	GstLrgWindow *self = GST_LRG_WINDOW(window);
 
 	self->opacity = CLAMP(opacity, 0.0, 1.0);
-	if (self->win != NULL) {
-		grl_window_set_opacity(self->win, (gfloat)self->opacity);
-	}
+	/* The renderer applies opacity to the framebuffer. GLFW's window
+	 * opacity is unsupported on Wayland and compositor-dependent on X11. */
 }
 
 static void
@@ -675,6 +674,8 @@ gst_lrg_window_new(
 	self->win_h = h;
 
 	/* Open the raylib window (this creates the GL context fonts need). */
+	grl_window_set_config_flags(GRL_FLAG_WINDOW_TRANSPARENT |
+		GRL_FLAG_WINDOW_RESIZABLE);
 	self->win = grl_window_new(w, h, "gst");
 	if (self->win == NULL) {
 		g_object_unref(self);

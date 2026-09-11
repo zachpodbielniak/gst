@@ -100,8 +100,7 @@ through the shared =GstRenderContext=.
 - Opens a separate raylib/OpenGL window; it does not embed via =--windid=.
 - raylib/GLFW exposes a single system clipboard, so =PRIMARY= selection maps to
   the clipboard (middle-click paste returns the last copied/selected text).
-- Window transparency is applied at the window level (=grl_window_set_opacity=),
-  not per-cell.
+- Window transparency fades the completed framebuffer, including text and overlays, using compositor-visible premultiplied alpha. It requires a compositing display server and does not depend on GLFW window-opacity support.
 - The window repaints at ~60fps while open.
 
 * See also

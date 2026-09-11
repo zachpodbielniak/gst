@@ -15,7 +15,64 @@
 #include "gst-enums.h"
 #ifdef GST_HAVE_LRG_BACKEND
 #include "rendering/gst-lrg-render-context.h"
+#include "rendering/gst-lrg-renderer.h"
+#include "core/gst-terminal.h"
+#include <GL/gl.h>
 #include <string.h>
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstTerminal, g_object_unref)
+
+/* Read the presented framebuffer: the compositor must receive premultiplied
+ * RGB and alpha, including opaque overlay pixels and repeated focus changes. */
+static void
+test_lrg_transparency(void)
+{
+	g_autoptr(GstLrgWindow) window = NULL;
+	g_autoptr(GstTerminal) terminal = NULL;
+	g_autoptr(GstGrlFontCache) fonts = NULL;
+	g_autoptr(GstLrgRenderer) renderer = NULL;
+	g_autoptr(GrlColor) white = NULL;
+	const gdouble opacities[] = { 0.5, 0.0, 1.0, 0.25, 0.5 };
+	guint i;
+	gint alpha_bits;
+	guint8 pixel[4];
+	gint expected;
+
+	if (g_getenv("GST_TEST_LRG_GRAPHICS") == NULL) {
+		g_test_skip("Set GST_TEST_LRG_GRAPHICS=1 under a composited display");
+		return;
+	}
+	window = gst_lrg_window_new(8, 4, 8, 16, 2);
+	g_assert_nonnull(window);
+	glGetIntegerv(GL_ALPHA_BITS, &alpha_bits);
+	g_assert_cmpint(alpha_bits, >=, 8);
+	terminal = gst_terminal_new(8, 4);
+	fonts = gst_grl_font_cache_new();
+	g_assert_true(gst_grl_font_cache_load_fonts(fonts, "monospace", 16));
+	renderer = gst_lrg_renderer_new(terminal, window, fonts, 2);
+	g_assert_true(gst_lrg_renderer_load_colors(renderer, NULL));
+	gst_lrg_renderer_set_win_mode(renderer, GST_WIN_MODE_VISIBLE);
+	white = grl_color_new(255, 255, 255, 255);
+	for (i = 0; i < G_N_ELEMENTS(opacities); i++) {
+		gst_window_set_opacity(GST_WINDOW(window), opacities[i]);
+		g_assert_true(gst_renderer_start_draw(GST_RENDERER(renderer)));
+		gst_renderer_render(GST_RENDERER(renderer));
+		/* An opaque overlay must fade with the terminal, not cover it. */
+		grl_draw_rectangle(0, 0, 32, 32, white);
+		gst_renderer_finish_draw(GST_RENDERER(renderer));
+		glReadBuffer(GL_FRONT);
+		glReadPixels(8, grl_window_get_height(
+			gst_lrg_window_get_grl_window(window)) - 8,
+			1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+		g_assert_cmpuint(glGetError(), ==, GL_NO_ERROR);
+		expected = (gint)(opacities[i] * 255.0 + 0.5);
+		g_assert_cmpint(ABS((gint)pixel[0] - expected), <=, 1);
+		g_assert_cmpint(ABS((gint)pixel[3] - expected), <=, 1);
+	}
+	/* Destroy GL resources while their context still exists. */
+	g_clear_object(&renderer);
+	gst_grl_font_cache_unload_fonts(fonts);
+}
 
 /* Capability and invalid-input paths must work without creating a GL window. */
 static void
@@ -220,6 +277,7 @@ main(
 		test_render_mode_type_registered);
 #ifdef GST_HAVE_LRG_BACKEND
 	g_test_add_func("/lrg/render-context/ops", test_lrg_render_context_ops);
+	g_test_add_func("/lrg/render-context/transparency", test_lrg_transparency);
 	g_test_add_func("/lrg/render-context/image-upload", test_lrg_image_upload);
 #endif
 

@@ -10,6 +10,8 @@ Window opacity control with focus-aware adjustment.
 :END:
 The transparency module sets the window opacity using the =_NET_WM_WINDOW_OPACITY= hint (X11) or the equivalent Wayland mechanism. You can configure different opacity levels for when the window is focused versus unfocused, allowing the terminal to become more transparent when you switch to another window.
 
+With =--lrg=, the same settings fade the completed framebuffer, including text, backgrounds, borders and overlays. GST requests an alpha-capable window before creating the OpenGL context and submits premultiplied pixels to the compositor; it does not rely on GLFW's window-opacity API. This supports gowl, including the Xwayland path used by the vendored GLFW backend.
+
 ** Configuration
 :PROPERTIES:
 :CUSTOM_ID: configuration
@@ -72,3 +74,4 @@ gst_config_set_module_config_double(config, "transparency", "unfocus_opacity", 0
 :END:
 - *X11*: Requires a compositor that supports =_NET_WM_WINDOW_OPACITY= (e.g. picom, compton, or a compositing window manager)
 - *Wayland*: Compositor support varies; works with compositors that respect client opacity hints
+- *LRG*: Requires framebuffer alpha support and a compositing display server; no window-opacity protocol or gowl configuration change is needed.

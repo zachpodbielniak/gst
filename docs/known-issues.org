@@ -38,6 +38,14 @@ Wayland and X11 overlay contexts left the source-line pointer uninitialized, all
 
 Zoom now reapplies terminal, renderer, and PTY geometry immediately within the current Wayland logical content size and schedules a redraw. It no longer waits for a compositor configure event or overwrites the stored size with a resize request. See [[file:zoom-grid.org][the zoom bug triage and regression coverage]] for the root cause, headless tests, and manual verification procedure.
 
+*** LRG transparency ignored under gowl (RESOLVED)
+
+The =--lrg= backend created a window without the transparent-framebuffer flag and delegated opacity to GLFW. Under gowl, the whole-window opacity request did not fade the terminal. Although the frame clear carried alpha, opaque cell backgrounds overwrote it.
+
+GST now requests framebuffer transparency before window creation, draws the scene with normal opacity, and multiplies its completed RGB and alpha by the configured opacity exactly once before presentation. The compositor receives premultiplied pixels, and focus changes, text, borders and module overlays all follow the existing transparency settings. GLFW opacity is no longer applied, avoiding double fading on compositors that support it.
+
+The opt-in =/lrg/render-context/transparency= regression checks an actual OpenGL window for an alpha channel and reads presented overlay pixels at opacity 0.5, 0, 1, 0.25 and 0.5. Run it under a composited display with =GST_TEST_LRG_GRAPHICS=1 build/debug/test-lrg-backend -p /lrg/render-context/transparency= after =make LRG_BACKEND=1 DEBUG=1 tests=. The regular headless suite skips this display-dependent check.
+
 *** Dependency refresh build integration (RESOLVED)
 
 *Status:* Fixed in 0.4.3

@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <GL/gl.h>
 
 /**
  * SECTION:gst-lrg-renderer
@@ -313,7 +314,8 @@ lrg_fill_render_context(
 	ctx->base.win_h      = self->win_h;
 	ctx->base.win_mode   = self->win_mode;
 	ctx->base.glyph_attr = 0;
-	ctx->base.opacity    = lrg_get_opacity(self);
+	/* Composite modules normally; window opacity is applied once at finish. */
+	ctx->base.opacity    = 1.0;
 
 	ctx->win         = self->win;
 	ctx->font_cache  = self->font_cache;
@@ -393,8 +395,7 @@ lrg_draw_glyph_run(
 		fg = bg;
 	}
 
-	/* Fill the cell background (opaque; window-level opacity handles
-	 * transparency). */
+	/* Keep the scene opaque until the final whole-frame opacity pass. */
 	bgcol = make_grl(bg, 255);
 	grl_draw_rectangle(winx, winy, width, self->ch, bgcol);
 
@@ -831,7 +832,7 @@ lrg_renderer_clear_impl(GstRenderer *renderer)
 		return;
 	}
 
-	a = (guint8)(lrg_get_opacity(self) * 255.0 + 0.5);
+	a = 255;
 	bg = make_grl(self->colors[self->default_bg], a);
 	grl_window_clear_background(self->win, bg);
 }
@@ -858,7 +859,7 @@ lrg_renderer_start_draw_impl(GstRenderer *renderer)
 
 	grl_window_begin_drawing(self->win);
 
-	a = (guint8)(lrg_get_opacity(self) * 255.0 + 0.5);
+	a = 255;
 	if (self->colors != NULL) {
 		bg = make_grl(self->colors[self->default_bg], a);
 	} else {
@@ -880,12 +881,27 @@ static void
 lrg_renderer_finish_draw_impl(GstRenderer *renderer)
 {
 	GstLrgRenderer *self;
+	g_autoptr(GrlColor) opacity = NULL;
+	guint8 alpha;
 
 	self = GST_LRG_RENDERER(renderer);
 	if (self->win == NULL) {
 		return;
 	}
 
+	/* Multiply the completed scene's RGB and alpha together, producing
+	 * premultiplied pixels for the compositor. Applying this once also
+	 * covers glyphs, borders and module overlays without double fading.
+	 * Blend-mode changes flush raylib's deferred batches in order. */
+	alpha = (guint8)(lrg_get_opacity(self) * 255.0 + 0.5);
+	if (alpha < 255) {
+		opacity = grl_color_new(255, 255, 255, alpha);
+		grl_rlgl_set_blend_factors(GL_ZERO, GL_SRC_ALPHA, GL_FUNC_ADD);
+		grl_draw_begin_blend_mode(GRL_BLEND_CUSTOM);
+		grl_draw_rectangle(0, 0, grl_window_get_width(self->win),
+			grl_window_get_height(self->win), opacity);
+		grl_draw_end_blend_mode();
+	}
 	grl_window_swap_buffers(self->win);
 	g_ptr_array_set_size(self->frame_textures, 0);
 }
