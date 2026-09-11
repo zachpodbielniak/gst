@@ -607,9 +607,14 @@ gst_cairo_font_cache_load_fonts(
 
 	FcPatternDestroy(pattern);
 
-	/* Store font name */
-	g_free(self->used_font);
-	self->used_font = g_strdup(fontstr);
+	/* Zoom can pass our borrowed used_font; copy before releasing it. */
+	{
+		gchar *font_copy;
+
+		font_copy = g_strdup(fontstr);
+		g_free(self->used_font);
+		self->used_font = font_copy;
+	}
 	self->fonts_loaded = TRUE;
 
 	return TRUE;
@@ -908,6 +913,9 @@ gst_cairo_font_cache_lookup_glyph(
 /**
  * gst_cairo_font_cache_get_used_font:
  * @self: A #GstCairoFontCache
+ *
+ * The name survives unload_fonts() and may be passed back to load_fonts().
+ * A successful load replaces it; reacquire the pointer after reloading.
  *
  * Returns: (transfer none) (nullable): the font name
  */

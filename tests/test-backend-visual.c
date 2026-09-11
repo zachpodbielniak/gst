@@ -338,6 +338,71 @@ test_clipboard(void)
 	g_signal_handlers_disconnect_by_data(owner, received);
 }
 
+/* Exercise the borrowed-name reload sequence used by zoom, including reset. */
+static void
+test_cairo_font_zoom(void)
+{
+#ifdef GST_HAVE_WAYLAND
+	g_autoptr(GstCairoFontCache) fonts = NULL;
+	const gchar *font_name = "monospace:pixelsize=16";
+	const gdouble sizes[] = { 17, 18, 15, 16, 17, 16 };
+	const gchar *borrowed;
+	guint i;
+
+	g_assert_true(FcInit());
+	fonts = gst_cairo_font_cache_new();
+	g_assert_true(gst_cairo_font_cache_load_fonts(fonts, font_name, 0));
+	for (i = 0; i < G_N_ELEMENTS(sizes); i++) {
+		borrowed = gst_cairo_font_cache_get_used_font(fonts);
+		gst_cairo_font_cache_unload_fonts(fonts);
+		g_assert_true(gst_cairo_font_cache_load_fonts(fonts, borrowed, sizes[i]));
+		g_assert_cmpstr(gst_cairo_font_cache_get_used_font(fonts), ==, font_name);
+		g_assert_cmpfloat(gst_cairo_font_cache_get_font_size(fonts), ==, sizes[i]);
+		g_assert_cmpfloat(gst_cairo_font_cache_get_default_font_size(fonts), ==, 16);
+		g_assert_cmpint(gst_cairo_font_cache_get_char_width(fonts), >, 0);
+	}
+#else
+	g_test_skip("Cairo font cache not compiled");
+#endif
+}
+
+/* Xft needs a private X server; never connect to the user's desktop. */
+static void
+test_x11_font_zoom(void)
+{
+	g_autoptr(GstFontCache) fonts = NULL;
+	const gchar *font_name = "monospace:pixelsize=16";
+	const gdouble sizes[] = { 17, 18, 15, 16, 17, 16 };
+	const gchar *borrowed;
+	Display *display;
+	guint i;
+
+	if (!enabled())
+		return;
+	if (g_strcmp0(g_getenv("GST_TEST_BACKEND"), "x11") != 0) {
+		g_test_skip("Requires the X11 backend");
+		return;
+	}
+	g_assert_true(FcInit());
+	display = XOpenDisplay(NULL);
+	g_assert_nonnull(display);
+	fonts = gst_font_cache_new();
+	g_assert_true(gst_font_cache_load_fonts(fonts, display,
+		DefaultScreen(display), font_name, 0));
+	for (i = 0; i < G_N_ELEMENTS(sizes); i++) {
+		borrowed = gst_font_cache_get_used_font(fonts);
+		gst_font_cache_unload_fonts(fonts);
+		g_assert_true(gst_font_cache_load_fonts(fonts, display,
+			DefaultScreen(display), borrowed, sizes[i]));
+		g_assert_cmpstr(gst_font_cache_get_used_font(fonts), ==, font_name);
+		g_assert_cmpfloat(gst_font_cache_get_font_size(fonts), ==, sizes[i]);
+		g_assert_cmpfloat(gst_font_cache_get_default_font_size(fonts), ==, 16);
+		g_assert_cmpint(gst_font_cache_get_char_width(fonts), >, 0);
+	}
+	g_clear_object(&fonts);
+	XCloseDisplay(display);
+}
+
 /* Capability probing is display-free so the runner can distinguish skips. */
 int
 main(int argc, char **argv)
@@ -352,5 +417,7 @@ main(int argc, char **argv)
 	g_test_init(&argc, &argv, NULL);
 	g_test_add_func("/backend/visual", test_visual);
 	g_test_add_func("/backend/clipboard", test_clipboard);
+	g_test_add_func("/font-cache/cairo/zoom", test_cairo_font_zoom);
+	g_test_add_func("/font-cache/x11/zoom", test_x11_font_zoom);
 	return g_test_run();
 }

@@ -2,7 +2,7 @@
 #+description: Isolated native window smoke tests and deterministic rendered-image invariants
 #+authors: Zach Podbielniak
 #+created: 2026-09-07
-#+updated: 2026-09-07
+#+updated: 2026-09-11
 
 * Scope
 The opt-in =tests/test-backend-visual.c= creates actual GstX11Window/GstX11Renderer or GstWaylandWindow/GstWaylandRenderer objects, loads native fonts, submits frames, pumps the GLib display event sources, and captures the renderer's RGBA output. It does not replace either backend with a mock. Normal headless GTest execution skips native display tests and opens no display. The runner never connects to the user's desktop; it starts a dedicated Xvfb or headless Weston, falling back to headless gowl when the corresponding server is absent. X11/LRG use a separate rootful Xwayland inside gowl. Private HOME/XDG directories and cleared inherited display/session endpoints isolate the processes; servers are terminated on exit.
@@ -65,3 +65,19 @@ On 2026-09-07, actual isolated execution succeeded using installed gowl and Xway
 The clipboard fixture explicitly flushes the receiving X connection after requesting conversion: unlike a complete application, a window-only fixture has no end-of-frame flush to send a buffered XConvertSelection. Tests verify both selections in both directions. ShellCheck and Bash syntax validation passed.
 
 Final graphical reruns against both completed release and debug builds passed the same four checks, with Wayland clipboard explicitly skipped. Xwayland emits nonfatal xkbcomp warnings; these are server diagnostics, not compiler warnings or test failures. Process inspection confirmed no runner-owned gowl/Xwayland remained. Temporary validation-session logs are not part of the repository; use =--keep-logs= to retain fresh server and test logs in the directory reported by the runner. Clean release/debug and sanitizer results are recorded in [[file:release-0.4.7.org][release verification]].
+
+* Font Zoom Regression (0.4.9)
+Both =GstFontCache= (Xft/X11) and =GstCairoFontCache= (Wayland and the delegated LRG cache) freed their saved font specification before copying the input. The zoom caller passes the borrowed =get_used_font()= pointer through =unload_fonts()= into =load_fonts()=, so that input aliases the freed allocation. The first reload corrupts the saved name; later reloads can select unintended fallback faces and produce uneven spacing. This is a library ownership bug, independent of display scale.
+
+The loaders now duplicate the incoming specification before releasing the saved name. The borrowed pointer survives unloading, but a successful reload replaces it: callers must reacquire it before another reload. No public API or configuration change is required. Restart GST after upgrading the library; an already running process retains its loaded library and potentially corrupted font state. With an older build, set the font size at launch and use a fresh terminal instead of live zoom.
+
+=/font-cache/cairo/zoom= runs without a display in the ordinary =make test= suite when Wayland support is compiled. =/font-cache/x11/zoom= runs on the private X server through the existing backend runner. Both reproduce zoom's exact borrowed-pointer/unload/reload sequence across increasing, decreasing and default sizes, checking the saved specification, requested size, default size and usable cell width. They use the Fontconfig =monospace= alias rather than requiring Hack Nerd Font. Both tests failed on the first reload before the fix (Cairo returned corrupted bytes; Xft returned an empty name).
+
+#+begin_src bash
+make DEBUG=1 tests
+make DEBUG=1 test-backends BACKEND_TEST_ARGS='--backend x11 --require'
+#+end_src
+
+The private X servers use =-noreset= so closing the last client between fixtures cannot trigger a server reset and race the next connection. Without it, the broader X11 run intermittently failed opening the clipboard fixture after the visual fixture closed its display. The runner still terminates its servers explicitly during cleanup.
+
+Validation on 2026-09-11: clean debug and fresh release =all tests= builds passed with no compiler warnings; both configurations passed isolated X11 and Wayland runs using gowl/Xwayland. The X11 run executed both new regressions; Wayland executed the Cairo regression. The existing Wayland clipboard check skipped for lack of an input serial, and the X11-only regression skipped in the Wayland run. ShellCheck, Bash syntax validation and =git diff --check= passed. LRG was not built or exercised for this change; its cache delegates to the fixed Cairo loader.

@@ -192,7 +192,8 @@ run_backend () (
 			compositor_pid=''
 		else
 			# Rootful Xwayland avoids compositor tiling of individual X test windows.
-			Xwayland -displayfd 3 -geometry 1280x1024 -shm -nolisten tcp -ac \
+			# Keep the server stable when successive fixtures close their last client.
+			Xwayland -noreset -displayfd 3 -geometry 1280x1024 -shm -nolisten tcp -ac \
 				3>"$temp/display" >"$temp/server.log" 2>&1 &
 			server_pid=$!
 		fi
@@ -205,7 +206,7 @@ run_backend () (
 		server_pid=$!
 	else
 		# -displayfd atomically chooses a free display, unlike probing :99.
-		Xvfb -displayfd 3 -screen 0 1280x1024x24 -nolisten tcp -ac \
+		Xvfb -noreset -displayfd 3 -screen 0 1280x1024x24 -nolisten tcp -ac \
 			3>"$temp/display" >"$temp/server.log" 2>&1 &
 		server_pid=$!
 	fi
