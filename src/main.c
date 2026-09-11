@@ -1083,14 +1083,43 @@ schedule_draw(void)
 	}
 }
 
+/**
+ * apply_geometry:
+ * @width: current content width in logical pixels
+ * @height: current content height in logical pixels
+ *
+ * Refresh the terminal, renderer metrics, and PTY together, even when
+ * only the font size changed. Always schedule a repaint of the new grid.
+ */
+static void
+apply_geometry(
+	guint width,
+	guint height
+){
+	gint cols;
+	gint rows;
+
+	cols = ((gint)width - 2 * (gint)cfg_border_px) / cell_w;
+	rows = ((gint)height - 2 * (gint)cfg_border_px) / cell_h;
+
+	if (cols < 1) cols = 1;
+	if (rows < 1) rows = 1;
+
+	gst_terminal_resize(terminal, cols, rows);
+	gst_renderer_resize(renderer, width, height);
+	gst_pty_resize(pty, cols, rows);
+
+	schedule_draw();
+}
+
 /*
  * zoom:
  * @action: GST_ACTION_ZOOM_IN, GST_ACTION_ZOOM_OUT, or GST_ACTION_ZOOM_RESET
  *
  * Adjusts the font size by +/- 1px (or resets to default),
  * reloads the font cache, updates cell dimensions, and
- * triggers a window resize to maintain the same terminal
- * columns and rows at the new cell size.
+ * reapplies the grid within the current Wayland content size. Other
+ * backends request a window resize to preserve columns and rows.
  */
 static void
 zoom(GstAction action)
@@ -1229,6 +1258,19 @@ zoom(GstAction action)
 #endif
 		}
 	}
+
+#ifdef GST_HAVE_WAYLAND
+	if (backend == GST_BACKEND_WAYLAND) {
+		/* The compositor owns the content size. A local resize request
+		 * neither changes a tiled window nor produces a configure event.
+		 * Use the backend's actual logical size, not base properties or
+		 * a requested size, and propagate font metrics synchronously. */
+		gst_wayland_window_get_logical_size(GST_WAYLAND_WINDOW(window),
+			&new_w, &new_h);
+		apply_geometry((guint)new_w, (guint)new_h);
+		return;
+	}
+#endif
 
 	/* Resize window to maintain same cols/rows */
 	cols = gst_terminal_get_cols(terminal);
@@ -1930,20 +1972,7 @@ on_configure(
 	guint       height,
 	gpointer    user_data
 ){
-	gint cols;
-	gint rows;
-
-	cols = ((gint)width - 2 * (gint)cfg_border_px) / cell_w;
-	rows = ((gint)height - 2 * (gint)cfg_border_px) / cell_h;
-
-	if (cols < 1) cols = 1;
-	if (rows < 1) rows = 1;
-
-	gst_terminal_resize(terminal, cols, rows);
-	gst_renderer_resize(renderer, width, height);
-	gst_pty_resize(pty, cols, rows);
-
-	schedule_draw();
+	apply_geometry(width, height);
 }
 
 /*

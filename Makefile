@@ -333,6 +333,7 @@ $(OBJDIR)/tests/test-history.o: $(wildcard modules/search/*.[ch] modules/scrollb
 $(OBJDIR)/tests/test-wayland-input.o: src/window/gst-wayland-window.c src/window/gst-wayland-window.h $(wildcard src/wayland-protocols/*.[ch])
 $(OBJDIR)/tests/test-graphics-consumers.o: $(wildcard modules/ligatures/*.[ch] modules/urlclick/*.[ch])
 $(OBJDIR)/tests/test-input-integration.o: src/main.c modules/search/gst-search-module.c modules/search/gst-search-module.h modules/scrollback/gst-history.h $(OUTDIR)/gst-default-config.h
+$(OBJDIR)/tests/test-zoom.o: src/main.c $(OUTDIR)/gst-default-config.h
 
 # Exercise optional exporters in the same configurations that ship them.
 $(OBJDIR)/tests/test-graphics-consumers.o: tests/test-graphics-consumers.c $(wildcard modules/mcp/*.[ch] modules/webview/*.[ch]) | $(OBJDIR)

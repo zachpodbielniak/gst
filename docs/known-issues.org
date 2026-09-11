@@ -34,6 +34,10 @@ The MCP build-order race is resolved: parallel =all tests= requests now wait for
 
 Wayland and X11 overlay contexts left the source-line pointer uninitialized, allowing standalone scroll-indicator glyphs to dereference stack garbage during Unicode cluster lookup. Backend initializers now clear line metadata; regression tests cover poisoned context storage and real Cairo glyph painting. LRG already zeroed its renderer contexts and now uses the same initializer contract. See [[file:scrollback-overlay-crash.org][the bug triage and verification notes]].
 
+*** Wayland font zoom left the cell grid unchanged (RESOLVED)
+
+Zoom now reapplies terminal, renderer, and PTY geometry immediately within the current Wayland logical content size and schedules a redraw. It no longer waits for a compositor configure event or overwrites the stored size with a resize request. See [[file:zoom-grid.org][the zoom bug triage and regression coverage]] for the root cause, headless tests, and manual verification procedure.
+
 *** Dependency refresh build integration (RESOLVED)
 
 *Status:* Fixed in 0.4.3
