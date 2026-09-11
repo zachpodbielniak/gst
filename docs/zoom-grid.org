@@ -1,0 +1,45 @@
+#+title: Wayland zoom grid regression
+#+description: Triage, fix, and regression coverage for font zoom without a compositor resize
+#+authors: Zach Podbielniak
+#+categories: gst bugs wayland rendering
+#+created: 2026-09-11T00:00:00-04:00
+#+updated: 2026-09-11T00:00:00-04:00
+#+version: 1
+
+* Report and impact
+
+The report =BUG-REPORT-zoom.md= identifies commit =b7a57842348701f21f07308e9e940b700b398d0f= on the =quay.io/immutablue/hawk-blueah:44= image, version =44.20260911.0=, under the gowl Wayland compositor. Zoom changed glyph size while leaving renderer cell spacing and terminal/PTY dimensions unchanged. Enlarged glyphs overlapped or clipped until a real compositor resize repaired the layout. The defect is confirmed by source tracing and a headless driver regression; the reported live gowl session was not reproduced during this fix.
+
+* Root cause
+
+=zoom()= reloaded the Cairo font cache and updated the driver's cell metrics, then requested a larger or smaller window to preserve the grid. The Wayland resize implementation only stored the requested dimensions: it neither requested compositor geometry nor emitted a configure signal. Consequently, =on_configure()= never refreshed renderer metrics, terminal dimensions, or the PTY winsize. No redraw was scheduled by zoom either.
+
+The backend's logical content size is authoritative. The base =GstWindow= width/height properties are not synchronized by the Wayland configure callback, so they must not be used as a substitute. Mutating the requested backend size during zoom would also corrupt the dimensions used by later configure transactions.
+
+* Resolution
+
+=apply_geometry()= now contains the existing configure path: derive rows and columns from logical pixels and current font metrics, clamp both to at least one cell, resize the terminal, renderer, and PTY, then schedule drawing. Wayland zoom calls it synchronously with =gst_wayland_window_get_logical_size()= after reloading fonts. It makes no window resize request. The same helper handles subsequent compositor configures, keeping the two paths consistent. X11 and LRG retain their existing window resize behavior.
+
+The renderer resize refreshes its font metrics even when the window dimensions are unchanged. Wayland scale factors remain independent of the logical terminal grid.
+
+* Automated validation
+
+=tests/test-zoom.c= includes the application driver, uses a real Cairo font cache, real Wayland window object, and real terminal, and captures the renderer and PTY resize boundaries without opening a display or spawning a process. It exercises repeated zoom-in, zoom-out, reset, reset at the default size, non-cell-aligned fixed window dimensions, and a surface smaller than its borders. Each changed size must propagate the expected grid and unchanged window dimensions and schedule a redraw. Reset must restore the original font metrics.
+
+The fixed-window test fails against the reported commit on its first zoom: the renderer receives zero resize calls. Both tests pass with the fix. The default clean build and complete test suite and the X11-only build/test configuration are the validation commands:
+
+#+begin_src bash
+make clean
+make -j8 all tests
+make -j8 BUILD_WAYLAND=0 OUTDIR=build/x11 OBJDIR=build/x11/obj all tests
+#+end_src
+
+These tests cover driver propagation; they do not constitute live compositor rendering or LRG runtime verification.
+
+* Manual verification
+
+Launch the rebuilt GST using =--wayland= under gowl. Keep the terminal in a fixed tile and use the configured zoom-in, zoom-out, and zoom-reset bindings repeatedly. Glyph spacing must change immediately with font size, without moving the tile or waiting for terminal output. Run =stty size= after each change to verify the PTY grid changes with the available content area. Repeat with a floating window, a fractional-scale output, and a later compositor resize; each must retain correct spacing and dimensions.
+
+* Fedora build dependencies
+
+=gcc make pkgconf-pkg-config glib2-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel libyaml-devel json-glib-devel pango-devel harfbuzz-devel wayland-devel wayland-protocols-devel libxkbcommon-devel xkeyboard-config cairo-devel libdecor-devel=. The build also uses the pinned =deps/yaml-glib= and =deps/crispy= submodules. No new dependency or host package installation is required by this fix.
