@@ -11,9 +11,116 @@
 
 #include <glib.h>
 #include <glib-object.h>
+#include <string.h>
 #include "gst-types.h"
 #include "gst-enums.h"
 #include "rendering/gst-render-context.h"
+#include "rendering/gst-x11-render-context.h"
+#ifdef GST_HAVE_WAYLAND
+#include "rendering/gst-wayland-render-context.h"
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+#include "rendering/gst-lrg-render-context.h"
+#endif
+
+/*
+ * test_backend_context_init:
+ *
+ * Poison stack storage to reproduce the overlay's missing initialization
+ * deterministically, without relying on a particular compiler stack layout.
+ */
+static void
+test_backend_context_init(void)
+{
+	GstX11RenderContext xctx;
+#ifdef GST_HAVE_WAYLAND
+	GstWaylandRenderContext wctx;
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+	GstLrgRenderContext lctx;
+#endif
+
+	memset(&xctx, 0xa5, sizeof(xctx));
+	gst_x11_render_context_init_ops(&xctx);
+	g_assert_nonnull(xctx.base.ops);
+	g_assert_cmpint(xctx.base.backend, ==, GST_BACKEND_X11);
+	g_assert_null(xctx.base.current_line);
+	g_assert_cmpint(xctx.base.current_col, ==, 0);
+	g_assert_cmpint(xctx.base.current_cols, ==, 0);
+#ifdef GST_HAVE_WAYLAND
+	memset(&wctx, 0xa5, sizeof(wctx));
+	gst_wayland_render_context_init_ops(&wctx);
+	g_assert_nonnull(wctx.base.ops);
+	g_assert_cmpint(wctx.base.backend, ==, GST_BACKEND_WAYLAND);
+	g_assert_null(wctx.base.current_line);
+	g_assert_cmpint(wctx.base.current_col, ==, 0);
+	g_assert_cmpint(wctx.base.current_cols, ==, 0);
+#endif
+#ifdef GST_HAVE_LRG_BACKEND
+	memset(&lctx, 0xa5, sizeof(lctx));
+	gst_lrg_render_context_init_ops(&lctx);
+	g_assert_nonnull(lctx.base.ops);
+	g_assert_cmpint(lctx.base.backend, ==, GST_BACKEND_LRG);
+	g_assert_null(lctx.base.current_line);
+	g_assert_cmpint(lctx.base.current_col, ==, 0);
+	g_assert_cmpint(lctx.base.current_cols, ==, 0);
+#endif
+}
+
+#ifdef GST_HAVE_WAYLAND
+/*
+ * test_wayland_overlay_glyph:
+ *
+ * Exercise the scroll indicator's real Cairo glyph path on an image surface.
+ * No compositor is needed. A poisoned source-line pointer must be cleared
+ * before drawing, and the glyph must actually paint pixels rather than exit
+ * early because drawing resources or a font were missing.
+ */
+static void
+test_wayland_overlay_glyph(void)
+{
+	GstWaylandRenderContext ctx;
+	g_autoptr(GstCairoFontCache) cache = NULL;
+	cairo_surface_t *surface;
+	cairo_t *cr;
+	const guchar *pixels;
+	gsize size;
+	gsize i;
+	gboolean painted;
+
+	cache = gst_cairo_font_cache_new();
+	g_assert_true(gst_cairo_font_cache_load_fonts(cache, "monospace", 16.0));
+	surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 64, 64);
+	cr = cairo_create(surface);
+	g_assert_cmpint(cairo_status(cr), ==, CAIRO_STATUS_SUCCESS);
+
+	memset(&ctx, 0xa5, sizeof(ctx));
+	gst_wayland_render_context_init_ops(&ctx);
+	ctx.cr = cr;
+	ctx.surface = surface;
+	ctx.font_cache = cache;
+	ctx.colors = NULL;
+	ctx.num_colors = 0;
+	ctx.fg = GST_COLOR_RGB(255, 255, 255);
+	ctx.bg = GST_COLOR_RGB(0, 0, 0);
+	gst_render_context_draw_glyph(&ctx.base, (GstRune)'[',
+		GST_FONT_STYLE_NORMAL, 0, 0, 0, 0, 0);
+	g_assert_cmpint(cairo_status(cr), ==, CAIRO_STATUS_SUCCESS);
+	cairo_surface_flush(surface);
+	pixels = cairo_image_surface_get_data(surface);
+	size = (gsize)cairo_image_surface_get_stride(surface) * 64;
+	painted = FALSE;
+	for (i = 0; i < size; i++) {
+		if (pixels[i] != 0) {
+			painted = TRUE;
+			break;
+		}
+	}
+	g_assert_true(painted);
+	cairo_destroy(cr);
+	cairo_surface_destroy(surface);
+}
+#endif
 
 /* ===== Mock vtable tracking ===== */
 
@@ -400,6 +507,12 @@ int
 main(int argc, char **argv)
 {
 	g_test_init(&argc, &argv, NULL);
+	g_test_add_func("/render-context/backend-context-init",
+		test_backend_context_init);
+#ifdef GST_HAVE_WAYLAND
+	g_test_add_func("/render-context/wayland-overlay-glyph",
+		test_wayland_overlay_glyph);
+#endif
 
 	g_test_add_func("/render-context/backend-type-enum",
 		test_backend_type_enum);

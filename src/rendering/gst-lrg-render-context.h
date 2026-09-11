@@ -55,7 +55,9 @@ typedef struct
  * @ctx: an LRG render context
  *
  * Initializes the vtable ops pointer for LRG backend operations.
- * Must be called once after populating the LRG-specific fields.
+ * Resets source-line metadata to NULL/zero for standalone overlay glyphs.
+ * Other fields are preserved and must be populated by the caller.
+ * Call before assigning source-line metadata for terminal-cell drawing.
  */
 void
 gst_lrg_render_context_init_ops(GstLrgRenderContext *ctx);

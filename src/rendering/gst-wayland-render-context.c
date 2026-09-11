@@ -411,4 +411,9 @@ gst_wayland_render_context_init_ops(GstWaylandRenderContext *ctx)
 {
 	ctx->base.ops = &wayland_ops;
 	ctx->base.backend = GST_BACKEND_WAYLAND;
+
+	/* Overlays have no source cell; line drawing sets these explicitly. */
+	ctx->base.current_line = NULL;
+	ctx->base.current_col = 0;
+	ctx->base.current_cols = 0;
 }

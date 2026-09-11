@@ -1,0 +1,51 @@
+#+title: Scrollback overlay crash: uninitialized render context
+#+description: Triage, fix, and regression coverage for the September 2026 scrollback SIGSEGV.
+#+authors: Zach Podbielniak
+#+categories: gst rendering bugs
+#+created: 2026-09-11T19:54:00-04:00
+#+updated: 2026-09-11T19:54:00-04:00
+#+version: 1
+
+* Report and scope
+
+Status: resolved in source. The report identifies GST commit =b7a57842348701f21f07308e9e940b700b398d0f= on Immutablue image =44.20260911.0=, Fedora 44, x86_64, using the Wayland backend. Entering scrollback crashed three times on the first overlay frame. Expected behavior is rendered history with the =[N/M]= position indicator.
+
+This is a GST component defect. No packaging or host configuration change is needed to correct the source. An updated GST binary must be built and shipped before an installed image benefits from the fix.
+
+* Evidence and root cause
+
+The supplied backtrace passes through =gst_scrollback_module_render()=, =gst_render_context_draw_glyph()=, =wl_draw_glyph()=, and =gst_line_get_glyph_const()=. The scroll indicator draws standalone glyphs with the overlay context. The Wayland glyph implementation checks =current_line= to recover a terminal cell's Unicode cluster, then dereferences that pointer when it is non-NULL.
+
+Source inspection confirms that the Wayland and X11 context fill helpers initialized geometry, colors, and backend drawing resources, but omitted =current_line=, =current_col=, and =current_cols=. Their stack contexts were not zeroed. This leaves the overlay's source-line pointer indeterminate. The line metadata and cluster lookup were introduced in =b402273=. The intervening font-cache change in =b7a5784= does not establish a new cause; a stack-layout change triggering the older defect remains an inference.
+
+The original process core was not symbolized during this triage, so its exact pointer value remains unverified. A deterministic regression test instead fills context storage with =0xa5= and proves that the old backend initializer fails to clear the source-line pointer. This confirms the source defect independently of the original stack layout.
+
+LRG was audited separately: =lrg_fill_render_context()= already clears the entire context with =memset()=. It is not affected by the same renderer construction defect. Its initializer now shares the explicit line-metadata reset contract for consistency and direct callers.
+
+* Fix
+
+The X11, Wayland, and LRG =gst_*_render_context_init_ops()= functions reset =current_line= to =NULL= and both column fields to zero. Other context fields are preserved. Each renderer calls this initializer before assigning per-cell line metadata, so background, overlay, and glyph-transform contexts begin without a source cell. Normal terminal-line rendering still supplies its actual line and column after initialization.
+
+Public header comments document the reset and call order. No struct layout or ABI change is required.
+
+* Regression coverage
+
+=tests/test-render-context.c= adds a poisoned-storage initialization check for X11 and for each enabled optional backend. The check fails against the unfixed initializer. A separate Wayland test constructs a Cairo image surface and a real font cache, initializes poisoned context memory, draws the opening bracket used by the scroll indicator, and asserts that pixels were painted. It exercises the actual glyph implementation without requiring a compositor.
+
+The Cairo test covers the failing glyph path; it does not simulate wheel events, a complete scrollback session, or the original process core. A manual desktop reproduction is to start GST with scrollback enabled, print more lines than the window holds, then press Shift+PageUp or scroll upward. History and the position indicator should render without crashing; return to the live screen and repeat.
+
+** Verification results
+
+The default release build passed =make clean= followed by =make -j8 all tests= with zero warnings: 298 registered test cases across 26 binaries, including three explicit opt-in desktop skips. The X11-only build passed with zero warnings: 291 registered cases across 26 binaries, including four skips (one for the unavailable Cairo backend). The debug LRG-enabled build also passed all 26 test binaries with zero warnings, using the existing matching graylib/raylib archives from the main checkout; those vendored archives were not rebuilt. The LRG initializer regression was compiled and exercised in that configuration.
+
+Separate configurations used both =OUTDIR= and =OBJDIR= overrides to avoid reusing objects compiled with different backend flags. Overriding only =OUTDIR= initially reused default Wayland objects during the X11-only check and produced linker errors; isolating =OBJDIR= resolved that validation setup error. No build-system change was needed.
+
+* Build requirements
+
+Fedora packages for the default X11/Wayland build: =gcc make pkgconf-pkg-config glib2-devel libX11-devel libXft-devel libXrender-devel fontconfig-devel libyaml-devel json-glib-devel pango-devel harfbuzz-devel wayland-devel wayland-protocols-devel libxkbcommon-devel xkeyboard-config cairo-devel libdecor-devel=. The optional LRG backend additionally requires =mesa-libGL-devel= and the vendored graylib/raylib sources or matching prebuilt archives.
+
+Use the pinned =deps/yaml-glib= and =deps/crispy= submodules. Run =make clean= before =make -j8 all tests= for a clean default build; =make tests= builds and runs the GTest suite.
+
+* Evidence handling
+
+The original report and crash bundle remain local. No core, terminal memory, or private crash attachment is included in this repository.

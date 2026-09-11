@@ -68,7 +68,9 @@ typedef struct
  * @ctx: an X11 render context
  *
  * Initializes the vtable ops pointer for X11 backend operations.
- * Must be called once after populating the X11-specific fields.
+ * Resets source-line metadata to NULL/zero for standalone overlay glyphs.
+ * Other fields are preserved and must be populated by the caller.
+ * Call before assigning source-line metadata for terminal-cell drawing.
  */
 void
 gst_x11_render_context_init_ops(GstX11RenderContext *ctx);

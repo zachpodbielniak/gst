@@ -57,7 +57,9 @@ typedef struct
  * @ctx: a Wayland render context
  *
  * Initializes the vtable ops pointer for Wayland backend operations.
- * Must be called once after populating the Wayland-specific fields.
+ * Resets source-line metadata to NULL/zero for standalone overlay glyphs.
+ * Other fields are preserved and must be populated by the caller.
+ * Call before assigning source-line metadata for terminal-cell drawing.
  */
 void
 gst_wayland_render_context_init_ops(GstWaylandRenderContext *ctx);

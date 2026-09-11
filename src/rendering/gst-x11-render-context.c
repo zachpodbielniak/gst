@@ -384,4 +384,9 @@ gst_x11_render_context_init_ops(GstX11RenderContext *ctx)
 {
 	ctx->base.ops = &x11_ops;
 	ctx->base.backend = GST_BACKEND_X11;
+
+	/* Overlays have no source cell; line drawing sets these explicitly. */
+	ctx->base.current_line = NULL;
+	ctx->base.current_col = 0;
+	ctx->base.current_cols = 0;
 }
