@@ -58,6 +58,8 @@ Alternate resize deliberately remains a fixed-grid top-left copy: widening adds 
 
 Core now requires pkg-config packages =pango= and =harfbuzz= in common compilation and library/test link flags. Fedora development packages are =pango-devel= and =harfbuzz-devel=, in addition to the existing =gcc=, =make=, =pkgconf-pkg-config=, =glib2-devel=, =libX11-devel=, =libXft-devel=, =fontconfig-devel=, =freetype-devel= and =libyaml-devel=. Cairo/Wayland builds additionally use =cairo-devel=, =wayland-devel=, =wayland-protocols-devel= and =libxkbcommon-devel=. Emoji visual tests need a suitable font such as =google-noto-color-emoji-fonts=.
 
+Both Forgejo AppImage workflows (latest and tagged releases) explicitly install =pango-devel= and =harfbuzz-devel= in the Fedora build container before invoking =make appimage=. These are required even when the container already includes the Pango and HarfBuzz runtime libraries; without the development packages, Makefile dependency validation stops before compilation.
+
 Use a clean build when changing flags or upgrading the public glyph layout. Run build commands sequentially:
 
 #+begin_src sh

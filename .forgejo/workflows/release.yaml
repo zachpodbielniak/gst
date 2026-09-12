@@ -26,7 +26,7 @@ jobs:
           dnf install -y \
             libX11-devel libXft-devel libXrender-devel fontconfig-devel \
             wayland-devel libxkbcommon-devel cairo-devel libdecor-devel \
-            libdex-devel libpng-devel
+            libdex-devel libpng-devel pango-devel harfbuzz-devel
 
       - name: Download appimagetool
         run: |
