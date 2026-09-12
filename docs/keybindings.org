@@ -213,5 +213,6 @@ Key names are X11 keysym names. Common examples:
 :END:
 - *Lock bit stripping*: NumLock, CapsLock, and ScrollLock states are automatically stripped when matching keybindings, so bindings work regardless of lock key state.
 - *Shift+letter normalization*: When you bind =Shift+a=, it is automatically converted to =Shift+A= (uppercase keysym) for correct X11 matching.
+- *Shift+punctuation matching*: Keyboard events first match the translated symbol, then fall back to the active layout's unshifted symbol with the same modifiers when Shift is held. This lets =Ctrl+Shift+minus= and =Ctrl+Shift+0= work when the keyboard reports =underscore= and =parenright=. An explicit binding for the shifted symbol takes precedence.
 - *YAML replaces defaults*: If you define a =keybinds:= section in YAML, all default keybindings are replaced. If you omit the section entirely, defaults are used.
 - *C config appends*: =gst_config_add_keybind()= adds to existing bindings. Use =gst_config_clear_keybinds()= first if you want to replace everything.
