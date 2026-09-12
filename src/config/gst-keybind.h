@@ -157,6 +157,26 @@ gst_mousebind_lookup(
 	guint        x11_state
 );
 
+/**
+ * gst_keybind_lookup_event:
+ * @bindings: (nullable) (element-type GstKeybind): configured bindings
+ * @keyval: translated keysym
+ * @base_keyval: unshifted keysym from the active keyboard layout, or zero
+ * @state: X11 modifier state
+ *
+ * Matches the translated symbol first, then the base symbol with identical
+ * modifiers when Shift is held. Explicit shifted bindings take precedence.
+ *
+ * Returns: the matching action, or %GST_ACTION_NONE
+ */
+GstAction
+gst_keybind_lookup_event(
+	const GArray *bindings,
+	guint keyval,
+	guint base_keyval,
+	guint state
+);
+
 G_END_DECLS
 
 #endif /* GST_KEYBIND_H */

@@ -29,7 +29,29 @@ input_capture_write(GstPty *unused, const gchar *data, gssize len)
 typedef struct { GstWindow parent; } InputWindow;
 typedef struct { GstWindowClass parent; } InputWindowClass;
 G_DEFINE_TYPE(InputWindow, input_window, GST_TYPE_WINDOW)
-static void input_window_class_init(InputWindowClass *klass) { (void)klass; }
+static guint clipboard_copies;
+static guint clipboard_pastes;
+static guint primary_pastes;
+static void input_copy(GstWindow *win) { (void)win; clipboard_copies++; }
+static void input_paste(GstWindow *win) { (void)win; clipboard_pastes++; }
+static void input_primary(GstWindow *win) { (void)win; primary_pastes++; }
+static void
+input_selection(GstWindow *win, const gchar *text, gboolean clipboard)
+{
+	(void)win;
+	(void)clipboard;
+	g_assert_cmpstr(text, ==, "hello");
+}
+/* Observe real clipboard actions without a compositor or clipboard service. */
+static void
+input_window_class_init(InputWindowClass *klass)
+{
+	GstWindowClass *window_class = GST_WINDOW_CLASS(klass);
+	window_class->copy_to_clipboard = input_copy;
+	window_class->paste_clipboard = input_paste;
+	window_class->paste_primary = input_primary;
+	window_class->set_selection = input_selection;
+}
 static void input_window_init(InputWindow *self) { (void)self; }
 
 typedef struct {
@@ -209,6 +231,10 @@ test_input_search_lifecycle(void)
 	g_assert_false(gst_module_manager_has_local_input(manager));
 	g_assert_true(gst_module_activate(GST_MODULE(search)));
 	for (i = 0; i < 2; i++) {
+		/* Super is a real extra modifier, not a lock bit to discard. */
+		g_assert_false(gst_input_handler_handle_key_event(GST_INPUT_HANDLER(search),
+			XK_F, 41, ControlMask | ShiftMask | Mod4Mask));
+		g_assert_false(gst_module_manager_has_local_input(manager));
 		g_assert_true(gst_module_manager_dispatch_key_event(manager, XK_F, 41,
 			ControlMask | ShiftMask));
 		g_assert_true(gst_module_manager_has_local_input(manager));
@@ -293,6 +319,18 @@ test_input_driver(void)
 	g_assert_cmpuint(exports, ==, 1);
 	g_assert_cmpuint(probe->calls, ==, 0);
 	g_assert_cmpuint(input_bytes->len, ==, 0);
+	/* Shifted custom output actions must also bypass shell navigation hooks.
+	 * The manager must use the same base-symbol lookup as the application. */
+	gst_config_add_keybind(config, "Shift+1", "copy-command-output");
+	gst_config_add_keybind(config, "Shift+2", "export-command-output");
+	gst_window_emit_key_event(window, XK_exclam, XK_1, 10, ShiftMask, 1, "!", 1);
+	gst_window_emit_key_event(window, XK_exclam, XK_1, 10, ShiftMask, 3, NULL, 0);
+	gst_window_emit_key_event(window, XK_at, XK_2, 11, ShiftMask, 1, "@", 1);
+	gst_window_emit_key_event(window, XK_at, XK_2, 11, ShiftMask, 3, NULL, 0);
+	g_assert_cmpuint(copies, ==, 2);
+	g_assert_cmpuint(exports, ==, 2);
+	g_assert_cmpuint(probe->calls, ==, 0);
+	g_assert_cmpuint(input_bytes->len, ==, 0);
 
 	/* Shifted press must release using the original unshifted identity. */
 	gst_window_emit_key_event(window, XK_A, XK_a, 38, ShiftMask, 1, "A", 1);
@@ -301,7 +339,7 @@ test_input_driver(void)
 	gst_window_emit_key_event(window, XK_F, XK_f, 41, ControlMask | ShiftMask, 1, "F", 1);
 	gst_window_emit_key_event(window, XK_F7, XK_F7, 73, 0, 1, "", 0);
 	gst_window_emit_key_event(window, XK_F7, XK_F7, 73, 0, 3, NULL, 0);
-	g_assert_cmpuint(copies, ==, 1);
+	g_assert_cmpuint(copies, ==, 2);
 	on_selection_notify(window, "paste", 5, NULL);
 #ifdef GST_HAVE_WAYLAND
 	on_text_commit(NULL, "commit", NULL);
@@ -369,6 +407,69 @@ test_input_driver(void)
 	input_bytes = NULL;
 }
 
+/* Defaults and custom punctuation deliver all clipboard actions, consume
+ * releases locally, and preserve case-insensitive lock behavior. */
+static void
+test_input_clipboard_shortcuts(void)
+{
+	GstConfig *config = gst_config_get_default();
+	guint old_bindings = config->keybinds->len;
+	guint locks;
+
+	input_bytes = g_string_new(NULL);
+	terminal = gst_terminal_new(20, 4);
+	window = g_object_new(input_window_get_type(), NULL);
+	selection = gst_selection_new(terminal);
+	gst_terminal_write(terminal, "hello", -1);
+	gst_selection_start(selection, 0, 0, GST_SELECTION_SNAP_NONE);
+	gst_selection_extend(selection, 4, 0, GST_SELECTION_TYPE_REGULAR, TRUE);
+	g_signal_connect(window, "key-event", G_CALLBACK(on_key_event), NULL);
+	g_signal_connect(terminal, "response", G_CALLBACK(on_terminal_response), NULL);
+	gst_terminal_write(terminal, "\033[>11u", -1);
+	clipboard_copies = clipboard_pastes = primary_pastes = 0;
+	for (locks = 0; locks < 8; locks++) {
+		guint state = ShiftMask | ((locks & 1) ? LockMask : 0) |
+			((locks & 2) ? Mod2Mask : 0) | ((locks & 4) ? Mod3Mask : 0);
+		guint copy = (locks & 1) ? XK_c : XK_C;
+		guint paste = (locks & 1) ? XK_v : XK_V;
+
+		gst_window_emit_key_event(window, copy, XK_c, 54, state | ControlMask, 1, "", 0);
+		gst_window_emit_key_event(window, copy, XK_c, 54, state | ControlMask, 3, NULL, 0);
+		gst_window_emit_key_event(window, paste, XK_v, 55, state | ControlMask, 1, "", 0);
+		gst_window_emit_key_event(window, paste, XK_v, 55, state | ControlMask, 3, NULL, 0);
+		gst_window_emit_key_event(window, XK_Insert, XK_Insert, 118, state, 1, "", 0);
+		gst_window_emit_key_event(window, XK_Insert, XK_Insert, 118, state, 3, NULL, 0);
+	}
+	g_assert_cmpuint(clipboard_copies, ==, 8);
+	g_assert_cmpuint(clipboard_pastes, ==, 8);
+	g_assert_cmpuint(primary_pastes, ==, 8);
+	gst_config_add_keybind(config, "Ctrl+Shift+1", "clipboard_copy");
+	gst_config_add_keybind(config, "Ctrl+Shift+2", "clipboard_paste");
+	gst_config_add_keybind(config, "Ctrl+Shift+3", "paste_primary");
+	for (locks = 0; locks < 3; locks++) {
+		const guint shifted[] = { XK_exclam, XK_at, XK_numbersign };
+		gst_window_emit_key_event(window, shifted[locks], XK_1 + locks, 10 + locks,
+			ControlMask | ShiftMask, 1, "", 0);
+		gst_window_emit_key_event(window, shifted[locks], XK_1 + locks, 10 + locks,
+			ControlMask | ShiftMask, 3, NULL, 0);
+	}
+	g_assert_cmpuint(clipboard_copies, ==, 9);
+	g_assert_cmpuint(clipboard_pastes, ==, 9);
+	g_assert_cmpuint(primary_pastes, ==, 9);
+	g_assert_cmpuint(input_bytes->len, ==, 0);
+	g_array_set_size(config->keybinds, old_bindings);
+	g_clear_object(&selection);
+	g_clear_object(&window);
+	g_clear_object(&terminal);
+	g_clear_pointer(&forwarded_keys, g_hash_table_unref);
+	if (draw_timeout_id != 0)
+		g_source_remove(draw_timeout_id);
+	draw_timeout_id = 0;
+	drawing = FALSE;
+	g_string_free(input_bytes, TRUE);
+	input_bytes = NULL;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -377,5 +478,6 @@ main(int argc, char **argv)
 	g_test_add_func("/input/modifier-pairs", test_input_modifier_pairs);
 	g_test_add_func("/input/search-lifecycle", test_input_search_lifecycle);
 	g_test_add_func("/input/driver", test_input_driver);
+	g_test_add_func("/input/clipboard-shortcuts", test_input_clipboard_shortcuts);
 	return g_test_run();
 }

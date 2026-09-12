@@ -576,6 +576,26 @@ gst_module_manager_deactivate_all(GstModuleManager *self);
 gboolean
 gst_module_manager_has_local_input(GstModuleManager *self);
 
+/**
+ * gst_module_manager_dispatch_key_event_full:
+ * @self: a module manager
+ * @keyval: translated keysym
+ * @base_keyval: unshifted keysym from the keyboard layout, or zero
+ * @keycode: physical key identifier
+ * @state: X11 modifiers
+ *
+ * Runs input hooks in priority order, retaining layout information for shortcuts.
+ * Returns: whether a module consumed the event
+ */
+gboolean
+gst_module_manager_dispatch_key_event_full(
+	GstModuleManager *self,
+	guint keyval,
+	guint base_keyval,
+	guint keycode,
+	guint state
+);
+
 G_END_DECLS
 
 #endif /* GST_MODULE_MANAGER_H */

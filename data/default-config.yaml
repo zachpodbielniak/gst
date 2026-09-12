@@ -58,12 +58,15 @@ selection:
 keybinds:
   "Ctrl+Shift+c": clipboard_copy
   "Ctrl+Shift+v": clipboard_paste
+  "Shift+Insert": paste_primary
   "Shift+Page_Up": scroll_up
   "Shift+Page_Down": scroll_down
   "Ctrl+Shift+Page_Up": scroll_top
   "Ctrl+Shift+Page_Down": scroll_bottom
   "Ctrl+Shift+Home": scroll_top
   "Ctrl+Shift+End": scroll_bottom
+  "Shift+Home": scroll_top
+  "Shift+End": scroll_bottom
   "Ctrl+Shift+plus": zoom_in
   "Ctrl+Shift+minus": zoom_out
   "Ctrl+Shift+0": zoom_reset

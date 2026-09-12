@@ -23,6 +23,7 @@ G_DECLARE_INTERFACE(GstInputHandler, gst_input_handler, GST, INPUT_HANDLER, GObj
  * @parent_iface: The parent interface.
  * @handle_key_event: Virtual method to handle keyboard events.
  * @handle_mouse_event: Virtual method to handle mouse button events.
+ * @handle_key_event_full: Optional keyboard handler with the layout's base symbol.
  *
  * Interface for handling terminal input events.
  */
@@ -41,6 +42,13 @@ struct _GstInputHandlerInterface
 	                                guint            state,
 	                                gint             col,
 	                                gint             row);
+
+	/* Appended for compatibility with handlers implementing the legacy method. */
+	gboolean (*handle_key_event_full) (GstInputHandler *self,
+	                                  guint keyval,
+	                                  guint base_keyval,
+	                                  guint keycode,
+	                                  guint state);
 };
 
 /**
@@ -78,6 +86,26 @@ gst_input_handler_handle_mouse_event(GstInputHandler *self,
                                      guint            state,
                                      gint             col,
                                      gint             row);
+
+/**
+ * gst_input_handler_handle_key_event_full:
+ * @self: an input handler
+ * @keyval: translated keysym
+ * @base_keyval: unshifted keysym from the keyboard layout, or zero
+ * @keycode: physical key identifier
+ * @state: X11 modifiers
+ *
+ * Dispatches once, falling back to the legacy handler when necessary.
+ * Returns: whether the event was consumed
+ */
+gboolean
+gst_input_handler_handle_key_event_full(
+	GstInputHandler *self,
+	guint keyval,
+	guint base_keyval,
+	guint keycode,
+	guint state
+);
 
 G_END_DECLS
 

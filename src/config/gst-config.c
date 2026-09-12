@@ -334,6 +334,12 @@ gst_config_init(GstConfig *self)
 		gst_keybind_parse("Ctrl+Shift+End", "scroll_bottom", &kb);
 		g_array_append_val(self->keybinds, kb);
 
+		/* Preserve the scrollback module's historical navigation aliases. */
+		gst_keybind_parse("Shift+Home", "scroll_top", &kb);
+		g_array_append_val(self->keybinds, kb);
+		gst_keybind_parse("Shift+End", "scroll_bottom", &kb);
+		g_array_append_val(self->keybinds, kb);
+
 		gst_keybind_parse("Ctrl+Shift+plus", "zoom_in", &kb);
 		g_array_append_val(self->keybinds, kb);
 

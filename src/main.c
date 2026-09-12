@@ -1418,7 +1418,7 @@ handle_key_press(
 		schedule_draw();
 		return;
 	}
-	if (gst_module_manager_dispatch_key_event(mgr, keysym, keycode, state))
+	if (gst_module_manager_dispatch_key_event_full(mgr, keysym, base_keysym, keycode, state))
 	{
 		sync_text_input();
 		schedule_draw();
@@ -1428,14 +1428,8 @@ handle_key_press(
 
 	/* Look up configured keybind action */
 	config = gst_config_get_default();
-	action = gst_config_lookup_key_action(config, keysym, state);
-	/* Shift changes punctuation as well as letters. Prefer an explicit
-	 * binding for the translated symbol, then try the layout's base symbol
-	 * with the same modifiers (e.g. Ctrl+Shift+minus arrives as underscore).
-	 * Use the backend's keymap instead of assuming a US punctuation layout. */
-	if (action == GST_ACTION_NONE && (state & ShiftMask) &&
-	    base_keysym != NoSymbol && base_keysym != keysym)
-		action = gst_config_lookup_key_action(config, base_keysym, state);
+	action = gst_keybind_lookup_event(gst_config_get_keybinds(config),
+		keysym, base_keysym, state);
 
 	switch (action) {
 	case GST_ACTION_COPY_COMMAND_OUTPUT:

@@ -102,8 +102,7 @@ struct _GstKbselectModule
 	gint count;
 
 	/* Configurable trigger keysym and modifier */
-	guint trigger_keysym;
-	guint trigger_mods;
+	GstKeybind trigger;
 
 	/* Config: overlay colors */
 	guint32 highlight_color;
@@ -1141,9 +1140,10 @@ handle_normal_key(
  * when the module is in an active mode.
  */
 static gboolean
-gst_kbselect_module_handle_key_event(
+gst_kbselect_module_handle_key_event_full(
 	GstInputHandler *handler,
 	guint            keyval,
+	guint            base_keyval,
 	guint            keycode,
 	guint            state
 ){
@@ -1156,16 +1156,10 @@ gst_kbselect_module_handle_key_event(
 	/* Check trigger key to activate */
 	if (self->mode == KBS_MODE_INACTIVE)
 	{
-		guint clean_state;
+		GArray bindings = { (gchar *)&self->trigger, 1 };
 
-		/*
-		 * Strip lock bits (Num/Caps/Scroll lock) for reliable matching.
-		 * Keep only Shift, Control, Alt (Mod1), Super (Mod4).
-		 */
-		clean_state = state & (ShiftMask | ControlMask | Mod1Mask | Mod4Mask);
-
-		if (keyval == self->trigger_keysym &&
-		    clean_state == self->trigger_mods)
+		/* Only activation uses shortcut normalization; modal text stays raw. */
+		if (gst_keybind_lookup_event(&bindings, keyval, base_keyval, state) != GST_ACTION_NONE)
 		{
 			enter_normal(self);
 			return TRUE;
@@ -1187,7 +1181,7 @@ gst_kbselect_module_handle_key_event(
 static void
 gst_kbselect_module_input_init(GstInputHandlerInterface *iface)
 {
-	iface->handle_key_event = gst_kbselect_module_handle_key_event;
+	iface->handle_key_event_full = gst_kbselect_module_handle_key_event_full;
 }
 
 /* ===== GstRenderOverlay interface ===== */
@@ -1423,84 +1417,10 @@ gst_kbselect_module_get_description(GstModule *module)
 static void
 parse_trigger_key(
 	const gchar *keystr,
-	guint       *keysym_out,
-	guint       *mods_out
+	GstKeybind *trigger
 ){
-	guint mods;
-	const gchar *p;
-	g_autofree gchar *keyname = NULL;
-
-	mods = 0;
-	p = keystr;
-
-	/* Parse modifier prefixes */
-	while (TRUE)
-	{
-		if (g_str_has_prefix(p, "Ctrl+") ||
-		    g_str_has_prefix(p, "ctrl+"))
-		{
-			mods |= ControlMask;
-			p += 5;
-		}
-		else if (g_str_has_prefix(p, "Shift+") ||
-		         g_str_has_prefix(p, "shift+"))
-		{
-			mods |= ShiftMask;
-			p += 6;
-		}
-		else if (g_str_has_prefix(p, "Alt+") ||
-		         g_str_has_prefix(p, "alt+"))
-		{
-			mods |= Mod1Mask;
-			p += 4;
-		}
-		else if (g_str_has_prefix(p, "Super+") ||
-		         g_str_has_prefix(p, "super+"))
-		{
-			mods |= Mod4Mask;
-			p += 6;
-		}
-		else
-		{
-			break;
-		}
-	}
-
-	/* The remainder is the key name */
-	keyname = g_strdup(p);
-
-	/* Map common names to X keysyms */
-	if (g_ascii_strcasecmp(keyname, "Escape") == 0)
-	{
-		*keysym_out = XK_Escape;
-	}
-	else if (g_ascii_strcasecmp(keyname, "Return") == 0 ||
-	         g_ascii_strcasecmp(keyname, "Enter") == 0)
-	{
-		*keysym_out = XK_Return;
-	}
-	else if (g_ascii_strcasecmp(keyname, "Space") == 0)
-	{
-		*keysym_out = XK_space;
-	}
-	else if (strlen(keyname) == 1)
-	{
-		/* Single character */
-		*keysym_out = (guint)keyname[0];
-	}
-	else
-	{
-		/* Try XStringToKeysym */
-		*keysym_out = XStringToKeysym(keyname);
-		if (*keysym_out == NoSymbol)
-		{
-			g_warning("keyboard_select: unknown key '%s', "
-				"using Escape", keyname);
-			*keysym_out = XK_Escape;
-		}
-	}
-
-	*mods_out = mods;
+	/* Keep the last valid trigger when configuration is invalid. */
+	gst_keybind_parse(keystr, "clipboard_copy", trigger);
 }
 
 static void
@@ -1516,8 +1436,7 @@ gst_kbselect_module_configure(GstModule *module, gpointer config)
 	if (cfg->modules.keyboard_select.key != NULL)
 	{
 		parse_trigger_key(cfg->modules.keyboard_select.key,
-			&self->trigger_keysym,
-			&self->trigger_mods);
+			&self->trigger);
 		g_debug("keyboard_select: trigger key set to '%s'",
 			cfg->modules.keyboard_select.key);
 	}
@@ -1595,8 +1514,7 @@ gst_kbselect_module_init(GstKbselectModule *self)
 	self->g_pending = FALSE;
 
 	/* Default trigger: Ctrl+Shift+Escape */
-	self->trigger_keysym = XK_Escape;
-	self->trigger_mods = ControlMask | ShiftMask;
+	gst_keybind_parse("Ctrl+Shift+Escape", "clipboard_copy", &self->trigger);
 
 	/* Default overlay settings */
 	self->highlight_alpha = 100;

@@ -406,6 +406,208 @@ test_config_load_keybinds(void)
 	g_unlink(path);
 }
 
+/* Every shipped keyboard binding is exercised with all conventional lock
+ * combinations. Expected event symbols are independent of the parser. */
+static void
+test_keybind_defaults(void)
+{
+	static const struct {
+		guint keyval;
+		guint base;
+		guint state;
+		GstAction action;
+	} cases[] = {
+		{ XK_C, XK_c, ControlMask | ShiftMask, GST_ACTION_CLIPBOARD_COPY },
+		{ XK_V, XK_v, ControlMask | ShiftMask, GST_ACTION_CLIPBOARD_PASTE },
+		{ XK_Insert, XK_Insert, ShiftMask, GST_ACTION_PASTE_PRIMARY },
+		{ XK_Page_Up, XK_Page_Up, ShiftMask, GST_ACTION_SCROLL_UP },
+		{ XK_Page_Down, XK_Page_Down, ShiftMask, GST_ACTION_SCROLL_DOWN },
+		{ XK_Page_Up, XK_Page_Up, ControlMask | ShiftMask, GST_ACTION_SCROLL_TOP },
+		{ XK_Page_Down, XK_Page_Down, ControlMask | ShiftMask, GST_ACTION_SCROLL_BOTTOM },
+		{ XK_Home, XK_Home, ControlMask | ShiftMask, GST_ACTION_SCROLL_TOP },
+		{ XK_End, XK_End, ControlMask | ShiftMask, GST_ACTION_SCROLL_BOTTOM },
+		{ XK_Home, XK_Home, ShiftMask, GST_ACTION_SCROLL_TOP },
+		{ XK_End, XK_End, ShiftMask, GST_ACTION_SCROLL_BOTTOM },
+		{ XK_plus, XK_equal, ControlMask | ShiftMask, GST_ACTION_ZOOM_IN },
+		{ XK_underscore, XK_minus, ControlMask | ShiftMask, GST_ACTION_ZOOM_OUT },
+		{ XK_parenright, XK_0, ControlMask | ShiftMask, GST_ACTION_ZOOM_RESET },
+		{ XK_Y, XK_y, ControlMask | ShiftMask, GST_ACTION_COPY_COMMAND_OUTPUT },
+		{ XK_O, XK_o, ControlMask | ShiftMask, GST_ACTION_EXPORT_COMMAND_OUTPUT }
+	};
+	const gchar *paths[] = { NULL, "data/default-config.yaml", "data/all-modules.yaml" };
+	guint source;
+	guint i;
+	guint locks;
+
+	for (source = 0; source < G_N_ELEMENTS(paths); source++) {
+		g_autoptr(GstConfig) config = gst_config_new();
+		g_autoptr(GError) error = NULL;
+		const GArray *bindings;
+
+		if (paths[source] != NULL) {
+			g_assert_true(gst_config_load_from_path(config, paths[source], &error));
+			g_assert_no_error(error);
+		}
+		bindings = gst_config_get_keybinds(config);
+		g_assert_cmpuint(bindings->len, ==, G_N_ELEMENTS(cases));
+		for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+			for (locks = 0; locks < 8; locks++) {
+				guint state = cases[i].state | ((locks & 1) ? LockMask : 0) |
+					((locks & 2) ? Mod2Mask : 0) | ((locks & 4) ? Mod3Mask : 0);
+				guint keyval = cases[i].keyval;
+
+				if ((locks & 1) && keyval >= XK_A && keyval <= XK_Z)
+					keyval += XK_a - XK_A;
+				g_assert_cmpint(gst_keybind_lookup_event(bindings, keyval, cases[i].base, state),
+					==, cases[i].action);
+				g_assert_cmpint(gst_keybind_lookup_event(bindings, keyval, cases[i].base,
+					state | Mod4Mask), ==, GST_ACTION_NONE);
+			}
+		}
+	}
+}
+
+/* Cover every ASCII letter, digit and punctuation Shift pair for every
+ * supported modifier combination, including negative modifier matches. */
+static void
+test_keybind_shift_matrix(void)
+{
+	const gchar *base = "abcdefghijklmnopqrstuvwxyz1234567890-=[]\\;',./`";
+	const gchar *shifted = "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+{}|:\"<>?~";
+	guint mods;
+	guint i;
+	guint locks;
+
+	g_assert_cmpuint(strlen(base), ==, strlen(shifted));
+	for (mods = 0; mods < 16; mods++) {
+		for (i = 0; base[i] != '\0'; i++) {
+			g_autoptr(GArray) bindings = g_array_new(FALSE, FALSE, sizeof(GstKeybind));
+			g_autofree gchar *key = g_strdup_printf("%s%s%s%s%s",
+				(mods & 1) ? "Ctrl+" : "", (mods & 2) ? "Alt+" : "",
+				(mods & 4) ? "Super+" : "", (mods & 8) ? "Shift+" : "",
+				XKeysymToString((KeySym)base[i]));
+			GstKeybind binding;
+			guint state = ((mods & 8) ? ShiftMask : 0) | ((mods & 1) ? ControlMask : 0) |
+				((mods & 2) ? Mod1Mask : 0) | ((mods & 4) ? Mod4Mask : 0);
+
+			g_assert_true(gst_keybind_parse(key, "clipboard_copy", &binding));
+			g_array_append_val(bindings, binding);
+			for (locks = 0; locks < 8; locks++) {
+				guint event_state = state | ((locks & 1) ? LockMask : 0) |
+					((locks & 2) ? Mod2Mask : 0) | ((locks & 4) ? Mod3Mask : 0);
+				guint keyval = (guint)((mods & 8) ? shifted[i] : base[i]);
+
+				if ((locks & 1) && i < 26)
+					keyval = (guint)((mods & 8) ? base[i] : shifted[i]);
+				g_assert_cmpint(gst_keybind_lookup_event(bindings, keyval, (guint)base[i],
+					event_state), ==, GST_ACTION_CLIPBOARD_COPY);
+				g_assert_cmpint(gst_keybind_lookup_event(bindings, keyval, (guint)base[i],
+					event_state ^ ControlMask), ==, GST_ACTION_NONE);
+			}
+		}
+	}
+}
+
+/* Exact shifted bindings win even when a base binding was inserted first;
+ * Compose/IME NoSymbol events must never become keyboard shortcuts. */
+static void
+test_keybind_event_precedence(void)
+{
+	g_autoptr(GstConfig) config = gst_config_new();
+	const GArray *bindings;
+
+	gst_config_clear_keybinds(config);
+	gst_config_add_keybind(config, "Ctrl+Shift+1", "clipboard_copy");
+	gst_config_add_keybind(config, "Ctrl+Shift+exclam", "clipboard_paste");
+	bindings = gst_config_get_keybinds(config);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_exclam, XK_1, ControlMask | ShiftMask),
+		==, GST_ACTION_CLIPBOARD_PASTE);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, NoSymbol, XK_1, ControlMask | ShiftMask), ==, GST_ACTION_NONE);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_at, NoSymbol, ControlMask | ShiftMask), ==, GST_ACTION_NONE);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_at, XK_1, ControlMask | ShiftMask), ==, GST_ACTION_CLIPBOARD_COPY);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_at, XK_1, ControlMask), ==, GST_ACTION_NONE);
+	/* Shift may turn a letter into punctuation; the fallback must apply
+	 * the parser's case normalization to the base symbol too. */
+	gst_config_add_keybind(config, "Ctrl+Shift+ssharp", "paste_primary");
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_question, XK_ssharp,
+		ControlMask | ShiftMask), ==, GST_ACTION_PASTE_PRIMARY);
+}
+
+/* YAML persistence must preserve base and explicit shifted bindings, including
+ * precedence and modifier aliases; malformed bindings fail without mutation. */
+static void
+test_keybind_config_roundtrip(void)
+{
+	g_autofree gchar *path = write_temp_yaml(
+		"keybinds:\n"
+		"  'control+shift+1': clipboard_copy\n"
+		"  'Ctrl+Shift+exclam': clipboard_paste\n"
+		"  'Mod1+Shift+bracketleft': paste_primary\n"
+		"  'Mod4+F12': scroll_top\n");
+	g_autoptr(GstConfig) config = gst_config_new();
+	g_autoptr(GstConfig) restored = gst_config_new();
+	g_autoptr(GFile) file = g_file_new_for_path(path);
+	g_autoptr(GError) error = NULL;
+	const GArray *bindings;
+	GstKeybind binding = { 0 };
+	const gchar *invalid[] = { "Hyper+a", "Meta+a", "Ctrl++", "Ctrl+NotAKeysym" };
+	guint i;
+
+	g_assert_true(gst_config_load_from_path(config, path, &error));
+	g_assert_no_error(error);
+	g_assert_true(gst_config_save_to_file(config, file, &error));
+	g_assert_no_error(error);
+	g_assert_true(gst_config_load_from_path(restored, path, &error));
+	g_assert_no_error(error);
+	bindings = gst_config_get_keybinds(restored);
+	g_assert_cmpuint(bindings->len, ==, 4);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_exclam, XK_1, ControlMask | ShiftMask),
+		==, GST_ACTION_CLIPBOARD_PASTE);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_braceleft, XK_bracketleft, Mod1Mask | ShiftMask),
+		==, GST_ACTION_PASTE_PRIMARY);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_F12, XK_F12, Mod4Mask),
+		==, GST_ACTION_SCROLL_TOP);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, XK_C, XK_c, ControlMask | ShiftMask),
+		==, GST_ACTION_NONE);
+	for (i = 0; i < G_N_ELEMENTS(invalid); i++) {
+		g_test_expect_message(NULL, G_LOG_LEVEL_WARNING, "Unknown *");
+		g_assert_false(gst_keybind_parse(invalid[i], "clipboard_copy", &binding));
+		g_test_assert_expected_messages();
+		g_assert_cmpuint(binding.keyval, ==, 0);
+		g_assert_cmpint(binding.action, ==, GST_ACTION_NONE);
+	}
+	g_unlink(path);
+}
+
+/* CapsLock must not break accented, Greek or Cyrillic letter shortcuts. */
+static void
+test_keybind_international_case(void)
+{
+	static const struct { guint lower; guint upper; } cases[] = {
+		{ XK_eacute, XK_Eacute }, { XK_udiaeresis, XK_Udiaeresis },
+		{ XK_Greek_alpha, XK_Greek_ALPHA }, { XK_Cyrillic_a, XK_Cyrillic_A }
+	};
+	guint i;
+	guint shift;
+	guint lock;
+
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		for (shift = 0; shift < 2; shift++) {
+			GstKeybind binding;
+			GArray bindings = { (gchar *)&binding, 1 };
+			g_autofree gchar *key = g_strdup_printf("Ctrl+%s%s", shift ? "Shift+" : "",
+				XKeysymToString((KeySym)cases[i].lower));
+			g_assert_true(gst_keybind_parse(key, "clipboard_copy", &binding));
+			for (lock = 0; lock < 2; lock++) {
+				guint symbol = (shift != lock) ? cases[i].upper : cases[i].lower;
+				guint state = ControlMask | (shift ? ShiftMask : 0) | (lock ? LockMask : 0);
+				g_assert_cmpint(gst_keybind_lookup_event(&bindings, symbol, cases[i].lower, state),
+					==, GST_ACTION_CLIPBOARD_COPY);
+			}
+		}
+	}
+}
+
 /* ===== Main ===== */
 
 int
@@ -414,6 +616,11 @@ main(
 	char    **argv
 ){
 	g_test_init(&argc, &argv, NULL);
+	g_test_add_func("/keybind/default-matrix", test_keybind_defaults);
+	g_test_add_func("/keybind/shift-matrix", test_keybind_shift_matrix);
+	g_test_add_func("/keybind/event-precedence", test_keybind_event_precedence);
+	g_test_add_func("/keybind/config-roundtrip", test_keybind_config_roundtrip);
+	g_test_add_func("/keybind/international-case", test_keybind_international_case);
 
 	/* Key binding parse tests */
 	g_test_add_func("/keybind/parse-simple-key",

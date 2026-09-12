@@ -34,8 +34,7 @@ struct _GstExternalpipeModule
 {
 	GstModule parent_instance;
 	gchar    *command;
-	guint     trigger_keyval;
-	guint     trigger_state;
+	GstKeybind trigger;
 };
 
 /* Forward declarations */
@@ -168,21 +167,20 @@ static gboolean
 gst_externalpipe_module_handle_key_event(
 	GstInputHandler *handler,
 	guint            keyval,
+	guint            base_keyval,
 	guint            keycode,
 	guint            state
 ){
 	GstExternalpipeModule *self;
 	g_autofree gchar *text = NULL;
+	GArray bindings;
 
 	self = GST_EXTERNALPIPE_MODULE(handler);
 
-	/* Check if this matches our trigger key */
-	if (keyval != self->trigger_keyval) {
-		return FALSE;
-	}
-
-	/* Check modifier state (mask out numlock, capslock, etc.) */
-	if ((state & (ShiftMask | ControlMask | Mod1Mask)) != self->trigger_state) {
+	/* Match exactly the configured modifiers, with shared Shift/Lock rules. */
+	bindings.data = (gchar *)&self->trigger;
+	bindings.len = 1;
+	if (gst_keybind_lookup_event(&bindings, keyval, base_keyval, state) == GST_ACTION_NONE) {
 		return FALSE;
 	}
 
@@ -200,7 +198,7 @@ gst_externalpipe_module_handle_key_event(
 static void
 gst_externalpipe_module_input_init(GstInputHandlerInterface *iface)
 {
-	iface->handle_key_event = gst_externalpipe_module_handle_key_event;
+	iface->handle_key_event_full = gst_externalpipe_module_handle_key_event;
 }
 
 /* ===== GstExternalPipe interface ===== */
@@ -255,6 +253,7 @@ gst_externalpipe_module_deactivate(GstModule *module)
  *
  * Reads externalpipe configuration from the config struct:
  *  - command: the shell command to pipe terminal content to
+ *  - key: activation shortcut, using the shared parser and matcher
  */
 static void
 gst_externalpipe_module_configure(GstModule *module, gpointer config)
@@ -267,6 +266,8 @@ gst_externalpipe_module_configure(GstModule *module, gpointer config)
 
 	g_free(self->command);
 	self->command = g_strdup(cfg->modules.externalpipe.command);
+	if (cfg->modules.externalpipe.key != NULL)
+		gst_keybind_parse(cfg->modules.externalpipe.key, "clipboard_copy", &self->trigger);
 
 	g_debug("externalpipe: configured (command=%s)", self->command);
 }
@@ -306,8 +307,7 @@ gst_externalpipe_module_init(GstExternalpipeModule *self)
 {
 	self->command = g_strdup("");
 	/* Default trigger: Ctrl+Shift+E */
-	self->trigger_keyval = XK_E;
-	self->trigger_state = ShiftMask | ControlMask;
+	gst_keybind_parse("Ctrl+Shift+e", "clipboard_copy", &self->trigger);
 }
 
 G_MODULE_EXPORT GType

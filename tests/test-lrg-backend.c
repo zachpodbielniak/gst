@@ -13,7 +13,36 @@
 
 #include <glib.h>
 #include "gst-enums.h"
+#include "window/gst-lrg-keymap.h"
+#include "config/gst-keybind.h"
+#include "config/gst-config.h"
+#include <X11/keysym.h>
+#include <X11/Xlib.h>
+
+/* This exact helper is used by the Ctrl/Alt input path, independently of GL. */
+static void
+test_lrg_shifted_shortcuts(void)
+{
+	g_autoptr(GstConfig) config = gst_config_new();
+	const GArray *bindings = gst_config_get_keybinds(config);
+	const gchar *base = "abcdefghijklmnopqrstuvwxyz1234567890-=[]\\;',./`";
+	const gchar *shifted = "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+{}|:\"<>?~";
+	guint i;
+
+	for (i = 0; base[i] != '\0'; i++)
+		g_assert_cmpuint(gst_lrg_shift_ascii((guint)base[i]), ==, (guint)shifted[i]);
+	g_assert_cmpuint(gst_lrg_shift_ascii(' '), ==, ' ');
+	g_assert_cmpuint(gst_lrg_shift_ascii(0), ==, 0);
+	g_assert_cmpuint(gst_lrg_shift_ascii(XK_Escape), ==, XK_Escape);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, gst_lrg_shift_ascii('='), XK_equal,
+		ControlMask | ShiftMask), ==, GST_ACTION_ZOOM_IN);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, gst_lrg_shift_ascii('-'), XK_minus,
+		ControlMask | ShiftMask), ==, GST_ACTION_ZOOM_OUT);
+	g_assert_cmpint(gst_keybind_lookup_event(bindings, gst_lrg_shift_ascii('0'), XK_0,
+		ControlMask | ShiftMask), ==, GST_ACTION_ZOOM_RESET);
+}
 #ifdef GST_HAVE_LRG_BACKEND
+#include "../src/window/gst-lrg-window.c"
 #include "rendering/gst-lrg-render-context.h"
 #include "rendering/gst-lrg-renderer.h"
 #include "core/gst-terminal.h"
@@ -21,6 +50,39 @@
 #include <string.h>
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(GstTerminal, g_object_unref)
+
+/* Observe the actual Ctrl/Alt event path, without creating an OpenGL window. */
+static gboolean
+capture_lrg_shortcut(GstWindow *win, guint keyval, guint base, guint code,
+	guint state, guint event, const gchar *text, gint len, GstAction *action)
+{
+	(void)win;
+	(void)code;
+	(void)event;
+	(void)text;
+	(void)len;
+	*action = gst_keybind_lookup_event(gst_config_get_keybinds(gst_config_get_default()),
+		keyval, base, state);
+	return TRUE;
+}
+
+static void
+test_lrg_key_events(void)
+{
+	g_autoptr(GstLrgWindow) window = g_object_new(GST_TYPE_LRG_WINDOW, NULL);
+	const GrlKey keys[] = { GRL_KEY_EQUAL, GRL_KEY_MINUS, GRL_KEY_ZERO, GRL_KEY_C, GRL_KEY_V };
+	const GstAction actions[] = { GST_ACTION_ZOOM_IN, GST_ACTION_ZOOM_OUT,
+		GST_ACTION_ZOOM_RESET, GST_ACTION_CLIPBOARD_COPY, GST_ACTION_CLIPBOARD_PASTE };
+	GstAction action;
+	guint i;
+
+	g_signal_connect(window, "key-event", G_CALLBACK(capture_lrg_shortcut), &action);
+	for (i = 0; i < G_N_ELEMENTS(keys); i++) {
+		action = GST_ACTION_NONE;
+		lrg_emit_key(window, keys[i], LRG_CONTROL_MASK | LRG_SHIFT_MASK, 1);
+		g_assert_cmpint(action, ==, actions[i]);
+	}
+}
 
 /* Read the presented framebuffer: the compositor must receive premultiplied
  * RGB and alpha, including opaque overlay pixels and repeated focus changes. */
@@ -262,6 +324,7 @@ main(
 	char    **argv
 ){
 	g_test_init(&argc, &argv, NULL);
+	g_test_add_func("/lrg/shifted-shortcuts", test_lrg_shifted_shortcuts);
 
 	g_test_add_func("/lrg/render-mode/from-string",
 		test_render_mode_from_string);
@@ -277,6 +340,7 @@ main(
 		test_render_mode_type_registered);
 #ifdef GST_HAVE_LRG_BACKEND
 	g_test_add_func("/lrg/render-context/ops", test_lrg_render_context_ops);
+	g_test_add_func("/lrg/key-events", test_lrg_key_events);
 	g_test_add_func("/lrg/render-context/transparency", test_lrg_transparency);
 	g_test_add_func("/lrg/render-context/image-upload", test_lrg_image_upload);
 #endif

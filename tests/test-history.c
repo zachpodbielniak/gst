@@ -162,8 +162,13 @@ test_history_output(HistoryFixture *fixture, gconstpointer data)
 	g_assert_cmpstr(text, ==, "alpha\nbeta\n");
 	g_clear_pointer(&text, g_free);
 	before = *gst_terminal_get_cursor(fixture->term);
+	/* Extra shortcut modifiers cannot navigate history accidentally. */
+	g_assert_false(gst_shellint_module_handle_key_event(GST_INPUT_HANDLER(fixture->shell),
+		XK_Up, 0, ControlMask | ShiftMask | Mod4Mask));
+	g_assert_false(gst_shellint_module_handle_key_event(GST_INPUT_HANDLER(fixture->shell),
+		XK_Up, 0, ControlMask | ShiftMask | Mod1Mask));
 	g_assert_true(gst_shellint_module_handle_key_event(GST_INPUT_HANDLER(fixture->shell),
-		XK_Up, 0, ControlMask | ShiftMask));
+		XK_Up, 0, ControlMask | ShiftMask | LockMask | Mod2Mask | Mod3Mask));
 	g_assert_cmpint(gst_terminal_get_cursor(fixture->term)->x, ==, before.x);
 	g_assert_cmpint(gst_terminal_get_cursor(fixture->term)->y, ==, before.y);
 	g_assert_cmpint(fixture->history->scroll_offset, ==, 1);

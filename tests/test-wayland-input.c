@@ -9,6 +9,83 @@
 /* Exercise listener transactions without requiring a running compositor.
  * Like the module tests, this translation unit owns the private implementation. */
 #include "../src/window/gst-wayland-window.c"
+#include "config/gst-config.h"
+
+typedef struct {
+	GstConfig *config;
+	GstAction expected;
+	guint calls;
+} ShortcutEvent;
+
+/* Observe the production listener's translated/base symbols after XKB. */
+static gboolean
+collect_shortcut(GstWindow *win, guint keyval, guint base, guint code,
+	guint state, guint event_type, const gchar *text, gint len, ShortcutEvent *event)
+{
+	(void)win;
+	(void)code;
+	(void)event_type;
+	(void)text;
+	(void)len;
+	g_test_message("shortcut keyval=0x%x base=0x%x state=0x%x expected=%d",
+		keyval, base, state, event->expected);
+	g_assert_cmpint(gst_keybind_lookup_event(gst_config_get_keybinds(event->config),
+		keyval, base, state), ==, event->expected);
+	event->calls++;
+	return TRUE;
+}
+
+/* Actual US, German and French keymaps cover both base-symbol fallback and
+ * exact shifted digits/symbols; no compositor is needed to run the listener. */
+static void
+test_shortcut_keymaps(void)
+{
+	static const struct {
+		const gchar *layout;
+		const gchar *physical;
+		const gchar *custom;
+		GstAction action;
+	} cases[] = {
+		{ "us", "AE11", NULL, GST_ACTION_ZOOM_OUT },
+		{ "us", "AE10", NULL, GST_ACTION_ZOOM_RESET },
+		{ "us", "AE12", NULL, GST_ACTION_ZOOM_IN },
+		{ "de", "AE11", "Ctrl+Shift+ssharp", GST_ACTION_CLIPBOARD_COPY },
+		{ "de", "AD12", NULL, GST_ACTION_ZOOM_IN },
+		{ "de", "AD11", "Ctrl+Shift+udiaeresis", GST_ACTION_CLIPBOARD_COPY },
+		{ "fr", "AE10", NULL, GST_ACTION_ZOOM_RESET },
+		{ "fr", "AE06", NULL, GST_ACTION_ZOOM_OUT },
+		{ "fr", "AD12", "Ctrl+Shift+dollar", GST_ACTION_CLIPBOARD_COPY }
+	};
+	guint i;
+
+	for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+		g_autoptr(GstWaylandWindow) window = g_object_new(GST_TYPE_WAYLAND_WINDOW, NULL);
+		g_autoptr(GstConfig) config = gst_config_new();
+		struct xkb_rule_names names = { 0 };
+		ShortcutEvent event = { config, cases[i].action, 0 };
+		xkb_mod_mask_t depressed;
+		xkb_keycode_t key;
+
+		window->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+		names.layout = cases[i].layout;
+		window->xkb_keymap = xkb_keymap_new_from_names(window->xkb_ctx, &names,
+			XKB_KEYMAP_COMPILE_NO_FLAGS);
+		g_assert_nonnull(window->xkb_keymap);
+		window->xkb_state = xkb_state_new(window->xkb_keymap);
+		g_assert_nonnull(window->xkb_state);
+		depressed = (1u << xkb_keymap_mod_get_index(window->xkb_keymap, XKB_MOD_NAME_CTRL)) |
+			(1u << xkb_keymap_mod_get_index(window->xkb_keymap, XKB_MOD_NAME_SHIFT));
+		xkb_state_update_mask(window->xkb_state, depressed, 0, 0, 0, 0, 0);
+		if (cases[i].custom != NULL)
+			gst_config_add_keybind(config, cases[i].custom, "clipboard_copy");
+		g_signal_connect(window, "key-event", G_CALLBACK(collect_shortcut), &event);
+		key = xkb_keymap_key_by_name(window->xkb_keymap, cases[i].physical);
+		g_assert_cmpuint(key, !=, XKB_KEYCODE_INVALID);
+		g_assert_true(emit_key_event(window, key - 8, FALSE));
+		g_assert_true(emit_key_event(window, key - 8, TRUE));
+		g_assert_cmpuint(event.calls, ==, 2);
+	}
+}
 
 /* Fractional rounding must cover the final logical pixel and reject overflow. */
 static void
@@ -228,6 +305,7 @@ main(int argc, char **argv)
 	g_test_add_func("/wayland/input/transaction", test_text_transaction);
 	g_test_add_func("/wayland/input/lifecycle", test_text_lifecycle);
 	g_test_add_func("/wayland/input/compose", test_compose);
+	g_test_add_func("/wayland/input/shortcut-keymaps", test_shortcut_keymaps);
 #endif
 	return g_test_run();
 }

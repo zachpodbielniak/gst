@@ -52,6 +52,7 @@ typedef struct
 struct _GstScrollbackModule
 {
 	GstModule parent_instance;
+	GstConfig *config;         /* owned configuration used for shortcut lookup */
 
 	ScrollLine *lines;          /* ring buffer of saved lines */
 	gint        capacity;       /* max lines (from config) */
@@ -159,6 +160,7 @@ static gboolean
 gst_scrollback_module_handle_key_event(
 	GstInputHandler *handler,
 	guint            keyval,
+	guint            base_keyval,
 	guint            keycode,
 	guint            state
 ){
@@ -167,15 +169,15 @@ gst_scrollback_module_handle_key_event(
 	GstTerminal *term;
 	gint rows;
 	gint old_offset;
+	GstAction action;
 
-	/* Only handle Shift+key combinations */
 	(void)keycode;
-	if (!(state & ShiftMask)) {
-		return FALSE;
-	}
 
 	self = GST_SCROLLBACK_MODULE(handler);
 	old_offset = self->scroll_offset;
+	/* Respect replacement YAML bindings and layout-specific shifted symbols. */
+	action = gst_keybind_lookup_event(gst_config_get_keybinds(self->config),
+		keyval, base_keyval, state);
 
 	mgr = gst_module_manager_get_default();
 	term = (GstTerminal *)gst_module_manager_get_terminal(mgr);
@@ -183,17 +185,23 @@ gst_scrollback_module_handle_key_event(
 		return FALSE;
 	rows = (term != NULL) ? gst_terminal_get_rows(term) : 24;
 
-	switch (keyval) {
-	case XK_Page_Up:
+	switch (action) {
+	case GST_ACTION_SCROLL_UP:
 		self->scroll_offset += rows;
 		break;
-	case XK_Page_Down:
+	case GST_ACTION_SCROLL_DOWN:
 		self->scroll_offset -= rows;
 		break;
-	case XK_Home:
+	case GST_ACTION_SCROLL_UP_FAST:
+		self->scroll_offset += rows * 3;
+		break;
+	case GST_ACTION_SCROLL_DOWN_FAST:
+		self->scroll_offset -= rows * 3;
+		break;
+	case GST_ACTION_SCROLL_TOP:
 		self->scroll_offset = self->count;
 		break;
-	case XK_End:
+	case GST_ACTION_SCROLL_BOTTOM:
 		self->scroll_offset = 0;
 		break;
 	default:
@@ -275,7 +283,7 @@ gst_scrollback_module_handle_mouse_event(
 static void
 gst_scrollback_module_input_init(GstInputHandlerInterface *iface)
 {
-	iface->handle_key_event = gst_scrollback_module_handle_key_event;
+	iface->handle_key_event_full = gst_scrollback_module_handle_key_event;
 	iface->handle_mouse_event = gst_scrollback_module_handle_mouse_event;
 }
 
@@ -578,6 +586,7 @@ gst_scrollback_module_configure(GstModule *module, gpointer config)
 
 	self = GST_SCROLLBACK_MODULE(module);
 	cfg = (GstConfig *)config;
+	g_set_object(&self->config, cfg);
 
 	/* Capacity changes take effect at the next activation, never while an
 	 * allocation of a different size is still in use. */
@@ -599,6 +608,7 @@ gst_scrollback_module_dispose(GObject *object)
 	self = GST_SCROLLBACK_MODULE(object);
 	/* Withdraw the optional API before releasing any borrowed line data. */
 	gst_scrollback_module_deactivate(GST_MODULE(self));
+	g_clear_object(&self->config);
 
 	G_OBJECT_CLASS(gst_scrollback_module_parent_class)->dispose(object);
 }
@@ -623,6 +633,7 @@ gst_scrollback_module_class_init(GstScrollbackModuleClass *klass)
 static void
 gst_scrollback_module_init(GstScrollbackModule *self)
 {
+	self->config = g_object_ref(gst_config_get_default());
 	self->lines = NULL;
 	self->capacity = 10000;
 	self->count = 0;

@@ -708,12 +708,34 @@ gst_module_manager_dispatch_key_event(
 	guint             keycode,
 	guint             state
 ){
+	return gst_module_manager_dispatch_key_event_full(self, keyval, keyval, keycode, state);
+}
+
+/**
+ * gst_module_manager_dispatch_key_event_full:
+ * @self: a module manager
+ * @keyval: translated keysym
+ * @base_keyval: unshifted keysym from the keyboard layout, or zero
+ * @keycode: physical key identifier
+ * @state: X11 modifiers
+ *
+ * Returns: whether a module consumed the event
+ */
+gboolean
+gst_module_manager_dispatch_key_event_full(
+	GstModuleManager *self,
+	guint keyval,
+	guint base_keyval,
+	guint keycode,
+	guint state
+){
 	GList *l;
 	GstAction action;
 
 	g_return_val_if_fail(GST_IS_MODULE_MANAGER(self), FALSE);
 	action = self->config != NULL
-		? gst_config_lookup_key_action(self->config, keyval, state) : GST_ACTION_NONE;
+		? gst_keybind_lookup_event(gst_config_get_keybinds(self->config),
+			keyval, base_keyval, state) : GST_ACTION_NONE;
 
 	for (l = self->hooks[GST_HOOK_KEY_PRESS]; l != NULL; l = l->next)
 	{
@@ -734,9 +756,9 @@ gst_module_manager_dispatch_key_event(
 			     action == GST_ACTION_EXPORT_COMMAND_OUTPUT) &&
 			    g_strcmp0(gst_module_get_name(entry->module), "shell_integration") == 0)
 				continue;
-			if (gst_input_handler_handle_key_event(
+			if (gst_input_handler_handle_key_event_full(
 				GST_INPUT_HANDLER(entry->module),
-				keyval, keycode, state))
+				keyval, base_keyval, keycode, state))
 			{
 				return TRUE;
 			}

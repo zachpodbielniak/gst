@@ -557,7 +557,8 @@ gst_shellint_module_handle_key_event(
 		return FALSE;
 
 	/* Only handle Ctrl+Shift combinations */
-	if (!(state & ControlMask) || !(state & ShiftMask)) {
+	if ((state & (ControlMask | ShiftMask | Mod1Mask | Mod4Mask)) !=
+	    (ControlMask | ShiftMask)) {
 		self->navigation_row = UNKNOWN_ROW;
 		return FALSE;
 	}

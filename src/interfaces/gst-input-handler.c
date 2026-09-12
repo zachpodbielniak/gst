@@ -11,6 +11,36 @@
 
 G_DEFINE_INTERFACE(GstInputHandler, gst_input_handler, G_TYPE_OBJECT)
 
+/**
+ * gst_input_handler_handle_key_event_full:
+ * @self: an input handler
+ * @keyval: translated keysym
+ * @base_keyval: unshifted keysym from the keyboard layout, or zero
+ * @keycode: physical key identifier
+ * @state: X11 modifiers
+ *
+ * Returns: whether the event was consumed
+ */
+gboolean
+gst_input_handler_handle_key_event_full(
+	GstInputHandler *self,
+	guint keyval,
+	guint base_keyval,
+	guint keycode,
+	guint state
+){
+	GstInputHandlerInterface *iface;
+
+	g_return_val_if_fail(GST_IS_INPUT_HANDLER(self), FALSE);
+	iface = GST_INPUT_HANDLER_GET_IFACE(self);
+	if (iface->handle_key_event_full != NULL)
+		return iface->handle_key_event_full(self, keyval, base_keyval, keycode, state);
+	/* Legacy handlers receive translated text unchanged and are called once. */
+	if (iface->handle_key_event != NULL)
+		return iface->handle_key_event(self, keyval, keycode, state);
+	return FALSE;
+}
+
 static void
 gst_input_handler_default_init(GstInputHandlerInterface *iface)
 {
@@ -40,7 +70,8 @@ gst_input_handler_handle_key_event(GstInputHandler *self,
 	g_return_val_if_fail(GST_IS_INPUT_HANDLER(self), FALSE);
 
 	iface = GST_INPUT_HANDLER_GET_IFACE(self);
-	g_return_val_if_fail(iface->handle_key_event != NULL, FALSE);
+	if (iface->handle_key_event == NULL)
+		return gst_input_handler_handle_key_event_full(self, keyval, keyval, keycode, state);
 
 	return iface->handle_key_event(self, keyval, keycode, state);
 }

@@ -1,0 +1,33 @@
+#+title: Keybinding regression coverage
+#+description: Shortcut matching, module dispatch, and backend key translation tests
+
+* Matching contract
+GST matches translated keysyms before trying the unshifted symbol supplied by the backend. The fallback keeps the same modifiers and only runs for Shift events with valid symbols. Explicit shifted bindings win over base-symbol bindings regardless of insertion order. Compose/IME events with no keysym do not acquire a shortcut through fallback.
+
+The parser and lock normalization use the X11 keysym case table, including accented, Greek, and Cyrillic letters. Supported binding modifiers are Shift, Control, Alt, and Super. NumLock, CapsLock, and ScrollLock use the conventional lock masks described in [[file:keybindings.org][the binding reference]].
+
+* Tested boundaries
+** Configured bindings
+=tests/test-keybind.c= checks every compiled default against both shipped YAML configurations, with all eight combinations of conventional lock bits and negative extra-Super cases. The ASCII matrix covers 47 letter, digit, and punctuation positions across all 16 supported modifier combinations and eight lock combinations; each case includes a mismatched-Control assertion. Separate tests cover international letter case, explicit shifted precedence, missing base symbols, Compose events, modifier aliases, invalid bindings, and YAML save/load preservation.
+
+** Application actions
+=tests/test-input-integration.c= sends key-event signals through the application handler to observe clipboard copy, clipboard paste, primary paste, and shell command-output copy/export. It checks default letter bindings under all lock combinations, custom shifted punctuation, local release consumption, shell-hook suppression, and modal search ownership. =tests/test-zoom.c= retains the font-size and geometry regressions for zoom in, zoom out, and reset.
+
+** Module shortcuts
+=tests/test-module-shortcuts.c= exercises keyboard-selection and external-pipe triggers with letters, punctuation, aliases, all lock combinations, and rejected extra modifiers. It checks compatibility with legacy input callers and preserves translated text inside keyboard-selection search mode. External-pipe tests stop at the missing-command boundary, so shortcut testing does not launch a shell command.
+
+The scrollback tests create real ring history, verify Ctrl+Shift+PageUp/PageDown jump to the boundaries, exercise all six scroll actions through custom shifted punctuation, reject replaced defaults and extra modifiers, and pass events through on the alternate screen. Existing history tests also check shell-navigation modifier rejection and lock handling.
+
+** Backend translation
+=tests/test-wayland-input.c= runs the real keyboard listener using US, German, and French XKB keymaps, including translated/base-symbol differences and repeat events. =tests/test-lrg-backend.c= tests the ASCII Shift helper in every build and the real Ctrl/Alt event emission path when built with =LRG_BACKEND=1=. Those input tests need no display or OpenGL context. LRG still uses raylib's US physical-key identifiers for this path; these tests do not imply arbitrary-layout support there.
+
+* Running the checks
+#+begin_src bash
+make clean
+make -j8 all
+make -j8 tests
+#+end_src
+
+For LRG input coverage, initialize the optional dependency and build with =LRG_BACKEND=1=, then run =build/release/test-lrg-backend -p /lrg/key-events=. The usual Fedora build packages are listed in =config.mk=; LRG additionally requires =mesa-libGL-devel=.
+
+Nested graphical tests remain separately opt-in through =tests/run-backend-tests.sh=. The shortcut tests above verify matching and dispatch without claiming physical-device or compositor coverage.

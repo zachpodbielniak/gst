@@ -402,7 +402,7 @@ gst_search_module_handle_key_event(
 	 * Strip lock bits (Caps/Num/Scroll Lock) for reliable matching.
 	 * Only consider Shift, Control, and Mod1 (Alt).
 	 */
-	clean_state = state & (ShiftMask | ControlMask | Mod1Mask);
+	clean_state = state & (ShiftMask | ControlMask | Mod1Mask | Mod4Mask);
 
 	/* Toggle activation: Ctrl+Shift+f */
 	if (!self->active) {

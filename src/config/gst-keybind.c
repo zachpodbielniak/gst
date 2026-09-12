@@ -10,7 +10,7 @@
  *
  * Modifier parsing is case-insensitive. Key names are resolved
  * via XStringToKeysym(). When Shift is a modifier and the key is
- * a lowercase letter (a-z), the keysym is normalized to uppercase
+ * a letter, the keysym is normalized using the X11 uppercase case table
  * to match what X11 reports when Shift is held.
  *
  * Lock bits (NumLock, CapsLock, ScrollLock) are stripped from the
@@ -22,7 +22,42 @@
 
 #include <string.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
+
+/**
+ * gst_keybind_lookup_event:
+ * @bindings: (nullable) (element-type GstKeybind): configured bindings
+ * @keyval: translated keysym
+ * @base_keyval: unshifted keysym from the keyboard layout, or zero
+ * @state: X11 modifier state
+ *
+ * Keeps exact bindings ahead of base-symbol fallback across the whole array.
+ * Returns: the matching action, or %GST_ACTION_NONE
+ */
+GstAction
+gst_keybind_lookup_event(
+	const GArray *bindings,
+	guint keyval,
+	guint base_keyval,
+	guint state
+){
+	GstAction action;
+
+	action = gst_keybind_lookup(bindings, keyval, state);
+	if (action == GST_ACTION_NONE && keyval != NoSymbol &&
+	    (state & ShiftMask) && base_keyval != NoSymbol) {
+		KeySym lower;
+		KeySym upper;
+
+		/* The parser stores Shift+letters in uppercase. Some layouts shift
+		 * a letter to punctuation (German sharp-s to '?'), so normalize the
+		 * base symbol too rather than assuming only digits need fallback. */
+		XConvertCase((KeySym)base_keyval, &lower, &upper);
+		action = gst_keybind_lookup(bindings, (guint)upper, state);
+	}
+	return action;
+}
 
 /* ===== Action string table ===== */
 
@@ -163,6 +198,8 @@ gst_keybind_parse(
 	guint i;
 	GstKeyMod mods;
 	KeySym keysym;
+	KeySym lower;
+	KeySym upper;
 	GstAction action;
 
 	g_return_val_if_fail(key_str != NULL, FALSE);
@@ -202,6 +239,16 @@ gst_keybind_parse(
 
 	/* Last token is the key name — resolve via XStringToKeysym */
 	keysym = XStringToKeysym(tokens[n_tokens - 1]);
+	/* Preserve the keyboard-selection trigger parser's historical aliases. */
+	if (keysym == NoSymbol) {
+		const gchar *name = tokens[n_tokens - 1];
+		if (g_ascii_strcasecmp(name, "Enter") == 0 || g_ascii_strcasecmp(name, "Return") == 0)
+			keysym = XK_Return;
+		else if (g_ascii_strcasecmp(name, "Escape") == 0)
+			keysym = XK_Escape;
+		else if (g_ascii_strcasecmp(name, "Space") == 0)
+			keysym = XK_space;
+	}
 	if (keysym == NoSymbol) {
 		g_warning("Unknown key name: '%s' in key '%s'",
 			tokens[n_tokens - 1], key_str);
@@ -209,15 +256,12 @@ gst_keybind_parse(
 		return FALSE;
 	}
 
-	/*
-	 * Shift + lowercase letter normalization:
-	 * When Shift is held, X11 reports the uppercase keysym (XK_A-XK_Z).
-	 * Store the uppercase version so lookup matches correctly.
-	 */
-	if ((mods & GST_KEY_MOD_SHIFT) &&
-	    keysym >= XK_a && keysym <= XK_z)
-	{
-		keysym = keysym - XK_a + XK_A;
+	/* Use the keysym case table for accented and non-Latin letters as well.
+	 * Digits and punctuation have no case conversion; event lookup handles
+	 * their layout-specific Shift mapping using the backend's base symbol. */
+	if (mods & GST_KEY_MOD_SHIFT) {
+		XConvertCase(keysym, &lower, &upper);
+		keysym = upper;
 	}
 
 	out->keyval = (guint)keysym;
@@ -383,11 +427,10 @@ gst_keybind_lookup(
 
 	/* Lock changes letter case, but must not change shortcut identity. */
 	if (x11_state & LockMask) {
-		if ((mods & GST_KEY_MOD_SHIFT) && keyval >= XK_a && keyval <= XK_z) {
-			keyval -= XK_a - XK_A;
-		} else if (!(mods & GST_KEY_MOD_SHIFT) && keyval >= XK_A && keyval <= XK_Z) {
-			keyval += XK_a - XK_A;
-		}
+		KeySym lower;
+		KeySym upper;
+		XConvertCase((KeySym)keyval, &lower, &upper);
+		keyval = (guint)((mods & GST_KEY_MOD_SHIFT) ? upper : lower);
 	}
 
 	for (i = 0; i < bindings->len; i++) {

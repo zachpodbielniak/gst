@@ -12,6 +12,7 @@
  */
 
 #include "gst-lrg-window.h"
+#include "gst-lrg-keymap.h"
 #include "../rendering/gst-renderer.h"
 #include <string.h>
 
@@ -168,13 +169,10 @@ lrg_emit_key(GstLrgWindow *self, GrlKey key, guint mods, guint event_type)
 		gchar text[2];
 		gint len = 0;
 
-		/* Keysym: Shift+letter -> uppercase, else lowercase (matches the
-		 * keybind parser's normalization). */
-		if (key >= GRL_KEY_A && key <= GRL_KEY_Z) {
-			ks = (mods & LRG_SHIFT_MASK) ? (guint)key : (guint)key + 32;
-		} else {
-			ks = (guint)key;
-		}
+		/* Preserve shifted punctuation too: Ctrl+Shift+= must report plus. */
+		ks = (guint)g_unichar_tolower((gunichar)key);
+		if (mods & LRG_SHIFT_MASK)
+			ks = gst_lrg_shift_ascii(ks);
 
 		/* Control combinations produce a control byte as the text (the X11
 		 * backend gets this from XLookupString). Alt-only keeps the letter
