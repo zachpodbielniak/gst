@@ -10,7 +10,16 @@
 
 #include "gst-pty.h"
 #include <gio/gio.h>
+/* forkpty(3): <pty.h> on glibc, <libutil.h> on FreeBSD and DragonFly,
+ * <util.h> on the other BSDs and macOS. */
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+#include <sys/types.h>
+#include <libutil.h>
+#elif defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
+#include <util.h>
+#else
 #include <pty.h>
+#endif
 #include <termios.h>
 #include <unistd.h>
 #include <errno.h>

@@ -175,6 +175,12 @@ ifeq ($(LRG_AVAILABLE),1)
     LDFLAGS_DEPS += $(shell $(PKG_CONFIG) --libs cairo cairo-ft 2>/dev/null)
 endif
 
+# forkpty(3) lives in libutil on the BSDs (glibc folded it into libc in 2.34).
+HOST_OS := $(shell uname -s)
+ifneq ($(filter FreeBSD DragonFly NetBSD OpenBSD,$(HOST_OS)),)
+    LDFLAGS_DEPS += -lutil
+endif
+
 # Include paths
 CFLAGS_INC := -I. -Isrc -Ideps/yaml-glib/src -Ideps/crispy/src -I$(OUTDIR)
 

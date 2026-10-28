@@ -1264,6 +1264,20 @@ pointer_axis_relative_direction(void *data, struct wl_pointer *pointer,
 	(void)data; (void)pointer; (void)axis; (void)direction;
 }
 
+#ifdef WL_POINTER_WARP_SINCE_VERSION
+/*
+ * wl_pointer.warp (wl_seat v11, libwayland 1.26): the compositor moved the
+ * pointer itself. Nothing to do -- gst binds an older wl_seat and never
+ * receives it -- but the listener needs the slot filled.
+ */
+static void
+pointer_warp(void *data, struct wl_pointer *pointer,
+	wl_fixed_t sx, wl_fixed_t sy)
+{
+	(void)data; (void)pointer; (void)sx; (void)sy;
+}
+#endif
+
 static const struct wl_pointer_listener pointer_listener = {
 	pointer_enter,
 	pointer_leave,
@@ -1275,7 +1289,10 @@ static const struct wl_pointer_listener pointer_listener = {
 	pointer_axis_stop,
 	pointer_axis_discrete,
 	pointer_axis_value120,
-	pointer_axis_relative_direction
+	pointer_axis_relative_direction,
+#ifdef WL_POINTER_WARP_SINCE_VERSION
+	pointer_warp
+#endif
 };
 
 /* ===== Clipboard (wl_data_device) callbacks ===== */
