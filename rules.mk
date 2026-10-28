@@ -2,6 +2,12 @@
 # Pattern rules and common build recipes
 
 # All source objects depend on the generated version headers
+# ldconfig after a live install. Linux rebuilds its cache from ld.so.conf;
+# FreeBSD's ldconfig run bare (or with a directory) *replaces* the loader
+# hints with that list, dropping every directory ports registered (FFmpeg,
+# gcc's runtime, ...) until the next boot -- -m merges LIBDIR in instead.
+LDCONFIG = $(if $(filter FreeBSD,$(shell uname -s)),ldconfig -m $(LIBDIR),ldconfig)
+
 $(LIB_OBJS) $(MAIN_OBJ): src/gst-version.h deps/crispy/src/crispy-version.h
 $(LIB_OBJS:.o=.d) $(MAIN_OBJ:.o=.d): src/gst-version.h deps/crispy/src/crispy-version.h
 
@@ -229,7 +235,7 @@ install-lib: $(OUTDIR)/$(LIB_STATIC) $(OUTDIR)/$(LIB_SHARED_FULL)
 	cd $(DESTDIR)$(LIBDIR) && ln -sf $(LIB_SHARED_MAJOR) $(LIB_SHARED)
 	@if [ -z "$(DESTDIR)" ] && command -v ldconfig >/dev/null 2>&1; then \
 		echo "Updating shared library cache..."; \
-		ldconfig; \
+		$(LDCONFIG); \
 	fi
 
 install-headers:
