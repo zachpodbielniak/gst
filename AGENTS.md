@@ -14,6 +14,33 @@ make test         # Run GTest suite
 make clean        # Clean build artifacts
 ```
 
+## Versioning
+
+The version lives in `config.mk` (`VERSION_MAJOR`, `VERSION_MINOR`, `VERSION_MICRO`) and every release on master carries an annotated tag `v<MAJOR>.<MINOR>.<MICRO>` (e.g. `v0.4.11`) on the commit that sets it.
+
+- **Micro** (+1): every change landing on master that changes what is built: bug fixes, patches, small features, options, polish (`fix`, `perf`, small `feat`, `refactor`, `build`). Changes that touch only docs, tests or tooling (`docs`, `test`, `ci`, `chore`) do not bump; they ride with the next release.
+- **Minor** (+1, micro back to 0): a major feature (a new backend, a new subsystem, a roadmap phase) or anything that breaks compatibility with earlier versions (config keys, keybind/action names, module API or hook points, GIR API).
+- **Major**: never bumped without asking the user first.
+- `GIR_VERSION` is derived from `VERSION_MAJOR.VERSION_MINOR` and the `libgst.so` soname from `VERSION_MAJOR`, so a minor bump changes the `GstTerm` GIR version and a major bump changes the soname; keep that in mind when deciding the kind of bump.
+
+One bump per landing, the highest kind it contains: an integration that merges several branches bumps once (minor if any of them is a major feature, else micro).
+
+- **Every landing is released at once.** Each landing on master that changes the build bumps, is tagged and pushed immediately; nothing that changes the build waits on master untagged for a later release.
+- **Merging a branch** (the usual case, worktrees live under `trees/<name>`): bump in the merge commit itself, so the tag marks the merge and the branch never carries a version:
+
+  ```bash
+  git merge --no-ff --no-commit feat/x     # resolve conflicts if any
+  $EDITOR config.mk                        # bump VERSION_MINOR or VERSION_MICRO
+  make clean all && make test              # zero warnings, all tests pass
+  git commit                               # merge message names the new version
+  git tag -a v0.5.0 -m 'v0.5.0'
+  git push origin master v0.5.0
+  ```
+
+  Fast-forward merges have no commit to hold the bump; use `--no-ff`. A merge that lands only docs/tests may fast-forward and is not tagged.
+- **Working directly on master**: bump `config.mk` in the change's own commit (or, for a run of commits, in the last one), then tag that commit and push it with the tag. Do not push unless asked, except that a version bump is always pushed with its tag.
+- Tag only a commit whose `config.mk` matches the tag, after its build and tests pass; never move or delete a pushed tag; a broken release is fixed by the next micro.
+
 ## Directory Structure
 
 - `src/core/` - Terminal emulation (GstTerminal, GstPty, GstEscapeParser)
