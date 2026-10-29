@@ -2111,6 +2111,7 @@ init_x11_backend(
 ){
 	gulong embed_id;
 	Display *display;
+	Display *tmp_dpy;
 	Window xid;
 	Visual *visual;
 	Colormap colormap;
@@ -2126,9 +2127,17 @@ init_x11_backend(
 
 	font_cache = gst_font_cache_new();
 
-	/* Bootstrap: open temp display for font metrics */
+	/*
+	 * Bootstrap: open temp display for font metrics.
+	 *
+	 * It stays open until the window has opened its own display. Closed
+	 * first, the allocator can hand the window's Display the very same
+	 * address (FreeBSD's jemalloc does), and per-display state Xft and
+	 * Xrender look up by that pointer is then found stale: the first
+	 * request on the new display went out with extension opcode 0
+	 * (BadRequest, major opcode 0).
+	 */
 	{
-		Display *tmp_dpy;
 		gint tmp_screen;
 
 		tmp_dpy = XOpenDisplay(NULL);
@@ -2154,7 +2163,6 @@ init_x11_backend(
 		cell_h = gst_font_cache_get_char_height(font_cache);
 
 		gst_font_cache_unload_fonts(font_cache);
-		XCloseDisplay(tmp_dpy);
 	}
 
 	/* Create X11 window */
@@ -2165,6 +2173,8 @@ init_x11_backend(
 
 	x11_win = gst_x11_window_new(cols, rows, cell_w, cell_h,
 		(gint)cfg_border_px, embed_id);
+	XCloseDisplay(tmp_dpy);
+	tmp_dpy = NULL;
 	if (x11_win == NULL) {
 		g_printerr("Cannot create X11 window\n");
 		g_object_unref(font_cache);
