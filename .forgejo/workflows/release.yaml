@@ -42,7 +42,7 @@ jobs:
 
       - name: Create release
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
@@ -51,7 +51,7 @@ jobs:
 
           RELEASE_ID=$(curl -sf -X POST \
             "${API}/releases" \
-            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{
               \"tag_name\": \"${TAG}\",
@@ -63,5 +63,5 @@ jobs:
 
           curl -sf -X POST \
             "${API}/releases/${RELEASE_ID}/assets?name=$(basename ${APPIMAGE})" \
-            -H "Authorization: token ${FORGEJO_TOKEN}" \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
             -F "attachment=@${APPIMAGE}"
