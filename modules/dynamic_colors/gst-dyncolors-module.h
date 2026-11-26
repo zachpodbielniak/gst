@@ -4,9 +4,10 @@
  * Copyright (C) 2026 Zach Podbielniak
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Handles OSC 10/11/12/17/19 for querying and setting terminal
- * foreground, background, cursor, and selection colors at runtime.
- * Also handles OSC 4 for palette color changes and OSC 104 for reset.
+ * Handles OSC 10/11/12 for querying and setting the terminal
+ * foreground, background, and cursor color at runtime.
+ * Also handles OSC 4 for palette color changes, OSC 104 for reset,
+ * and OSC 110/111/112 to reset foreground, background, and cursor.
  */
 
 #ifndef GST_DYNCOLORS_MODULE_H

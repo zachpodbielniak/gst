@@ -1,0 +1,50 @@
+* Progress Module
+:PROPERTIES:
+:CUSTOM_ID: progress-module
+:END:
+Show ConEmu progress by rewriting the window title.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+Programs such as cargo and systemd report progress with OSC 9;4. gst has one window and no dock progress API, so the module prefixes the current title. State 0 puts the previous title back, including an empty title. A later OSC 0 or OSC 2 becomes the new base title and the prefix is applied again. The module is off by default. It runs before notify, and notify does not toast these reports.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+#+begin_src yaml
+modules:
+  progress:
+    enabled: false
+#+end_src
+
+| Option    | Type    | Default | Description                          |
+|-----------+---------+---------+--------------------------------------|
+| =enabled= | boolean | =false= | Prefix the window title with progress |
+
+** Escape sequence
+:PROPERTIES:
+:CUSTOM_ID: escape-sequence
+:END:
+=ESC ] 9 ; 4 ; state ; progress ST=
+
+| State | Meaning       | Title prefix                                      |
+|-------+---------------+---------------------------------------------------|
+| 0     | remove        | the previous title, with no prefix                |
+| 1     | progress      | =[42%]=, or =[0%]= when the value is omitted      |
+| 2     | error         | =[!]=, or =[! 42%]= when a value is present       |
+| 3     | indeterminate | =[~]=, the value is ignored                       |
+| 4     | paused        | =[= 42%]=, or =[= 0%]= when the value is omitted  |
+
+The value is clamped to 0-100. A report that is OSC 9;4 but has a bad state or a bad value is ignored and the title stays as it is. Any other OSC 9 body is not handled here.
+
+** Source Files
+:PROPERTIES:
+:CUSTOM_ID: source-files
+:END:
+| File                                      | Description           |
+|-------------------------------------------+-----------------------|
+| =modules/progress/gst-progress-module.c=  | Module implementation |
+| =modules/progress/gst-progress-module.h=  | Type declaration      |

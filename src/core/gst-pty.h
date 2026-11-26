@@ -40,6 +40,14 @@ GstPty *gst_pty_new(void);
 
 gboolean gst_pty_spawn(GstPty *pty, const gchar *shell, gchar **envp, GError **error);
 
+void gst_pty_set_child_env(GstPty *pty, const gchar * const *env);
+
+void gst_pty_set_child_cwd(GstPty *pty, const gchar *cwd);
+
+void gst_pty_set_child_argv(GstPty *pty, const gchar * const *argv);
+
+const gchar *gst_pty_get_slave_name(GstPty *pty);
+
 void gst_pty_write(GstPty *pty, const gchar *data, gssize len);
 
 void gst_pty_write_no_echo(GstPty *pty, const gchar *data, gssize len);

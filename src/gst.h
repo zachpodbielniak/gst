@@ -29,6 +29,7 @@
 #include "core/gst-line.h"
 #include "core/gst-terminal.h"
 #include "core/gst-pty.h"
+#include "core/gst-osc7577.h"
 #include "core/gst-escape-parser.h"
 #include "core/gst-mouse.h"
 

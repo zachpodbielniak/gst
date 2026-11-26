@@ -8,7 +8,7 @@ Runtime color palette changes via OSC escape sequences.
 :PROPERTIES:
 :CUSTOM_ID: overview
 :END:
-The dynamic colors module allows programs to query and modify the terminal's color palette at runtime using standard OSC escape sequences. This enables tools like =base16-shell=, =theme.sh=, and Neovim colorscheme plugins to change the terminal's foreground, background, cursor color, and individual palette entries without restarting the terminal.
+The dynamic colors module allows programs to query and modify the terminal's color palette at runtime using standard OSC escape sequences. This enables tools like =base16-shell=, =theme.sh=, and Neovim colorscheme plugins to change the terminal's foreground, background, cursor color, and individual palette entries without restarting the terminal. OSC 110, 111, and 112 put the foreground, background, or cursor back to the color saved on the first change.
 
 Color changes take effect immediately and trigger a full repaint. Query responses are written back to the PTY in standard =rgb:RR/GG/BB= format.
 
@@ -78,10 +78,15 @@ gst_config_set_module_config_bool(config, "dynamic_colors", "allow_set", TRUE);
 :PROPERTIES:
 :CUSTOM_ID: reset-colors
 :END:
-| Sequence                 | Action                                   |
-|--------------------------+------------------------------------------|
-| =ESC ] 104 ST=           | Reset all palette colors to defaults     |
-| =ESC ] 104 ; <index> ST= | Reset palette color =<index>= to default |
+| Sequence                 | Action                                                              |
+|--------------------------+---------------------------------------------------------------------|
+| =ESC ] 104 ST=           | Reset foreground, background, cursor, and every palette entry       |
+| =ESC ] 104 ; <index> ST= | Reset palette color =<index>= to the saved color                    |
+| =ESC ] 110 ST=           | Reset foreground to the color saved before the first change         |
+| =ESC ] 111 ST=           | Reset background to the saved color                                 |
+| =ESC ] 112 ST=           | Reset the cursor color to the saved color                           |
+
+OSC 110, 111, and 112 do nothing when no color has been changed yet. =allow_set: false= ignores them as well. The sequence is still consumed. They are not queries.
 
 *** Color Format
 :PROPERTIES:
@@ -106,8 +111,11 @@ printf '\e]10;?\a'
 # Set palette color 1 (red) to Catppuccin red
 printf '\e]4;1;#f38ba8\a'
 
-# Reset all palette colors
+# Reset all palette colors, plus foreground, background, and cursor
 printf '\e]104\a'
+
+# Reset only the foreground
+printf '\e]110\a'
 #+end_src
 
 ** Security
@@ -115,7 +123,7 @@ printf '\e]104\a'
 :CUSTOM_ID: security
 :END:
 - Set =allow_query: false= to prevent programs from reading your current color scheme. Some users consider color scheme fingerprinting a privacy concern.
-- Set =allow_set: false= to prevent programs from changing your colors (useful if you want a locked-down palette).
+- Set =allow_set: false= to prevent programs from changing your colors (useful if you want a locked-down palette). That also ignores OSC 110, 111, and 112.
 
 ** Source Files
 :PROPERTIES:

@@ -407,14 +407,14 @@ static const GstBuiltinModule builtin_modules[] = {
 	},
 	{
 		"dynamic_colors",
-		"Runtime color changes via OSC 10/11/12/4/104",
+		"Runtime color changes via OSC 10/11/12/4/104/110/111/112",
 		"  dynamic_colors:\n"
 		"    enabled: true\n"
 		"    allow_query: true\n"
 		"    allow_set: true\n"
 		"\n",
 		"\t/*\n"
-		"\t * dynamic_colors: runtime color changes via OSC 10/11/12\n"
+		"\t * dynamic_colors: runtime color changes via OSC 10/11/12/110/111/112\n"
 		"\t * YAML keys: allow_query, allow_set\n"
 		"\t */\n"
 	},
@@ -521,6 +521,43 @@ static const GstBuiltinModule builtin_modules[] = {
 		"\t/*\n"
 		"\t * ligatures: HarfBuzz font ligature rendering\n"
 		"\t * YAML keys: features (list), cache_size\n"
+		"\t */\n"
+	},
+	{
+		"program_resume",
+		"Resume reported programs after a restart (OSC 7577)",
+		"  program_resume:\n"
+		"    enabled: false\n"
+		"    policy: confirm\n"
+		"    allow: []\n"
+		"    allow_root: false\n"
+		"\n",
+		"\t/*\n"
+		"\t * program_resume: OSC 7577 program resume\n"
+		"\t * YAML keys: policy (confirm, allow, auto), allow,\n"
+		"\t *            allow_root\n"
+		"\t */\n"
+	},
+	{
+		"progress",
+		"Window-title progress via OSC 9;4",
+		"  progress:\n"
+		"    enabled: false\n"
+		"\n",
+		"\t/*\n"
+		"\t * progress: ConEmu OSC 9;4 progress in the window title\n"
+		"\t * YAML keys: enabled\n"
+		"\t */\n"
+	},
+	{
+		"osc7",
+		"Shell working directory via OSC 7",
+		"  osc7:\n"
+		"    enabled: false\n"
+		"\n",
+		"\t/*\n"
+		"\t * osc7: shell file:// directory (OSC 7)\n"
+		"\t * YAML keys: enabled\n"
 		"\t */\n"
 	},
 	{ NULL, NULL, NULL, NULL }
@@ -2400,6 +2437,15 @@ main(
 	const gchar *fontstr;
 	const gchar *shell_cmd;
 
+	/*
+	 * Resume helper. The shell runs this after its startup files, and the
+	 * process is replaced by the recorded command. Keep it ahead of option
+	 * parsing so the helper arguments are not treated as gst options.
+	 */
+	if (argc >= 3 && strcmp(argv[1], "--osc7577-launch") == 0) {
+		return gst_osc7577_launch(argv[2], (argc >= 4) ? argv[3] : NULL);
+	}
+
 	/* Ignore SIGPIPE: Wayland clipboard pipes may close unexpectedly */
 	signal(SIGPIPE, SIG_IGN);
 
@@ -2767,8 +2813,65 @@ skip_c_config:
 
 	/* Step 4: Create PTY and spawn shell */
 	pty = gst_pty_new();
+	{
+		GstOsc7577Spawn plan;
+		gchar **env;
+		gchar *osc_cleanup;
+		guint n;
+		guint i;
 
-	if (!gst_pty_spawn(pty, shell_cmd, NULL, &error)) {
+		gst_osc7577_prepare(config, shell_cmd, opt_execute == NULL, &plan);
+		n = (plan.env_extra != NULL) ? g_strv_length(plan.env_extra) : 0;
+		env = g_new0(gchar *, n + 2);
+		for (i = 0; i < n; i++) {
+			env[i] = g_strdup(plan.env_extra[i]);
+		}
+		if (plan.token != NULL) {
+			env[n] = g_strdup_printf("OSC7577_TOKEN=%s", plan.token);
+		}
+		if (env[0] != NULL) {
+			gst_pty_set_child_env(pty, (const gchar * const *)env);
+		}
+		g_strfreev(env);
+		if (plan.child_cwd != NULL) {
+			gst_pty_set_child_cwd(pty, plan.child_cwd);
+		}
+		if (plan.resume && plan.argv != NULL) {
+			gst_pty_set_child_argv(pty, (const gchar * const *)plan.argv);
+		}
+		/*
+		 * The helper is only useful if the shell actually starts. A
+		 * failed spawn deletes the bash rc file or the zsh ZDOTDIR.
+		 */
+		osc_cleanup = g_strdup(plan.cleanup);
+		gst_osc7577_spawn_clear(&plan);
+		if (!gst_pty_spawn(pty, shell_cmd, NULL, &error)) {
+			gchar *base;
+
+			base = g_path_get_basename(osc_cleanup != NULL ?
+				osc_cleanup : "");
+			if (g_str_has_prefix(base, "bash-rc-")) {
+				unlink(osc_cleanup);
+			} else if (g_str_has_prefix(base, "zdot-")) {
+				gchar *env_path;
+				gchar *rc_path;
+
+				env_path = g_build_filename(osc_cleanup, ".zshenv", NULL);
+				rc_path = g_build_filename(osc_cleanup, ".zshrc", NULL);
+				unlink(env_path);
+				unlink(rc_path);
+				rmdir(osc_cleanup);
+				g_free(env_path);
+				g_free(rc_path);
+			}
+			g_free(base);
+			g_free(osc_cleanup);
+		} else {
+			g_free(osc_cleanup);
+		}
+	}
+
+	if (error != NULL) {
 		g_printerr("Failed to spawn shell: %s\n", error->message);
 		g_error_free(error);
 		g_object_unref(renderer);
@@ -2793,6 +2896,7 @@ skip_c_config:
 	}
 
 	/* Step 5: Connect all signals */
+	gst_osc7577_set_pts(gst_pty_get_slave_name(pty));
 
 	/* PTY signals */
 	g_signal_connect(pty, "data-received",

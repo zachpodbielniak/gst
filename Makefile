@@ -33,6 +33,7 @@ LIB_SRCS := \
 	src/core/gst-line.c \
 	src/core/gst-terminal.c \
 	src/core/gst-pty.c \
+	src/core/gst-osc7577.c \
 	src/core/gst-escape-parser.c \
 	src/core/gst-mouse.c \
 	src/rendering/gst-renderer.c \
@@ -106,6 +107,7 @@ LIB_HDRS := \
 	src/core/gst-line.h \
 	src/core/gst-terminal.h \
 	src/core/gst-pty.h \
+	src/core/gst-osc7577.h \
 	src/core/gst-escape-parser.h \
 	src/rendering/gst-renderer.h \
 	src/rendering/gst-render-context.h \
@@ -327,6 +329,10 @@ endif
 # Build individual test binaries
 # Tests that include private module implementations must track those inputs.
 $(OBJDIR)/tests/test-sixel.o: modules/sixel/gst-sixel-module.c modules/sixel/gst-sixel-module.h
+$(OBJDIR)/tests/test-dyncolors.o: modules/dynamic_colors/gst-dyncolors-module.c modules/dynamic_colors/gst-dyncolors-module.h
+$(OBJDIR)/tests/test-progress.o: modules/progress/gst-progress-module.c modules/progress/gst-progress-module.h
+$(OBJDIR)/tests/test-osc7.o: modules/osc7/gst-osc7-module.c modules/osc7/gst-osc7-module.h
+$(OBJDIR)/tests/test-notify-osc9.o: modules/notify/gst-notify-module.c modules/notify/gst-notify-module.h
 $(OBJDIR)/tests/test-externalpipe.o: modules/externalpipe/gst-externalpipe-module.c modules/externalpipe/gst-externalpipe-module.h
 $(OBJDIR)/tests/test-kitty-cache.o: $(wildcard modules/kittygfx/*.[ch])
 $(OBJDIR)/tests/test-history.o: $(wildcard modules/search/*.[ch] modules/scrollback/*.[ch] modules/shell_integration/*.[ch])

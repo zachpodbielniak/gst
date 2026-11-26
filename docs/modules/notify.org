@@ -68,7 +68,7 @@ The module handles three notification protocols:
 ESC ] 9 ; <message> ST
 #+end_example
 
-Sends a notification with =<message>= as the body. No separate title field -- uses the terminal window title if =show_title= is true.
+Sends a notification with =<message>= as the body. No separate title field -- uses the terminal window title if =show_title= is true. A body that is =4= or starts with =4;= is OSC 9;4 progress, not a notification. It is left for the progress module and is not toasted when that module is off.
 
 *** OSC 777 (rxvt-unicode)
 :PROPERTIES:

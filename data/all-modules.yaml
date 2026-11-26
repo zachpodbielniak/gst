@@ -145,6 +145,18 @@ modules:
       - "liga"
     cache_size: 4096
 
+  program_resume:
+    enabled: true
+    policy: confirm
+    allow: []
+    allow_root: false
+
+  progress:
+    enabled: true
+
+  osc7:
+    enabled: true
+
   wallpaper:
     enabled: true
     image_path: "/var/home/zach/Pictures/clawd/profile-pic-clawd.jpg"

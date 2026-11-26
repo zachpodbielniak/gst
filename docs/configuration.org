@@ -441,6 +441,9 @@ See [[file:modules/README.org][Module Guide]] for the complete module reference,
 - [[file:modules/keyboard-select.org][keyboard_select]] - Vim-like keyboard selection
 - [[file:modules/kittygfx.org][kittygfx]] - Kitty graphics protocol
 - [[file:modules/mcp.org][mcp]] - MCP server for AI assistants
+- [[file:modules/program-resume.org][program_resume]] - OSC 7577 program resume
+- [[file:modules/progress.org][progress]] - OSC 9;4 progress in the window title
+- [[file:modules/osc7.org][osc7]] - OSC 7 shell working directory
 
 *** YAML (minimal example)
 :PROPERTIES:

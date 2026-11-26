@@ -8,7 +8,11 @@
  * and I/O with the child process via GIOChannel and GMainLoop.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "gst-pty.h"
+#include <stdlib.h>
 #include <gio/gio.h>
 /* forkpty(3): <pty.h> on glibc, <libutil.h> on FreeBSD and DragonFly,
  * <util.h> on the other BSDs and macOS. */
@@ -43,6 +47,10 @@ typedef struct {
 	guint out_watch_id;
 	gint cols;
 	gint rows;
+	gchar **child_env;
+	gchar *child_cwd;
+	gchar **child_argv;
+	gchar *slave_name;
 } GstPtyPrivate;
 
 enum {
@@ -104,6 +112,11 @@ gst_pty_finalize(GObject *object)
 		close(priv->master_fd);
 		priv->master_fd = -1;
 	}
+
+	g_clear_pointer(&priv->child_env, g_strfreev);
+	g_clear_pointer(&priv->child_cwd, g_free);
+	g_clear_pointer(&priv->child_argv, g_strfreev);
+	g_clear_pointer(&priv->slave_name, g_free);
 
 	G_OBJECT_CLASS(gst_pty_parent_class)->finalize(object);
 }
@@ -434,6 +447,9 @@ gst_pty_spawn(
 	if (pid == 0) {
 		/* Child process */
 		const gchar *sh;
+		gchar *fallback[2];
+		gchar **argv;
+		guint i;
 
 		sh = shell;
 		if (sh == NULL) {
@@ -443,22 +459,59 @@ gst_pty_spawn(
 			sh = "/bin/sh";
 		}
 
-		/* Set TERM */
+		/*
+		 * TERM is set in the child so a caller-supplied envp still
+		 * loses to the explicit child_env pairs below. OSC7577_TOKEN
+		 * is one of those pairs and never enters the parent environ.
+		 */
 		setenv("TERM", "gst-256color", 1);
-
 		unsetenv("COLUMNS");
 		unsetenv("LINES");
 		unsetenv("TERMCAP");
+		if (priv->child_cwd != NULL && priv->child_cwd[0] != '\0') {
+			if (chdir(priv->child_cwd) != 0) {
+				_exit(127);
+			}
+		}
+		for (i = 0; priv->child_env != NULL && priv->child_env[i] != NULL; i++) {
+			gchar *eq;
 
-		if (envp != NULL) {
-			execve(sh, (char *const[]){(char *)sh, NULL}, envp);
+			eq = strchr(priv->child_env[i], '=');
+			if (eq == NULL || eq == priv->child_env[i]) {
+				continue;
+			}
+			*eq = '\0';
+			setenv(priv->child_env[i], eq + 1, 1);
+		}
+		fallback[0] = (gchar *)sh;
+		fallback[1] = NULL;
+		if (priv->child_argv != NULL && priv->child_argv[0] != NULL) {
+			argv = priv->child_argv;
 		} else {
-			execlp(sh, sh, NULL);
+			argv = fallback;
+		}
+		if (envp != NULL && priv->child_env == NULL &&
+		    priv->child_argv == NULL && priv->child_cwd == NULL)
+		{
+			execve(sh, (char *const *)fallback, envp);
+		} else if (envp != NULL && priv->child_argv == NULL) {
+			execve(argv[0], (char *const *)argv, envp);
+		} else {
+			execvp(argv[0], argv);
 		}
 		_exit(127);
 	}
 
 	/* Parent process */
+	{
+		char *slave;
+
+		slave = ptsname(priv->master_fd);
+		if (slave != NULL) {
+			g_free(priv->slave_name);
+			priv->slave_name = g_strdup(slave);
+		}
+	}
 	priv->child_pid = pid;
 	priv->running = TRUE;
 
@@ -484,6 +537,82 @@ gst_pty_spawn(
 	priv->child_watch_id = g_child_watch_add(pid, pty_child_watch, pty);
 
 	return TRUE;
+}
+
+/**
+ * gst_pty_set_child_env:
+ * @pty: a #GstPty
+ * @env: (nullable) (array zero-terminated=1): extra `KEY=VALUE` pairs
+ *
+ * Extra environment for the next child. The parent process environment
+ * is left unchanged. Later calls replace earlier ones.
+ */
+void
+gst_pty_set_child_env(
+	GstPty             *pty,
+	const gchar * const *env
+){
+	GstPtyPrivate *priv;
+
+	g_return_if_fail(GST_IS_PTY(pty));
+	priv = gst_pty_get_instance_private(pty);
+	g_strfreev(priv->child_env);
+	priv->child_env = g_strdupv((gchar **)env);
+}
+
+/**
+ * gst_pty_set_child_cwd:
+ * @pty: a #GstPty
+ * @cwd: (nullable): directory the child changes to before exec
+ */
+void
+gst_pty_set_child_cwd(
+	GstPty      *pty,
+	const gchar *cwd
+){
+	GstPtyPrivate *priv;
+
+	g_return_if_fail(GST_IS_PTY(pty));
+	priv = gst_pty_get_instance_private(pty);
+	g_free(priv->child_cwd);
+	priv->child_cwd = g_strdup(cwd);
+}
+
+/**
+ * gst_pty_set_child_argv:
+ * @pty: a #GstPty
+ * @argv: (nullable) (array zero-terminated=1): argument vector for the child
+ *
+ * Replaces the single shell path used by gst_pty_spawn(). The first
+ * element is the program to execute.
+ */
+void
+gst_pty_set_child_argv(
+	GstPty             *pty,
+	const gchar * const *argv
+){
+	GstPtyPrivate *priv;
+
+	g_return_if_fail(GST_IS_PTY(pty));
+	priv = gst_pty_get_instance_private(pty);
+	g_strfreev(priv->child_argv);
+	priv->child_argv = g_strdupv((gchar **)argv);
+}
+
+/**
+ * gst_pty_get_slave_name:
+ * @pty: a #GstPty
+ *
+ * Returns: (transfer none) (nullable): slave path after a successful spawn
+ */
+const gchar *
+gst_pty_get_slave_name(GstPty *pty)
+{
+	GstPtyPrivate *priv;
+
+	g_return_val_if_fail(GST_IS_PTY(pty), NULL);
+	priv = gst_pty_get_instance_private(pty);
+	return priv->slave_name;
 }
 
 /**

@@ -403,6 +403,47 @@ typedef struct _GstLigaturesConfig
 } GstLigaturesConfig;
 
 /**
+ * GstProgramResumeConfig:
+ * @enabled: whether OSC 7577 program resume is active
+ * @policy: "confirm", "allow", or "auto"
+ * @allow: argv0 names or absolute paths resumed without a prompt
+ * @allow_root: accept reports when the terminal runs as root
+ *
+ * Confirm asks on the terminal before a resume. Allow resumes only names
+ * in @allow. Auto resumes every accepted record.
+ */
+typedef struct _GstProgramResumeConfig
+{
+	gboolean   enabled;
+	gchar     *policy;
+	gchar    **allow;
+	gboolean   allow_root;
+} GstProgramResumeConfig;
+
+/**
+ * GstProgressConfig:
+ * @enabled: whether OSC 9;4 progress prefixes the window title
+ *
+ * Off by default. A report rewrites the title and state 0 restores it.
+ */
+typedef struct _GstProgressConfig
+{
+	gboolean enabled;
+} GstProgressConfig;
+
+/**
+ * GstOsc7Config:
+ * @enabled: whether OSC 7 file:// directories are stored
+ *
+ * Off by default. A local existing directory is kept, and its basename
+ * is the window title until an application sets one.
+ */
+typedef struct _GstOsc7Config
+{
+	gboolean enabled;
+} GstOsc7Config;
+
+/**
  * GstWallpaperConfig:
  * @enabled: whether the wallpaper module is active
  * @image_path: filesystem path to the background image (PNG or JPEG)
@@ -451,6 +492,9 @@ typedef struct _GstModuleConfigs
 	GstSixelConfig            sixel;
 	GstLigaturesConfig        ligatures;
 	GstWallpaperConfig        wallpaper;
+	GstProgramResumeConfig    program_resume;
+	GstProgressConfig         progress;
+	GstOsc7Config             osc7;
 } GstModuleConfigs;
 
 G_END_DECLS

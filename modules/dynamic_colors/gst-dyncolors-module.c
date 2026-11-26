@@ -11,6 +11,9 @@
  *   OSC 4  ; index ; color_spec ST - set/query palette color
  *   OSC 104 ; index ST - reset palette color
  *   OSC 104 ST - reset all colors
+ *   OSC 110 ST - reset foreground to the color saved on first change
+ *   OSC 111 ST - reset background
+ *   OSC 112 ST - reset the cursor color
  *
  * Color specs: rgb:RR/GG/BB, rgb:RRRR/GGGG/BBBB, #RRGGBB, #RGB
  * Query: "?" as color_spec
@@ -201,7 +204,7 @@ static const gchar *
 gst_dyncolors_module_get_description(GstModule *module)
 {
 	(void)module;
-	return "Runtime color changes via OSC 10/11/12/4/104";
+	return "Runtime color changes via OSC 10/11/12/4/104/110/111/112";
 }
 
 static void
@@ -240,8 +243,10 @@ gst_dyncolors_module_deactivate(GstModule *module)
 /*
  * handle_escape_string:
  *
- * Handles OSC 4/10/11/12/104 color sequences.
+ * Handles OSC 4/10/11/12/104/110/111/112 color sequences.
  * The raw buffer contains the full OSC with semicolons intact.
+ * OSC 110, 111, and 112 restore one saved color. They are consumed
+ * even when sets are disabled or nothing has been changed yet.
  */
 static gboolean
 gst_dyncolors_module_handle_escape_string(
@@ -423,6 +428,28 @@ gst_dyncolors_module_handle_escape_string(
 				gst_color_scheme_set_color(scheme,
 					(guint)idx,
 					self->orig_palette[idx]);
+			}
+		}
+		return TRUE;
+
+	case 110: /* Reset foreground */
+	case 111: /* Reset background */
+	case 112: /* Reset cursor */
+		/*
+		 * Theme tools send these after a temporary scheme.
+		 * A reset before any set, or while sets are locked,
+		 * is still consumed so another module does not see it.
+		 */
+		if (self->allow_set && self->have_originals) {
+			if (osc_num == 110) {
+				gst_color_scheme_set_foreground(scheme,
+					self->orig_fg);
+			} else if (osc_num == 111) {
+				gst_color_scheme_set_background(scheme,
+					self->orig_bg);
+			} else {
+				gst_color_scheme_set_cursor_color(scheme,
+					self->orig_cursor);
 			}
 		}
 		return TRUE;

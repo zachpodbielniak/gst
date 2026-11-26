@@ -1634,6 +1634,12 @@ gst_module_manager_activate_all(GstModuleManager *self)
 				enabled = cfg->modules.ligatures.enabled;
 			else if (g_strcmp0(name, "wallpaper") == 0)
 				enabled = cfg->modules.wallpaper.enabled;
+			else if (g_strcmp0(name, "program_resume") == 0)
+				enabled = cfg->modules.program_resume.enabled;
+			else if (g_strcmp0(name, "progress") == 0)
+				enabled = cfg->modules.progress.enabled;
+			else if (g_strcmp0(name, "osc7") == 0)
+				enabled = cfg->modules.osc7.enabled;
 
 			if (!enabled)
 			{

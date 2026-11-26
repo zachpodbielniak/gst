@@ -1,0 +1,53 @@
+* Program Resume Module
+:PROPERTIES:
+:CUSTOM_ID: program-resume-module
+:END:
+Resume a program that reported an OSC 7577 command after gst starts again.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+The module implements the Program Resume Protocol, revision 0.5. A program that sees =OSC7577_TOKEN= in its environment can send one OSC 7577 report naming the command that brings it back. gst checks the SHA-256 =mac= and the report time before it stores anything. The token is created for the first process on the pty and is not copied from gst's own environment.
+
+One gst process keeps one record, mode =0600=, under =$XDG_STATE_HOME/gst/osc7577/= (or =GST_OSC7577_STATE_DIR=). The directory is mode =0700=. A report that fails the mac or the clock is ignored. A report that passes those checks and then breaks a rule deletes that owner's record.
+
+On the next start, a pending record whose owner is gone can be resumed. =confirm= asks on the terminal. =allow= resumes only =argv[0]= names listed in =allow=. =auto= resumes without a prompt. gst does not resume when its effective uid is 0 unless =allow_root= is set. An explicit =--exec= command is not replaced by a resume.
+
+bash, zsh, and fish run the command from the first prompt, after startup files, through =gst --osc7577-launch=. The program's arguments are not written into shell source. Other shells start the command as the first process on the pty. A failed exec is not retried. If the shell itself cannot be started, gst deletes the bash or zsh helper it just wrote. Closing the window keeps the record. The record is dropped when the owner exits and gst stays up for about two seconds, or when the program sends =clear=1=. The confirm prompt quotes every argument and replaces bidirectional overrides with =?=.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+#+begin_src yaml
+modules:
+  program_resume:
+    enabled: false
+    policy: confirm
+    allow: []
+    allow_root: false
+#+end_src
+
+| Option        | Type    | Default     | Description                                      |
+|---------------+---------+-------------+--------------------------------------------------|
+| =enabled=     | boolean | =false=     | Enable reports and resume                        |
+| =policy=      | string  | =confirm=   | =confirm=, =allow=, or =auto=                    |
+| =allow=       | list    | empty       | argv0 basenames or absolute paths for =allow=    |
+| =allow_root=  | boolean | =false=     | Accept reports when gst is root                  |
+
+** Escape sequence
+:PROPERTIES:
+:CUSTOM_ID: escape-sequence
+:END:
+#+begin_example
+ESC ] 7577 ; pid=<pid>:time=<unix>:argv=<base64>,<base64>:mac=<64 hex> ST
+#+end_example
+
+=argv= and =clear=1= are mutually exclusive. =cwd= is optional and must be an absolute path. =mac= is last. It is SHA-256 over the bytes before =:mac==, one extra colon, and the token.
+
+** Limits
+:PROPERTIES:
+:CUSTOM_ID: limits
+:END:
+The terminal already accepts OSC payloads up to 1 MiB, which covers the protocol minimum of 2048 bytes and 64 arguments. More than 256 arguments is rejected. A resumed command does not restore terminal modes.

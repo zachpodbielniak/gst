@@ -1,0 +1,34 @@
+* OSC 7 Module
+:PROPERTIES:
+:CUSTOM_ID: osc7-module
+:END:
+Remember the directory a shell reports with OSC 7.
+
+** Overview
+:PROPERTIES:
+:CUSTOM_ID: overview
+:END:
+Shells send =ESC ] 7 ; file://hostname/path ST= when the working directory changes. The path is stored when the host is empty, =localhost=, this machine's hostname, or that hostname followed by a dot, and the percent-decoded path is an absolute directory that exists here. A remote host, a missing path, a bad percent-escape, or a C0 or DEL byte is ignored. The report is still consumed. The stored directory is not used as the program-resume cwd. Until an application sets the window title, the title is the directory's basename, and =/= stays =/=. After an application title, later reports only update the stored path.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+#+begin_src yaml
+modules:
+  osc7:
+    enabled: false
+#+end_src
+
+| Option    | Type    | Default | Description                                      |
+|-----------+---------+---------+--------------------------------------------------|
+| =enabled= | boolean | =false= | Store a local OSC 7 directory                    |
+
+** Source Files
+:PROPERTIES:
+:CUSTOM_ID: source-files
+:END:
+| File                                | Description           |
+|-------------------------------------+-----------------------|
+| =modules/osc7/gst-osc7-module.c=    | Module implementation |
+| =modules/osc7/gst-osc7-module.h=    | Type declaration      |

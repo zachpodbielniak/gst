@@ -182,6 +182,24 @@ gst_notify_module_deactivate(GstModule *module)
 /* ===== GstEscapeHandler interface ===== */
 
 /*
+ * osc9_is_progress:
+ * @rest: the OSC 9 body after the first semicolon
+ *
+ * ConEmu progress is "4" or "4;...". A normal OSC 9 message does
+ * not use that shape, so this does not drop ordinary notifications.
+ *
+ * Returns: %TRUE when the body is an OSC 9;4 progress report
+ */
+static gboolean
+osc9_is_progress(const gchar *rest)
+{
+	if (rest == NULL || rest[0] != '4') {
+		return FALSE;
+	}
+	return rest[1] == '\0' || rest[1] == ';';
+}
+
+/*
  * handle_escape_string:
  *
  * Handles OSC 9, 777, and 99 notification sequences.
@@ -189,6 +207,9 @@ gst_notify_module_deactivate(GstModule *module)
  * OSC 9: ESC ] 9 ; message ST
  * OSC 777: ESC ] 777 ; notify ; title ; body ST
  * OSC 99: ESC ] 99 ; body ST (simplified kitty subset)
+ *
+ * OSC 9;4 is ConEmu progress, not a notification. Those bodies are
+ * left for the progress module, and are ignored when it is disabled.
  *
  * The raw buffer contains the full OSC content with semicolons intact.
  */
@@ -232,7 +253,10 @@ gst_notify_module_handle_escape_string(
 
 	switch (osc_num) {
 	case 9:
-		/* OSC 9 ; message ST */
+		/* OSC 9 ; message ST. OSC 9;4 is progress, not a toast. */
+		if (osc9_is_progress(rest)) {
+			return FALSE;
+		}
 		{
 			const gchar *title = NULL;
 

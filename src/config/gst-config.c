@@ -88,6 +88,8 @@ gst_config_dispose(GObject *object)
 	g_clear_pointer(&self->modules.ligatures.features, g_strfreev);
 	g_clear_pointer(&self->modules.wallpaper.image_path, g_free);
 	g_clear_pointer(&self->modules.wallpaper.scale_mode, g_free);
+	g_clear_pointer(&self->modules.program_resume.policy, g_free);
+	g_clear_pointer(&self->modules.program_resume.allow, g_strfreev);
 
 	g_clear_pointer(&self->keybinds, g_array_unref);
 	g_clear_pointer(&self->mousebinds, g_array_unref);
@@ -301,6 +303,16 @@ gst_config_init(GstConfig *self)
 	self->modules.wallpaper.image_path = g_strdup("");
 	self->modules.wallpaper.scale_mode = g_strdup("fill");
 	self->modules.wallpaper.bg_alpha = 0.3;
+
+	/* program_resume (OSC 7577) */
+	self->modules.program_resume.enabled = FALSE;
+	self->modules.program_resume.policy = g_strdup("confirm");
+	self->modules.program_resume.allow = NULL;
+	self->modules.program_resume.allow_root = FALSE;
+
+	/* progress (OSC 9;4) and osc7 (OSC 7) */
+	self->modules.progress.enabled = FALSE;
+	self->modules.osc7.enabled = FALSE;
 
 	/* Default key bindings (match data/default-config.yaml) */
 	self->keybinds = g_array_new(FALSE, TRUE, sizeof(GstKeybind));
@@ -1153,6 +1165,27 @@ load_mod_ligatures(GstConfig *self, YamlMapping *mod)
 }
 
 static void
+load_mod_program_resume(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.program_resume.enabled);
+	LOAD_MOD_STRING(mod, "policy", self->modules.program_resume.policy);
+	LOAD_MOD_STRV(mod, "allow", self->modules.program_resume.allow);
+	LOAD_MOD_BOOL(mod, "allow_root", self->modules.program_resume.allow_root);
+}
+
+static void
+load_mod_progress(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.progress.enabled);
+}
+
+static void
+load_mod_osc7(GstConfig *self, YamlMapping *mod)
+{
+	LOAD_MOD_BOOL(mod, "enabled", self->modules.osc7.enabled);
+}
+
+static void
 load_mod_wallpaper(GstConfig *self, YamlMapping *mod)
 {
 	LOAD_MOD_BOOL(mod, "enabled", self->modules.wallpaper.enabled);
@@ -1250,6 +1283,15 @@ load_modules_section(
 
 	mod = yaml_mapping_get_mapping_member(modules, "wallpaper");
 	if (mod != NULL) load_mod_wallpaper(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "program_resume");
+	if (mod != NULL) load_mod_program_resume(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "progress");
+	if (mod != NULL) load_mod_progress(self, mod);
+
+	mod = yaml_mapping_get_mapping_member(modules, "osc7");
+	if (mod != NULL) load_mod_osc7(self, mod);
 
 	return TRUE;
 }
@@ -1670,6 +1712,24 @@ build_modules_section(GstConfig *self, YamlBuilder *builder)
 	SAVE_MOD_STRING(builder, "image_path", self->modules.wallpaper.image_path);
 	SAVE_MOD_STRING(builder, "scale_mode", self->modules.wallpaper.scale_mode);
 	SAVE_MOD_DOUBLE(builder, "bg_alpha", self->modules.wallpaper.bg_alpha);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "program_resume");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.program_resume.enabled);
+	SAVE_MOD_STRING(builder, "policy", self->modules.program_resume.policy);
+	SAVE_MOD_STRV(builder, "allow", self->modules.program_resume.allow);
+	SAVE_MOD_BOOL(builder, "allow_root", self->modules.program_resume.allow_root);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "progress");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.progress.enabled);
+	yaml_builder_end_mapping(builder);
+
+	yaml_builder_set_member_name(builder, "osc7");
+	yaml_builder_begin_mapping(builder);
+	SAVE_MOD_BOOL(builder, "enabled", self->modules.osc7.enabled);
 	yaml_builder_end_mapping(builder);
 	yaml_builder_end_mapping(builder);
 }
